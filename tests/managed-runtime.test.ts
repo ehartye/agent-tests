@@ -186,11 +186,29 @@ describe('inspectInstallation', () => {
 });
 
 describe('checkDependencies', () => {
-  it('fails with a concise message that does not echo the probe source', () => {
-    let message = '';
-    try { checkDependencies(makeTree()); } catch (error) { message = (error as Error).message; }
+  const failureOf = (root: string): string => {
+    try { checkDependencies(root); } catch (error) { return (error as Error).message; }
+    return '';
+  };
+
+  it('names the missing module and does not echo the probe source', () => {
+    // yaml and zod resolve, but the runtime has no src/parse.ts.
+    const root = makeTree({
+      'node_modules/yaml/package.json': JSON.stringify({ name: 'yaml', version: '0.0.0', main: 'index.js' }),
+      'node_modules/yaml/index.js': 'module.exports = {};\n',
+      'node_modules/zod/package.json': JSON.stringify({ name: 'zod', version: '0.0.0', main: 'index.js' }),
+      'node_modules/zod/index.js': 'module.exports = {};\n',
+    });
+    const message = failureOf(root);
     expect(message).toMatch(/^Dependency check failed: /);
+    expect(message).toMatch(/Cannot find module/);
     expect(message).not.toContain('openParseSession');
+  });
+
+  it('keeps the line that names the problem when a package is missing entirely', () => {
+    const message = failureOf(makeTree());
+    expect(message).toMatch(/^Dependency check failed: .*Cannot find package 'yaml'/);
+    expect(message).not.toMatch(/Node\.js v|\bat .*:\d+:\d+/);
   });
 });
 

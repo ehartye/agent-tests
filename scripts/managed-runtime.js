@@ -123,10 +123,18 @@ export function checkDependencies(root) {
   try {
     execFileSync(process.execPath, ['--input-type=module', '-e', probe], { cwd: root, windowsHide: true, stdio: 'pipe', encoding: 'utf8', timeout: 60_000 });
   } catch (error) {
-    // The raw message echoes the probe source; keep only the tail of stderr.
-    const tail = String(error.stderr || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(-3);
-    throw new Error(`Dependency check failed: ${tail.length ? tail.join(' | ') : error.message}`);
+    throw new Error(`Dependency check failed: ${summarizeFailure(error.stderr, error.message)}`);
   }
+}
+
+/** The raw error message echoes the probe source. Keep the line that names the problem and what follows it. */
+function summarizeFailure(stderr, fallback) {
+  const lines = String(stderr || '').split(/\r?\n/)
+    .filter(line => line.trim() && !/^\s+at /.test(line) && !/^\s*[{}]\s*$/.test(line) && !/^\s*\^+\s*$/.test(line) && !/^Node\.js v/.test(line.trim()))
+    .map(line => line.trim());
+  const start = lines.findIndex(line => /\w*Error\b|Cannot find module/.test(line));
+  const picked = start >= 0 ? lines.slice(start, start + 3) : lines.slice(0, 3);
+  return picked.length ? picked.join(' | ') : fallback;
 }
 
 function lockOwner(lock) {
@@ -145,10 +153,16 @@ function acquireLock(lock) {
   for (let attempt = 0; ; attempt++) {
     try { return openSync(lock, 'wx'); } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      const owner = lockOwner(lock);
+      let owner = lockOwner(lock);
       if (attempt === 0 && owner && !isAlive(owner.pid)) {
-        try { unlinkSync(lock); } catch (unlinkError) { if (unlinkError.code !== 'ENOENT') throw unlinkError; }
-        continue;
+        // Re-read just before unlinking: if another setup already reclaimed the lock and wrote its own, leave it alone.
+        // A sliver remains between this read and the unlink (no atomic compare-and-delete on a file); it is not worth a lock of its own.
+        const again = lockOwner(lock);
+        if (again && again.pid === owner.pid && again.started === owner.started) {
+          try { unlinkSync(lock); } catch (unlinkError) { if (unlinkError.code !== 'ENOENT') throw unlinkError; }
+          continue;
+        }
+        owner = again;
       }
       const who = owner ? ` by pid ${owner.pid}${typeof owner.started === 'string' ? `, started ${owner.started}` : ''}` : '';
       throw new Error(`Another setup may be running (${lock}${who}). Remove a stale lock only after confirming no setup is active.`);
