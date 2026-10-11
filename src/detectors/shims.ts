@@ -2,8 +2,11 @@ import type { ParsedFile } from '../parse.ts';
 import type { Finding } from '../schema.ts';
 
 const TITLE_MARKER =
-  /\b(?:legacy|back(?:wards?)?[- ]?compat(?:ibility|ible)?|compat(?:ibility)?|deprecated|fall-?back|polyfill|shim|migrat(?:e|es|ion|ing) from|old[- ]format)\b/i;
-const PATH_MARKER = /(?:^|[/._-])(?:legacy|compat|deprecated|shims?|polyfills?)(?:[/._-]|$)/i;
+  /\b(?:legacy|back(?:wards?)?[- ]?compat(?:ibility|ible)?|compat(?:ibility)?|deprecat(?:ed|es|e|ion)|fall-?backs?|polyfills?|shims?|migrat(?:e|es|ed|ing|ion) from|old[- ]format)\b/i;
+const PATH_MARKER = /(?:^|[/._-])(?:legacy|compat|deprecated|shims?|polyfills?|fallbacks?)(?:[/._-]|$)/i;
+/** A specifier is project code, not a package, when it is relative or starts with a common alias. */
+const PROJECT_SPECIFIER = /^(?:\.|@\/|~\/|#|src\/)/;
+const EVIDENCE_WIDTH = 160;
 
 /** Tests that protect legacy, compatibility or fallback paths. Whether anyone still needs them is the consumers list's call. */
 export function detectShims(file: string, parsed: ParsedFile): Finding[] {
@@ -16,7 +19,7 @@ export function detectShims(file: string, parsed: ParsedFile): Finding[] {
         file,
         line: title.line,
         message: 'Test title names a legacy, compatibility or fallback path. Check that a consumer still needs it.',
-        evidence: title.text,
+        evidence: title.text.slice(0, EVIDENCE_WIDTH),
       });
     }
   }
@@ -29,8 +32,8 @@ export function detectShims(file: string, parsed: ParsedFile): Finding[] {
       evidence: file,
     });
   }
-  for (const spec of parsed.imports) {
-    if (spec.startsWith('.') && PATH_MARKER.test(spec)) {
+  for (const spec of new Set(parsed.imports)) {
+    if (PROJECT_SPECIFIER.test(spec) && PATH_MARKER.test(spec.replace(/^(?:@\/|~\/|#)/, ''))) {
       findings.push({
         category: 'shim',
         rule: 'shim.legacy-import',
