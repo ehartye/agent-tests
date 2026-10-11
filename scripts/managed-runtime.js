@@ -13,6 +13,7 @@ const NAME = 'agent-tests';
 const RUNTIME_FILES = ['package.json', 'package-lock.json', 'tsconfig.json', 'scripts', 'src', 'skills', 'references'];
 const RECEIPT = 'managed-install.json';
 const TEXT = /\.(?:[cm]?[jt]s|json|ya?ml|md|txt)$/;
+const LITTER = name => name === '.DS_Store' || name === 'Thumbs.db' || name.endsWith('~');
 export const managedHome = () => resolve(process.env.AGENT_TESTS_HOME || join(homedir(), '.agent-tests'));
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
 const inside = (parent, child) => { const rel = relative(parent, child); return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel)); };
@@ -25,6 +26,7 @@ function canonical(path) {
 function runtimeFiles(root) {
   const paths = [];
   function visit(name) {
+    if (LITTER(basename(name))) return;
     const path = join(root, name);
     if (!existsSync(path)) return;
     const stat = lstatSync(path);
@@ -80,6 +82,11 @@ export function resolveRuntime(source, { home = managedHome() } = {}) {
   return runtime;
 }
 
+function assertNode() {
+  const major = Number(process.versions.node.split('.')[0]);
+  if (major < 24) throw new Error(`agent-tests runs TypeScript directly and needs Node 24 or newer; this is Node ${process.versions.node}`);
+}
+
 function npmCli() {
   const candidates = [process.env.npm_execpath, join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')];
   for (const entry of (process.env.PATH || '').split(delimiter).filter(Boolean)) {
@@ -105,8 +112,7 @@ export function runNpm(args, { cwd, progress = false } = {}) {
 
 /** Exercise the runtime rather than only checking that directories exist. */
 export function checkDependencies(root) {
-  const major = Number(process.versions.node.split('.')[0]);
-  if (major < 24) throw new Error(`agent-tests runs TypeScript directly and needs Node 24 or newer; this is Node ${process.versions.node}`);
+  assertNode();
   // Parsing a line proves the platform's native TypeScript binary installed and starts, not just that the packages exist.
   const probe = [
     "await import('yaml'); await import('zod');",
@@ -114,24 +120,56 @@ export function checkDependencies(root) {
     'const session = openParseSession();',
     "try { session.parse('check.test.ts', \"it('x', () => {});\"); } finally { session.close(); }",
   ].join(' ');
-  execFileSync(process.execPath, ['--input-type=module', '-e', probe], { cwd: root, windowsHide: true, stdio: 'pipe', encoding: 'utf8' });
+  try {
+    execFileSync(process.execPath, ['--input-type=module', '-e', probe], { cwd: root, windowsHide: true, stdio: 'pipe', encoding: 'utf8', timeout: 60_000 });
+  } catch (error) {
+    // The raw message echoes the probe source; keep only the tail of stderr.
+    const tail = String(error.stderr || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(-3);
+    throw new Error(`Dependency check failed: ${tail.length ? tail.join(' | ') : error.message}`);
+  }
+}
+
+function lockOwner(lock) {
+  try {
+    const owner = JSON.parse(readFileSync(lock, 'utf8'));
+    return Number.isInteger(owner?.pid) && owner.pid > 0 ? owner : null;
+  } catch { return null; }
+}
+
+function isAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
+}
+
+/** Take setup.lock. A lock whose owner process has exited is stale: remove it and retry once. */
+function acquireLock(lock) {
+  for (let attempt = 0; ; attempt++) {
+    try { return openSync(lock, 'wx'); } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const owner = lockOwner(lock);
+      if (attempt === 0 && owner && !isAlive(owner.pid)) {
+        try { unlinkSync(lock); } catch (unlinkError) { if (unlinkError.code !== 'ENOENT') throw unlinkError; }
+        continue;
+      }
+      const who = owner ? ` by pid ${owner.pid}${typeof owner.started === 'string' ? `, started ${owner.started}` : ''}` : '';
+      throw new Error(`Another setup may be running (${lock}${who}). Remove a stale lock only after confirming no setup is active.`);
+    }
+  }
 }
 
 export function installRuntime(source, { home = managedHome(), npm = runNpm, checkDependencies: check = checkDependencies } = {}) {
+  assertNode();
   const runtime = location(source, home);
   mkdirSync(runtime.home, { recursive: true });
   const lock = join(runtime.home, 'setup.lock');
-  let fd;
-  try { fd = openSync(lock, 'wx'); } catch (error) {
-    if (error.code === 'EEXIST') throw new Error(`Another setup may be running (${lock}). Remove a stale lock only after confirming no setup is active.`);
-    throw error;
-  }
+  const fd = acquireLock(lock);
   let stage;
   try {
     writeFileSync(fd, JSON.stringify({ pid: process.pid, started: new Date().toISOString() }));
+    const releases = join(runtime.home, 'releases');
+    mkdirSync(releases, { recursive: true });
+    // Holding the lock, so any .install-* directory is left over from a killed run.
+    for (const name of readdirSync(releases)) if (name.startsWith('.install-')) rmSync(join(releases, name), { recursive: true, force: true });
     if (!existsSync(runtime.root)) {
-      const releases = join(runtime.home, 'releases');
-      mkdirSync(releases, { recursive: true });
       stage = mkdtempSync(join(releases, '.install-'));
       for (const name of runtime.files) {
         mkdirSync(dirname(join(stage, name)), { recursive: true });
@@ -145,9 +183,9 @@ export function installRuntime(source, { home = managedHome(), npm = runNpm, che
       stage = undefined;
     } else {
       resolveRuntime(source, { home });
-      try { check(runtime.root); } catch {
-        npm(['ci', '--omit=dev', '--no-audit', '--no-fund'], { cwd: runtime.root, progress: true });
-        check(runtime.root);
+      try { check(runtime.root); } catch (error) {
+        // The receipt is valid, so only node_modules is suspect. Never rewrite a live release in place.
+        throw new Error(`Managed release at ${runtime.root} fails its dependency check: ${error.message}. Move this release directory aside and rerun tests-setup.`);
       }
     }
     return runtime;
