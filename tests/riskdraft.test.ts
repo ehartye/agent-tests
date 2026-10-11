@@ -187,3 +187,73 @@ describe('real directory names', () => {
     expect(candidateDirs(root)).toEqual(['real']);
   });
 });
+
+describe('route groups and decorated names', () => {
+  it('classifies framework route groups by the word inside the brackets', () => {
+    const map = draftRiskMap(makeTree({ 'app/(auth)/login/page.tsx': '', 'app/(marketing)/home/page.tsx': '', 'app/[slug]/page.tsx': '' }));
+    expect(map.areas.map(area => `${area.path}:${area.tier}`)).toEqual(['app/(auth)/**:critical', 'app/(marketing)/**:standard', 'app/[slug]/**:standard']);
+  });
+
+  it('ignores brackets and other punctuation around a keyword', () => {
+    expectAll(['[auth]', '@auth', '_auth', '(billing)', '$session'], 'critical');
+  });
+});
+
+describe('critical files inside a descended container', () => {
+  it('gives a risky file in a container its own area before the catch-all', () => {
+    const map = draftRiskMap(makeTree({ 'src/app/auth.service.ts': '', 'src/app/user.service.ts': '', 'src/app/features/billing/a.ts': '' }));
+    expect(map.areas.map(area => `${area.path}:${area.tier}`)).toEqual(['src/app/features/billing/**:critical', 'src/app/auth.service.ts:critical', 'src/**:standard']);
+    expect(map.areas.find(area => area.path === 'src/app/auth.service.ts')?.why).toBe('file name suggests authentication; confirm');
+  });
+
+  it('only adds to the catch-all for a file that is not risky or is a test', () => {
+    const map = draftRiskMap(makeTree({ 'src/app/user.service.ts': '', 'src/app/auth.test.ts': '', 'src/app/features/ok/a.ts': '' }));
+    expect(map.areas.map(area => area.path)).toEqual(['src/app/features/ok/**', 'src/**']);
+  });
+
+  it('keeps risky container files in a tier order that resolves them first', () => {
+    const map = draftRiskMap(makeTree({ 'src/app/auth.service.ts': '', 'src/app/features/ok/a.ts': '' }));
+    expect(tierFor(map, 'src/app/auth.service.ts')).toEqual({ tier: 'critical', area: 'src/app/auth.service.ts' });
+    expect(tierFor(map, 'src/app/other.ts')).toEqual({ tier: 'standard', area: 'src/**' });
+  });
+});
+
+describe('grouping directories that hide critical children', () => {
+  it('descends through api, routes, services, controllers and server directories', () => {
+    const map = draftRiskMap(
+      makeTree({ 'src/api/auth/a.ts': '', 'src/routes/auth/a.ts': '', 'src/services/payments/a.ts': '', 'src/server/auth/a.ts': '', 'src/controllers/billing/a.ts': '', 'src/handlers/misc/a.ts': '' }),
+    );
+    expect(map.areas.map(area => `${area.path}:${area.tier}`)).toEqual([
+      'src/api/auth/**:critical',
+      'src/controllers/billing/**:critical',
+      'src/handlers/misc/**:standard',
+      'src/routes/auth/**:critical',
+      'src/server/auth/**:critical',
+      'src/services/payments/**:critical',
+    ]);
+    expect(candidateDirs(makeTree({ 'app/api/auth/a.ts': '' }))).toEqual(['app/api/auth']);
+    expect(candidateDirs(makeTree({ 'src/backend/db/a.ts': '', 'src/domain/ledger/a.ts': '' }))).toEqual(['src/backend/db', 'src/domain/ledger']);
+  });
+
+  it('lists a grouping directory as itself when it has no usable subdirectory', () => {
+    expect(candidateDirs(makeTree({ 'src/api/x.ts': '' }))).toEqual(['src/api']);
+    expect(candidateDirs(makeTree({ 'src/api/tests/a.ts': '', 'src/core/b.ts': '' }))).toEqual(['src/api', 'src/core']);
+  });
+
+  it('classifies the children of core and covers its loose files with the catch-all', () => {
+    const map = draftRiskMap(makeTree({ 'src/core/auth/a.ts': '', 'src/core/util.ts': '' }));
+    expect(map.areas.map(area => `${area.path}:${area.tier}`)).toEqual(['src/core/auth/**:critical', 'src/**:standard']);
+  });
+});
+
+describe('more security vocabulary', () => {
+  it('marks identity, web security, secrets and payment provider names critical', () => {
+    expectAll(['iam', 'identity', 'identities', 'sso', 'mfa', 'otp', 'vault', 'csrf', 'cookie', 'cookies', 'stripe', 'webhook', 'webhooks', 'authorisation'], 'critical');
+  });
+
+  it('leaves order names standard and says tokens may be design tokens', () => {
+    expectAll(['order', 'orders'], 'standard');
+    const map = draftRiskMap(makeTree({ 'src/tokens/a.ts': '' }));
+    expect(map.areas[0]?.why).toBe('name suggests tokens (auth or design); confirm');
+  });
+});
