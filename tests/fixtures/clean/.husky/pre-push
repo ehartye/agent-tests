@@ -1,2 +1,2 @@
 #!/usr/bin/env sh
-npx vitest related --run
+npx vitest run --changed origin/main

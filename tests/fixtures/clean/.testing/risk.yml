@@ -8,4 +8,5 @@ lanes:
   release: {runs: all+clean-install, trigger: tag, os: [ubuntu, windows, macos]}
 areas:
   - {path: "src/core/**", tier: critical, why: core arithmetic}
+  - {path: "src/util/**", tier: standard, why: small helpers}
   - {path: "src/ui/**", tier: low}
