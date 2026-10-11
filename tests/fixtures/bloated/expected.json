@@ -1,0 +1,146 @@
+{
+  "findings": [
+    {
+      "rule": "redundancy.shared-subject",
+      "file": "tests/persistence/store.unit.test.ts"
+    },
+    {
+      "rule": "redundancy.shared-subject",
+      "file": "tests/persistence/store.integration.test.ts"
+    },
+    {
+      "rule": "redundancy.shared-subject",
+      "file": "tests/sweeps/a.test.ts"
+    },
+    {
+      "rule": "redundancy.shared-subject",
+      "file": "tests/sweeps/b.test.ts"
+    },
+    {
+      "rule": "redundancy.duplicate-title",
+      "file": "tests/persistence/store.unit.test.ts"
+    },
+    {
+      "rule": "redundancy.duplicate-title",
+      "file": "tests/persistence/store.integration.test.ts"
+    },
+    {
+      "rule": "redundancy.repeated-sweep",
+      "file": "tests/sweeps/a.test.ts"
+    },
+    {
+      "rule": "redundancy.repeated-sweep",
+      "file": "tests/sweeps/b.test.ts"
+    },
+    {
+      "rule": "shim.title-marker",
+      "file": "tests/legacy/compat-format.test.ts"
+    },
+    {
+      "rule": "shim.path-marker",
+      "file": "tests/legacy/compat-format.test.ts"
+    },
+    {
+      "rule": "shim.legacy-import",
+      "file": "tests/legacy/compat-format.test.ts"
+    },
+    {
+      "rule": "worktree.fixed-port",
+      "file": "tests/net/server.test.ts"
+    },
+    {
+      "rule": "worktree.absolute-path",
+      "file": "tests/net/server.test.ts"
+    },
+    {
+      "rule": "worktree.shared-tmp",
+      "file": "tests/net/server.test.ts"
+    },
+    {
+      "rule": "worktree.dot-git-dir",
+      "file": "tests/net/server.test.ts"
+    },
+    {
+      "rule": "worktree.home-dir",
+      "file": "tests/net/server.test.ts"
+    },
+    {
+      "rule": "worktree.fixed-db-file",
+      "file": "tests/net/server.test.ts"
+    },
+    {
+      "rule": "wiring.lane-mismatch",
+      "file": "tests/ui/button.test.ts"
+    },
+    {
+      "rule": "wiring.untiered",
+      "file": "tests/misc/invoice.test.ts"
+    },
+    {
+      "rule": "wiring.uncovered-critical",
+      "file": "src/auth/**"
+    },
+    {
+      "rule": "wiring.drift",
+      "file": "src/billing"
+    },
+    {
+      "rule": "frequency.hook-full-suite",
+      "file": ".husky/pre-commit"
+    },
+    {
+      "rule": "frequency.hook-full-suite",
+      "file": "package.json"
+    },
+    {
+      "rule": "frequency.watch-default",
+      "file": "package.json"
+    },
+    {
+      "rule": "frequency.ci-on-push",
+      "file": ".github/workflows/ci.yml"
+    },
+    {
+      "rule": "frequency.ci-on-pull-request",
+      "file": ".github/workflows/ci.yml"
+    },
+    {
+      "rule": "frequency.ci-os-matrix-on-push",
+      "file": ".github/workflows/ci.yml"
+    },
+    {
+      "rule": "frequency.agent-run-all",
+      "file": "AGENTS.md"
+    }
+  ],
+  "flags": {
+    "tests/ui/button.test.ts": [
+      "tautological"
+    ],
+    "tests/mocks/mailer.test.ts": [
+      "mock-only"
+    ],
+    "tests/snap/render.test.ts": [
+      "snapshot-only"
+    ],
+    "tests/misc/invoice.test.ts": [
+      "no-direct-assertions"
+    ]
+  },
+  "clusters": [
+    {
+      "subject": "src/persistence/store.ts",
+      "files": [
+        "tests/persistence/store.integration.test.ts",
+        "tests/persistence/store.unit.test.ts"
+      ]
+    },
+    {
+      "subject": "src/util/sweep.ts",
+      "files": [
+        "tests/sweeps/a.test.ts",
+        "tests/sweeps/b.test.ts"
+      ]
+    }
+  ]
+}

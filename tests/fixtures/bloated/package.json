@@ -1,0 +1,12 @@
+{
+  "name": "bloated-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest",
+    "pretest": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "5.0.3"
+  }
+}
