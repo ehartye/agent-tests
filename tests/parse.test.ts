@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseTags, resolveSubjects } from '../src/parse.ts';
+import { openParseSession, parseTags, resolveSubjects } from '../src/parse.ts';
 import { parseTestFile } from './helpers/parse.ts';
 import { makeTree } from './helpers/tree.ts';
 
@@ -77,10 +77,28 @@ describe('parseTestFile', () => {
   });
 
   it('reports 1-based line numbers, including after non-ASCII text', () => {
-    const lines = parseTestFile('a.test.ts', "// héllo — ✓\nit('first', () => {});\n\nit('second', () => {});\n");
+    // Each padded line is far longer than any shift a byte-versus-character mix-up could cause on a short line.
+    const pad = `// ${'é—✓🙂'.repeat(60)}`;
+    const lines = parseTestFile('a.test.ts', `${pad}\n${pad}\n${pad}\nit('first', () => {});\n${pad}\n\nit('second', () => {});\n`);
     expect(lines.tests.map(test => [test.name, test.line])).toEqual([
-      ['first', 2],
-      ['second', 4],
+      ['first', 4],
+      ['second', 7],
+    ]);
+  });
+
+  it('reports the right lines in a CRLF source', () => {
+    const lines = parseTestFile('a.test.ts', "it('first', () => {});\r\n\r\nit('second', () => {});\r\n");
+    expect(lines.tests.map(test => [test.name, test.line])).toEqual([
+      ['first', 1],
+      ['second', 3],
+    ]);
+  });
+
+  it('parses a file that starts with a byte order mark', () => {
+    const parsed = parseTestFile('a.test.ts', "﻿it('first', () => {});\nit('second', () => {});");
+    expect(parsed.tests.map(test => [test.name, test.line])).toEqual([
+      ['first', 1],
+      ['second', 2],
     ]);
   });
 
@@ -101,11 +119,149 @@ describe('parseTestFile imports', () => {
     const parsed = parseTestFile('a.test.ts', source);
     expect(parsed.imports).toEqual(['./c.ts', './d.ts', './e.ts']);
   });
+
+  it('collects require and dynamic import specifiers but not mocked modules', () => {
+    const source = [
+      "const a = require('./a.cjs');",
+      "const b = await import('./b.js');",
+      "vi.mock('./mocked.ts');",
+      "jest.mock('./also-mocked.ts', () => ({}));",
+      'const c = require(name);',
+      'const d = await import(name);',
+    ].join('\n');
+    expect(parseTestFile('a.test.ts', source).imports).toEqual(['./a.cjs', './b.js']);
+  });
+});
+
+describe('parseTestFile test and suite forms', () => {
+  it('counts curried, tagged-template and line-split forms once each', () => {
+    const source = [
+      "it.each([1, 2])('each %s', value => {});",
+      "it.skipIf(true)('skip if', () => {});",
+      "it.runIf(false)('run if', () => {});",
+      "test.for([1])('for %s', value => {});",
+      "it.each`a | b\n${1} | ${2}`('tagged %s', () => {});",
+      "it\n  .skip('split over lines', () => {});",
+      "it.concurrent.each([1])('concurrent each', () => {});",
+      "it.sequential('sequential', () => {});",
+      "it.todo('not written');",
+      "describe.each([1])('suite %s', () => {});",
+      "describe\n  .skip('split suite', () => {});",
+    ].join('\n');
+    const parsed = parseTestFile('forms.test.ts', source);
+    expect(parsed.tests.map(test => test.name)).toEqual(['each %s', 'skip if', 'run if', 'for %s', 'tagged %s', 'split over lines', 'concurrent each', 'sequential', 'not written']);
+    expect(parsed.tests.map(test => test.todo)).toEqual([false, false, false, false, false, false, false, false, true]);
+    expect(parsed.titles.map(title => title.text)).toEqual([...parsed.tests.map(test => test.name), 'suite %s', 'split suite']);
+  });
+
+  it('does not count a one-argument call that only builds a curried test', () => {
+    const parsed = parseTestFile('forms.test.ts', "it.each([1, 2]);\nit.skipIf(true);\ndescribe.each([1]);");
+    expect(parsed.tests).toEqual([]);
+    expect(parsed.titles).toEqual([]);
+  });
+});
+
+describe('parseTestFile assertions and matchers', () => {
+  it('counts expect.soft and expect.poll but not expect.assertions', () => {
+    const source = [
+      "it('a', async () => {",
+      '  expect.assertions(2);',
+      '  expect.soft(a).toBe(1);',
+      '  await expect.poll(() => b).toBe(2);',
+      '  expect.soft(c).not.toBeNull();',
+      '});',
+    ].join('\n');
+    const parsed = parseTestFile('a.test.ts', source);
+    expect(parsed.assertions).toBe(3);
+    expect(parsed.tests[0]?.assertions).toBe(3);
+  });
+
+  it('recognises every snapshot matcher', () => {
+    const matchers = ['toMatchSnapshot', 'toMatchInlineSnapshot', 'toMatchFileSnapshot', 'toThrowErrorMatchingSnapshot', 'toThrowErrorMatchingInlineSnapshot'];
+    const source = `it('a', () => {\n${matchers.map(matcher => `  expect(x).${matcher}();`).join('\n')}\n});`;
+    expect(parseTestFile('a.test.ts', source).snapshotAssertions).toBe(matchers.length);
+  });
+
+  it('recognises every mock matcher, old and new', () => {
+    const matchers = [
+      'toHaveBeenCalled',
+      'toHaveBeenCalledWith',
+      'toHaveBeenCalledTimes',
+      'toHaveBeenLastCalledWith',
+      'toHaveBeenNthCalledWith',
+      'toBeCalled',
+      'toBeCalledWith',
+      'toBeCalledTimes',
+      'toHaveReturned',
+      'toHaveReturnedWith',
+      'toHaveReturnedTimes',
+      'toHaveBeenCalledOnce',
+      'toHaveBeenCalledExactlyOnceWith',
+      'toHaveLastReturnedWith',
+      'toHaveNthReturnedWith',
+      'toHaveResolved',
+      'toHaveResolvedWith',
+      'toHaveLastResolvedWith',
+      'toHaveNthResolvedWith',
+      'toHaveResolvedTimes',
+      'lastCalledWith',
+      'nthCalledWith',
+    ];
+    const source = `it('a', () => {\n${matchers.map(matcher => `  expect(x).${matcher}();`).join('\n')}\n});`;
+    expect(parseTestFile('a.test.ts', source).mockAssertions).toBe(matchers.length);
+  });
+
+  it('does not count ordinary matchers as mock or snapshot assertions', () => {
+    const parsed = parseTestFile('a.test.ts', "it('a', () => {\n  expect(x).toBe(1);\n  expect(x).toHaveLength(1);\n});");
+    expect([parsed.mockAssertions, parsed.snapshotAssertions]).toEqual([0, 0]);
+  });
+});
+
+describe('parseTestFile tautologies', () => {
+  const count = (body: string): number => parseTestFile('a.test.ts', `it('a', () => {\n${body}\n});`).tautologies;
+
+  it('flags a direct comparison of an expression with itself', () => {
+    expect(count('expect(true).toBe(true);')).toBe(1);
+    expect(count('expect(value).toEqual(value);')).toBe(1);
+  });
+
+  it('does not flag a negated or resolved comparison', () => {
+    expect(count('expect(value).not.toBe(value);')).toBe(0);
+    expect(count('await expect(value).resolves.toBe(value);')).toBe(0);
+  });
+
+  it('does not flag a repeated call, which is a determinism check', () => {
+    expect(count("expect(hash('a')).toBe(hash('a'));")).toBe(0);
+  });
+});
+
+describe('parseTestFile session', () => {
+  it('parses a thousand and more distinct files in one session, across its restart', { timeout: 60_000 }, () => {
+    const session = openParseSession();
+    try {
+      for (let i = 0; i < 1200; i++) {
+        const parsed = session.parse(`f${i}.test.ts`, `import { x${i} } from './x${i}.ts';\nit('t${i}', () => {\n  expect(x${i}).toBe(${i});\n});\n`);
+        expect(parsed.imports).toEqual([`./x${i}.ts`]);
+        expect(parsed.tests.map(test => [test.name, test.line, test.assertions])).toEqual([[`t${i}`, 2, 1]]);
+      }
+    } finally {
+      session.close();
+    }
+  });
 });
 
 describe('parseTags', () => {
   it('ignores an unknown lane', () => {
     expect(parseTags('/** @lane nightly */')).toEqual({});
+  });
+
+  it('reads tags from every leading comment, line or block', () => {
+    expect(parseTags('\n// @lane edit\n/* @risk high */\n\nimport x from "y";')).toEqual({ lane: 'edit', risk: 'high' });
+  });
+
+  it('ignores tag-like text outside the leading comments', () => {
+    expect(parseTags("import x from 'y';\nconst note = 'contact @risk critical';\n")).toEqual({});
+    expect(parseTags("/** @lane merge */\nimport x from 'y';\n// @risk critical\n")).toEqual({ lane: 'merge' });
   });
 
   it('collects every @subject path', () => {
@@ -133,6 +289,16 @@ describe('resolveSubjects', () => {
   it('resolves a directory import to its index file', () => {
     const root = makeTree({ 'src/store/index.ts': '', 'tests/a.test.ts': '' });
     expect(resolveSubjects(root, 'tests/a.test.ts', ['../src/store'])).toEqual(['src/store/index.ts']);
+  });
+
+  it('maps .mjs and .cjs imports to .mts and .cts sources and finds an index.mts', () => {
+    const root = makeTree({ 'src/esm.mts': '', 'src/x.cts': '', 'src/lib/index.mts': '', 'tests/a.test.ts': '' });
+    expect(resolveSubjects(root, 'tests/a.test.ts', ['../src/esm.mjs', '../src/x.cjs', '../src/lib'])).toEqual(['src/esm.mts', 'src/lib/index.mts', 'src/x.cts']);
+  });
+
+  it('never treats a non-code file as a subject', () => {
+    const root = makeTree({ 'src/data.json': '{}', 'src/style.css': '', 'tests/a.test.ts': '' });
+    expect(resolveSubjects(root, 'tests/a.test.ts', ['../src/data.json', '../src/style.css'])).toEqual([]);
   });
 
   it('skips test files, helpers and unresolved paths', () => {
