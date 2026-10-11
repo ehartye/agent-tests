@@ -26,15 +26,21 @@ export function defaultRiskMap(): RiskMap {
 export function loadRiskMap(root: string): RiskMap | null {
   const path = join(root, RISK_MAP_PATH);
   if (!existsSync(path)) return null;
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    throw new CliError('E_RISKMAP', `Cannot read ${RISK_MAP_PATH}: ${(error as Error).message}`, undefined, { cause: error });
+  }
   let raw: unknown;
   try {
-    raw = parse(readFileSync(path, 'utf8'));
+    raw = parse(text);
   } catch (error) {
-    throw new CliError('E_RISKMAP', `Cannot parse ${RISK_MAP_PATH}: ${(error as Error).message}`);
+    throw new CliError('E_RISKMAP', `Cannot parse ${RISK_MAP_PATH}: ${(error as Error).message}`, undefined, { cause: error });
   }
   const result = RiskMap.safeParse(raw);
   if (!result.success) {
-    const issues = result.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ');
+    const issues = result.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ');
     throw new CliError('E_RISKMAP', `Invalid ${RISK_MAP_PATH}: ${issues}`);
   }
   return result.data;
@@ -48,6 +54,7 @@ export function serializeRiskMap(map: RiskMap): string {
   return header + stringify(map, { lineWidth: 0 });
 }
 
+/** `relPath` must be repo-relative with forward slashes, as `relPosix` produces. */
 export function tierFor(map: RiskMap, relPath: string): { tier: Tier; area: string } | null {
   for (const area of map.areas) {
     if (globToRegExp(area.path).test(relPath)) return { tier: area.tier, area: area.path };

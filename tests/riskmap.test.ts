@@ -14,15 +14,38 @@ describe('loadRiskMap', () => {
     expect(loadRiskMap(root)).toEqual(map);
   });
 
-  it('throws E_RISKMAP naming the bad field', () => {
-    const root = makeTree({ [RISK_MAP_PATH]: 'phase: beta\nconsumers: []\n' });
-    expect(() => loadRiskMap(root)).toThrow(CliError);
+  const failure = (root: string): CliError => {
     try {
       loadRiskMap(root);
     } catch (error) {
-      expect((error as CliError).code).toBe('E_RISKMAP');
-      expect((error as CliError).message).toContain('phase');
+      return error as CliError;
     }
+    throw new Error('expected loadRiskMap to throw');
+  };
+
+  it('throws E_RISKMAP naming the bad field', () => {
+    const error = failure(makeTree({ [RISK_MAP_PATH]: 'phase: beta\nconsumers: []\n' }));
+    expect(error).toBeInstanceOf(CliError);
+    expect(error.code).toBe('E_RISKMAP');
+    expect(error.message).toContain('phase');
+  });
+
+  it('names the root when the file is empty', () => {
+    expect(failure(makeTree({ [RISK_MAP_PATH]: '' })).message).toContain('(root)');
+  });
+
+  it('rejects a mistyped key instead of dropping it', () => {
+    const typo = serializeRiskMap({ ...defaultRiskMap(), areas: [{ path: 'src/**', tier: 'low' }] }).replace('tier: low', 'tier: low\n    Why: typo');
+    const error = failure(makeTree({ [RISK_MAP_PATH]: typo }));
+    expect(error.code).toBe('E_RISKMAP');
+    expect(error.message).toContain('Why');
+  });
+
+  it('reports an unreadable risk map as unreadable, not unparseable', () => {
+    const error = failure(makeTree({ [`${RISK_MAP_PATH}/inner.txt`]: '' }));
+    expect(error.code).toBe('E_RISKMAP');
+    expect(error.message).toContain('Cannot read');
+    expect(error.cause).toBeDefined();
   });
 
   it('throws E_RISKMAP for unparseable YAML', () => {

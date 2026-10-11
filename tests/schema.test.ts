@@ -17,6 +17,12 @@ describe('RiskMap', () => {
     expect(RiskMap.safeParse(map).success).toBe(false);
   });
 
+  it('rejects unknown keys at every level', () => {
+    expect(RiskMap.safeParse({ ...defaultRiskMap(), extra: 1 }).success).toBe(false);
+    expect(RiskMap.safeParse({ ...defaultRiskMap(), weights: { wait: 1, agent: 1, ci: 1, churn: 1, extra: 1 } }).success).toBe(false);
+    expect(RiskMap.safeParse({ ...defaultRiskMap(), areas: [{ path: 'src/**', tier: 'low', Why: 'typo' }] }).success).toBe(false);
+  });
+
   it('rejects an unknown phase', () => {
     expect(RiskMap.safeParse({ ...defaultRiskMap(), phase: 'beta' }).success).toBe(false);
   });
@@ -34,5 +40,22 @@ describe('EvidenceReport', () => {
     const report = { schema: EVIDENCE_SCHEMA, root: '.', runner: 'vitest', phase: null, riskMapPresent: false, files: [], clusters: [], projectFindings: [] };
     expect(EvidenceReport.safeParse(report).success).toBe(true);
     expect(EvidenceReport.safeParse({ ...report, schema: 'other@1' }).success).toBe(false);
+  });
+
+  it('represents a static scan: unknown costs and tiers are null', () => {
+    const file = {
+      file: 'tests/a.test.ts',
+      tests: 1,
+      assertions: 1,
+      flags: [],
+      subjects: [],
+      tags: {},
+      tier: null,
+      area: null,
+      cost: { wait: null, agent: 120, ci: null, churn: null, edits: null },
+      findings: [],
+    };
+    const report = { schema: EVIDENCE_SCHEMA, root: '.', runner: 'vitest', phase: null, riskMapPresent: false, files: [file], clusters: [], projectFindings: [] };
+    expect(EvidenceReport.safeParse(report).success).toBe(true);
   });
 });

@@ -9,23 +9,24 @@ export type Phase = z.infer<typeof Phase>;
 export const LaneName = z.enum(['edit', 'merge', 'scheduled', 'release']);
 export type LaneName = z.infer<typeof LaneName>;
 
-const LaneSpec = z.object({
+// The risk map is hand-edited and committed, so unknown keys are errors: a typo like `Why:` must not be dropped silently.
+const LaneSpec = z.strictObject({
   runs: z.string().min(1),
   trigger: z.string().min(1),
   os: z.array(z.string()).optional(),
 });
 
-export const RiskMap = z.object({
+export const RiskMap = z.strictObject({
   phase: Phase,
   consumers: z.array(z.string()),
-  weights: z.object({
+  weights: z.strictObject({
     wait: z.number().nonnegative(),
     agent: z.number().nonnegative(),
     ci: z.number().nonnegative(),
     churn: z.number().nonnegative(),
   }),
-  lanes: z.object({ edit: LaneSpec, merge: LaneSpec, scheduled: LaneSpec, release: LaneSpec }),
-  areas: z.array(z.object({ path: z.string().min(1), tier: Tier, why: z.string().optional() })),
+  lanes: z.strictObject({ edit: LaneSpec, merge: LaneSpec, scheduled: LaneSpec, release: LaneSpec }),
+  areas: z.array(z.strictObject({ path: z.string().min(1), tier: Tier, why: z.string().optional() })),
 });
 export type RiskMap = z.infer<typeof RiskMap>;
 
