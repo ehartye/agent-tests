@@ -60,7 +60,7 @@ agent-tests/
 ```
 
 - Managed runtime, as in agent-prose: the plugin cache holds source only; `setup.js` copies a versioned runtime to `~/.agent-tests/releases/<version>-<fingerprint>` (override `AGENT_TESTS_HOME`), runs `npm ci`, writes a receipt. Skills call `node "<plugin-root>/scripts/run-managed.js" <cmd>`, never a bare `tests` on PATH. Node 24+. No Chromium.
-- Parsers use no native addons: the `typescript` compiler API for TS/JS; `web-tree-sitter` (WASM) for Python (v0.4+).
+- Parsers use no native addons: the `typescript` compiler API for TS/JS, pinned to 6.0.3 because TypeScript 7 is a native port with no JS compiler API; `web-tree-sitter` (WASM) for Python (v0.4+).
 - CLI subcommands: `risk-draft`, `scan`, `time`, `report`. The CLI gathers evidence and never judges.
 - The **evidence-record JSON schema** is defined in M1 and is the contract between CLI and skills.
 
@@ -134,6 +134,11 @@ Detectors for the five problems:
 | M6 | Tag, publish to GitHub, marketplace entry and README row in `hartye-claude-plugins` | Installable from marketplace |
 
 Publishing the repo and the marketplace PR are outward-facing; each needs the owner's go-ahead when reached.
+
+## Revisions
+
+- 2026-10-11, during planning: `typescript` pinned to 6.0.3 (verified: TypeScript 7.0.x ships no JS compiler API). The managed runtime drops agent-prose's `npm link` and browser steps because skills always use the launcher. The CLI's `scan` prints evidence JSON and `report` prints Markdown. Dogfooding the scan on this repository added noise controls: type-only imports are not subjects, a test counts for a subject only when it imports three or fewer modules or is named after it, shared-subject findings collapse to one per file, `fixtures` directories are not scanned, a tag-only push trigger is a release run, and `risk-draft` adds a catch-all area for code directly under `src`.
+- Planning split: the first plan covers M0-M2 (v0.1). M3-M6 get their own plans once the evidence schema has been exercised.
 
 ## Risks
 
