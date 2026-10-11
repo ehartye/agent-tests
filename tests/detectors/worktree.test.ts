@@ -154,6 +154,18 @@ describe('detectWorktreeHazards tuning', () => {
       expect(rules(run('/* c */ const home = homedir();'))).toEqual(['worktree.home-dir']);
     });
 
+    it('does not open a block comment from a slash-star inside a regex literal', () => {
+      const found = run("s.replace(/\\/*$/, '');", 'server.listen(3000);', 'const home = homedir();');
+      expect(found.map(finding => [finding.rule, finding.line])).toEqual([
+        ['worktree.fixed-port', 2],
+        ['worktree.home-dir', 3],
+      ]);
+    });
+
+    it('still skips a genuine multi-line block comment', () => {
+      expect(run("s.replace(/\\/*$/, '');", '/* note', 'server.listen(3000);', 'const home = homedir(); */', 'const ok = 1;')).toEqual([]);
+    });
+
     it('does not treat a url or a glob inside a string as a comment', () => {
       expect(rules(run("const url = 'http://localhost:3000/x';"))).toEqual(['worktree.fixed-port']);
       expect(rules(run("const g = 'src/**/*.ts'; const h = homedir();"))).toEqual(['worktree.home-dir']);

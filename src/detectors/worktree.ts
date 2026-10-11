@@ -85,7 +85,8 @@ function stripComments(line: string, inBlock: boolean): { code: string; inBlock:
       index += 1;
       continue;
     }
-    if (line.startsWith('/*', index)) {
+    // A backslash before the slash means this is an escaped slash in a regex literal, not a comment opener.
+    if (line.startsWith('/*', index) && line.charAt(index - 1) !== '\\') {
       inBlock = true;
       index += 2;
       continue;
