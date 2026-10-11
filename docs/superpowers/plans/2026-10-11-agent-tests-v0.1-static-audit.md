@@ -4,9 +4,9 @@
 
 **Goal:** Ship agent-tests v0.1: a Claude Code and Codex plugin whose managed Node CLI gathers static evidence about a TypeScript or JavaScript project's tests (vitest or jest), and whose skills turn that evidence into a risk-based, efficiency-focused audit and a strategy for structuring tests by project phase.
 
-**Architecture:** A managed runtime (adapted from agent-prose) installs a versioned copy of the CLI outside the plugin cache. The CLI parses test files with the TypeScript compiler API, reads a committed risk map (`.testing/risk.yml`), runs five detector families (redundancy, shims, worktree hazards, wiring, frequency) and prints an evidence report as JSON or Markdown. It never runs the tests and never judges. Three skills (`tests-setup`, `test-strategy`, `test-audit`) carry the doctrine and the rubric that turns evidence into verdicts.
+**Architecture:** A managed runtime (adapted from agent-prose) installs a versioned copy of the CLI outside the plugin cache. The CLI parses test files with TypeScript 7's JS API (`typescript/unstable/sync`, one native process fed from an in-memory filesystem), reads a committed risk map (`.testing/risk.yml`), runs five detector families (redundancy, shims, worktree hazards, wiring, frequency) and prints an evidence report as JSON or Markdown. It never runs the tests and never judges. Three skills (`tests-setup`, `test-strategy`, `test-audit`) carry the doctrine and the rubric that turns evidence into verdicts.
 
-**Tech Stack:** Node 24+ running TypeScript directly (no build step), `typescript@6.0.3` (JS compiler API), `yaml@2.9.1`, `zod@4.6.5`, `vitest@5.0.3`, `@types/node@26.6.4`. No native addons.
+**Tech Stack:** Node 24+ running TypeScript directly (no build step), `typescript@7.0.2` (parser through its `unstable` JS API, and `tsc` for typechecking), `yaml@2.9.1`, `zod@4.6.6`, `vitest@5.0.3`, `@types/node@26.6.5`. Nothing to compile: TypeScript 7 ships a prebuilt native binary per platform as an optional dependency.
 
 **Spec:** `docs/superpowers/specs/2026-10-11-agent-tests-design.md` (milestones M0 to M2).
 
@@ -23,7 +23,7 @@
 
 ## Deviations from the spec (and why)
 
-1. **`typescript` is pinned to 6.0.3.** TypeScript 7.0.x is a native port and ships no JS compiler API, so `import ts from 'typescript'` has no `createSourceFile`. 6.0.3 was installed and parsed a sample test before this plan was written.
+1. **TypeScript 7.0.2, not an older line.** The owner asked for current versions, so every pin is the registry's latest as of 2026-10-11. TypeScript 7 is a native compiler whose main entry has no `createSourceFile`; its JS API lives on `typescript/unstable/*` subpaths and talks to the native binary over RPC. `src/parse.ts` uses it: one `API` session, a virtual filesystem (`typescript/unstable/fs`), one tiny project per file, then `forEachChild` over the returned AST. The costs are accepted and contained: the subpaths are named `unstable`, so the version is pinned exactly and `src/parse.ts` is the only file that touches them; the platform binary must install, so the managed-runtime dependency check parses a line for real; and a session must be closed, so `scan` closes it in a `finally`. Measured: about half a second to start, then about one millisecond per file.
 2. **The managed runtime has no `npm link` step and no browser step.** Skills always call the launcher, so a bare `tests` on PATH is never used.
 3. **`scan` prints evidence JSON and `report` prints Markdown.** The spec listed `scan`, `time`, `report`; `time` belongs to the next plan.
 4. **Noise controls found by running the audit on this repository itself:** type-only imports are not subjects; a test counts for a subject only when it imports three or fewer modules or is named after it; shared-subject findings collapse to one per file; `fixtures` directories are never scanned; a tag-only `push` trigger is a release run, not "every push", and may carry an OS matrix; `risk-draft` adds a catch-all `src/**` area when code sits directly under `src`; `@subject <path>` declares code a test reaches without importing it (a CLI run in a subprocess), and `@risk <tier>` states a tier for a test with no code subject.
@@ -101,12 +101,12 @@ Create `package.json`:
   },
   "license": "MIT",
   "dependencies": {
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "yaml": "2.9.1",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
-    "@types/node": "26.6.4",
+    "@types/node": "26.6.5",
     "vitest": "5.0.3"
   }
 }
@@ -182,7 +182,7 @@ Run: `npm install`
 
 Then run: `npm ls --depth=0`
 
-Expected: the tree lists exactly `typescript@6.0.3`, `yaml@2.9.1`, `zod@4.6.5`, `@types/node@26.6.4` and `vitest@5.0.3`, and `package-lock.json` now exists.
+Expected: the tree lists exactly `typescript@7.0.2`, `yaml@2.9.1`, `zod@4.6.6`, `@types/node@26.6.5` and `vitest@5.0.3`, and `package-lock.json` now exists. `node_modules/@typescript/typescript-win32-x64` (or your platform's package) is installed beside it.
 
 - [ ] **Step 4: Write the temp-tree test helper and the failing path test**
 
@@ -1005,9 +1005,14 @@ export function runNpm(args, { cwd, progress = false } = {}) {
 export function checkDependencies(root) {
   const major = Number(process.versions.node.split('.')[0]);
   if (major < 24) throw new Error(`agent-tests runs TypeScript directly and needs Node 24 or newer; this is Node ${process.versions.node}`);
-  execFileSync(process.execPath, ['--input-type=module', '-e', "await import('typescript'); await import('yaml'); await import('zod');"], {
-    cwd: root, windowsHide: true, stdio: 'pipe', encoding: 'utf8',
-  });
+  // Parsing a line proves the platform's native TypeScript binary installed and starts, not just that the packages exist.
+  const probe = [
+    "await import('yaml'); await import('zod');",
+    "const { openParseSession } = await import('./src/parse.ts');",
+    'const session = openParseSession();',
+    "try { session.parse('check.test.ts', \"it('x', () => {});\"); } finally { session.close(); }",
+  ].join(' ');
+  execFileSync(process.execPath, ['--input-type=module', '-e', probe], { cwd: root, windowsHide: true, stdio: 'pipe', encoding: 'utf8' });
 }
 
 export function installRuntime(source, { home = managedHome(), npm = runNpm, checkDependencies: check = checkDependencies } = {}) {
@@ -1867,16 +1872,39 @@ git commit -m "feat: discover test files and detect the runner"
 
 The parser turns one test file into facts: imports, titles, tests with their assertion counts, snapshot and mock assertions, tautologies, tags, and the repo-relative source files it imports (its subjects).
 
+It uses TypeScript 7's JS API, which drives a native process. `openParseSession()` starts that process once and returns `parse(fileName, text)` and `close()`; each call writes the text into an in-memory filesystem, opens a one-file project, and walks the returned AST. Always `close()` the session, or the native process outlives the script. Tests share one session per test file through a small helper, so the process starts once per file, not once per test.
+
 **Files:**
-- Create: `tests/parse.test.ts`, `src/parse.ts`
+- Create: `tests/helpers/parse.ts`, `tests/parse.test.ts`, `src/parse.ts`
 
 - [ ] **Step 1: Write the failing test**
+
+Create `tests/helpers/parse.ts` (used by this task's test and by the detector tests in Tasks 8 and 9):
+
+```ts
+import { afterAll } from 'vitest';
+import { openParseSession, type ParseSession } from '../../src/parse.ts';
+
+let session: ParseSession | null = null;
+
+afterAll(() => {
+  session?.close();
+  session = null;
+});
+
+/** Parse one file with a session shared by the whole test file, so the native TypeScript process starts once. */
+export function parseTestFile(fileName: string, text: string): ReturnType<ParseSession['parse']> {
+  session ??= openParseSession();
+  return session.parse(fileName, text);
+}
+```
 
 Create `tests/parse.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { parseTags, parseTestFile, resolveSubjects } from '../src/parse.ts';
+import { parseTags, resolveSubjects } from '../src/parse.ts';
+import { parseTestFile } from './helpers/parse.ts';
 import { makeTree } from './helpers/tree.ts';
 
 const SAMPLE = `/**
@@ -1952,6 +1980,14 @@ describe('parseTestFile', () => {
     expect(parsed.tautologies).toBe(1);
   });
 
+  it('reports 1-based line numbers, including after non-ASCII text', () => {
+    const lines = parseTestFile('a.test.ts', "// héllo — ✓\nit('first', () => {});\n\nit('second', () => {});\n");
+    expect(lines.tests.map(test => [test.name, test.line])).toEqual([
+      ['first', 2],
+      ['second', 4],
+    ]);
+  });
+
   it('reads lane and risk tags from the leading docblock', () => {
     expect(parsed.tags).toEqual({ lane: 'merge', risk: 'critical' });
   });
@@ -2014,7 +2050,7 @@ describe('resolveSubjects', () => {
 
 Run: `npx vitest run tests/parse.test.ts`
 
-Expected: FAIL. Cannot import `../src/parse.ts`.
+Expected: FAIL. The helper and the test cannot import `../src/parse.ts`.
 
 - [ ] **Step 3: Implement**
 
@@ -2022,8 +2058,11 @@ Create `src/parse.ts`:
 
 ```ts
 import { existsSync, statSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import ts from 'typescript';
+import { dirname, extname, resolve } from 'node:path';
+import { SyntaxKind, type CallExpression, type ImportDeclaration, type Node, type PropertyAccessExpression, type SourceFile } from 'typescript/unstable/ast';
+import { isCallExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isPropertyAccessExpression, isStringLiteral } from 'typescript/unstable/ast/is';
+import { createVirtualFileSystem } from 'typescript/unstable/fs';
+import { API } from 'typescript/unstable/sync';
 import { isSupportPath, isTestPath } from './discover.ts';
 import { relPosix } from './paths.ts';
 import type { LaneName } from './schema.ts';
@@ -2049,6 +2088,12 @@ export interface ParsedFile {
   tags: { lane?: LaneName; risk?: string; subjects?: string[] };
 }
 
+/** One native TypeScript process that parses many files. Call close() when done: the process outlives the script otherwise. */
+export interface ParseSession {
+  parse(fileName: string, text: string): ParsedFile;
+  close(): void;
+}
+
 const TEST_CALLEE = /^(?:it|test)(?:\.(?:only|skip|todo|concurrent|fails))?$/;
 const EACH_CALLEE = /^(?:it|test)\.each$/;
 const SUITE_CALLEE = /^describe(?:\.(?:only|skip|todo|concurrent))?$/;
@@ -2058,12 +2103,8 @@ const MOCK_MATCHER = /^(?:toHaveBeenCalled(?:With|Times)?|toHaveBeenLastCalledWi
 const IDENTITY_MATCHER = /^(?:toBe|toEqual|toStrictEqual)$/;
 const LANES: readonly LaneName[] = ['edit', 'merge', 'scheduled', 'release'];
 
-function scriptKind(fileName: string): ts.ScriptKind {
-  if (/\.tsx$/.test(fileName)) return ts.ScriptKind.TSX;
-  if (/\.jsx$/.test(fileName)) return ts.ScriptKind.JSX;
-  if (/\.[cm]?js$/.test(fileName)) return ts.ScriptKind.JS;
-  return ts.ScriptKind.TS;
-}
+/** Parse only: no type information, no module resolution, no default library. */
+const COMPILER_OPTIONS = { allowJs: true, noResolve: true, noLib: true, types: [], jsx: 'preserve' };
 
 export function parseTags(text: string): ParsedFile['tags'] {
   const head = text.slice(0, 2000);
@@ -2077,38 +2118,52 @@ export function parseTags(text: string): ParsedFile['tags'] {
   return tags;
 }
 
-function titleOf(call: ts.CallExpression, sf: ts.SourceFile): string {
+function titleOf(call: CallExpression): string {
   const first = call.arguments[0];
-  if (first && (ts.isStringLiteral(first) || ts.isNoSubstitutionTemplateLiteral(first))) return first.text;
-  return first ? first.getText(sf) : '<dynamic>';
+  if (first && (isStringLiteral(first) || isNoSubstitutionTemplateLiteral(first))) return first.text;
+  return first ? first.getText() : '<dynamic>';
 }
 
-function isTestCall(call: ts.CallExpression, sf: ts.SourceFile): boolean {
+function isTestCall(call: CallExpression): boolean {
   const callee = call.expression;
-  if (ts.isCallExpression(callee)) return EACH_CALLEE.test(callee.expression.getText(sf)); // it.each(table)('name', fn)
-  const text = callee.getText(sf);
+  if (isCallExpression(callee)) return EACH_CALLEE.test(callee.expression.getText()); // it.each(table)('name', fn)
+  const text = callee.getText();
   return TEST_CALLEE.test(text) && (call.arguments.length >= 2 || text.endsWith('.todo'));
 }
 
 /** The expect(...) call at the root of `expect(x).not.toBe(y)` style chains, or null. */
-function expectRoot(callee: ts.PropertyAccessExpression): ts.CallExpression | null {
-  let node: ts.Expression = callee.expression;
-  while (ts.isPropertyAccessExpression(node)) node = node.expression;
-  if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'expect') return node;
+function expectRoot(callee: PropertyAccessExpression): CallExpression | null {
+  let node: Node = callee.expression;
+  while (isPropertyAccessExpression(node)) node = node.expression;
+  if (isCallExpression(node) && isIdentifier(node.expression) && node.expression.text === 'expect') return node;
   return null;
 }
 
 /** `import type { X }` and `import { type X }` bring in no runtime code, so the module is not exercised. */
-function isTypeOnlyImport(node: ts.ImportDeclaration): boolean {
+function isTypeOnlyImport(node: ImportDeclaration): boolean {
   const clause = node.importClause;
   if (!clause) return false;
-  if (clause.isTypeOnly) return true;
+  if (clause.phaseModifier === SyntaxKind.TypeKeyword) return true;
   const named = clause.namedBindings;
-  return !clause.name && !!named && ts.isNamedImports(named) && named.elements.length > 0 && named.elements.every(element => element.isTypeOnly);
+  return !clause.name && !!named && isNamedImports(named) && named.elements.length > 0 && named.elements.every(element => element.isTypeOnly);
 }
 
-export function parseTestFile(fileName: string, text: string): ParsedFile {
-  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKind(fileName));
+function lineIndex(text: string): (position: number) => number {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) if (text[i] === '\n') starts.push(i + 1);
+  return position => {
+    let low = 0;
+    let high = starts.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if (starts[mid] <= position) low = mid;
+      else high = mid - 1;
+    }
+    return low + 1;
+  };
+}
+
+function extractFacts(sourceFile: SourceFile, text: string): ParsedFile {
   const out: ParsedFile = {
     imports: [],
     tests: [],
@@ -2120,45 +2175,76 @@ export function parseTestFile(fileName: string, text: string): ParsedFile {
     tautologies: 0,
     tags: parseTags(text),
   };
-  const lineOf = (node: ts.Node): number => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+  const lineAt = lineIndex(text);
+  const lineOf = (node: Node): number => lineAt(node.getStart());
 
-  const visit = (node: ts.Node, current: ParsedTest | null): void => {
+  const visit = (node: Node, current: ParsedTest | null): void => {
     let next = current;
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && !isTypeOnlyImport(node)) out.imports.push(node.moduleSpecifier.text);
-    if (ts.isCallExpression(node)) {
+    if (isImportDeclaration(node) && isStringLiteral(node.moduleSpecifier) && !isTypeOnlyImport(node)) out.imports.push(node.moduleSpecifier.text);
+    if (isCallExpression(node)) {
       const callee = node.expression;
-      const calleeText = callee.getText(sf);
-      if (isTestCall(node, sf)) {
-        const name = titleOf(node, sf);
+      const calleeText = callee.getText();
+      if (isTestCall(node)) {
+        const name = titleOf(node);
         next = { name, line: lineOf(node), assertions: 0, todo: calleeText.endsWith('.todo') };
         out.tests.push(next);
         out.titles.push({ text: name, line: next.line });
       } else if (SUITE_CALLEE.test(calleeText)) {
-        out.titles.push({ text: titleOf(node, sf), line: lineOf(node) });
+        out.titles.push({ text: titleOf(node), line: lineOf(node) });
       } else if (MOCK_CALLEE.test(calleeText)) {
         out.mockCalls++;
-      } else if (ts.isIdentifier(callee) && callee.text === 'expect') {
+      } else if (isIdentifier(callee) && callee.text === 'expect') {
         out.assertions++;
         if (current) current.assertions++;
       } else if (/^assert(?:\.\w+)?$/.test(calleeText)) {
         out.assertions++;
         if (current) current.assertions++;
-      } else if (ts.isPropertyAccessExpression(callee)) {
+      } else if (isPropertyAccessExpression(callee)) {
         const root = expectRoot(callee);
         if (root) {
           const matcher = callee.name.text;
           if (SNAPSHOT_MATCHER.test(matcher)) out.snapshotAssertions++;
           if (MOCK_MATCHER.test(matcher)) out.mockAssertions++;
           if (IDENTITY_MATCHER.test(matcher) && root.arguments.length === 1 && node.arguments.length === 1) {
-            if (root.arguments[0].getText(sf) === node.arguments[0].getText(sf)) out.tautologies++;
+            if (root.arguments[0].getText() === node.arguments[0].getText()) out.tautologies++;
           }
         }
       }
     }
-    ts.forEachChild(node, child => visit(child, next));
+    // forEachChild stops early when its callback returns a value, so the callback must not return one.
+    node.forEachChild(child => {
+      visit(child, next);
+    });
   };
-  visit(sf, null);
+  visit(sourceFile, null);
   return out;
+}
+
+/** Open a parse session. Files are fed to the TypeScript 7 API through an in-memory filesystem, one tiny project per file. */
+export function openParseSession(): ParseSession {
+  const fs = createVirtualFileSystem({ '/agent-tests/session.json': '{}' });
+  const api = new API({ cwd: '/agent-tests', fs });
+  let count = 0;
+  return {
+    parse(fileName, text) {
+      const dir = `/agent-tests/${count++}`;
+      const base = `source${extname(fileName) || '.ts'}`; // the extension picks TS, TSX, JS or JSX parsing
+      const config = `${dir}/tsconfig.json`;
+      fs.writeFile?.(`${dir}/${base}`, text);
+      fs.writeFile?.(config, JSON.stringify({ compilerOptions: COMPILER_OPTIONS, files: [base] }));
+      const snapshot = api.updateSnapshot({ openProject: config });
+      try {
+        const sourceFile = snapshot.getProject(config)?.program.getSourceFile(`${dir}/${base}`);
+        if (!sourceFile) throw new Error(`TypeScript could not parse ${fileName}`);
+        return extractFacts(sourceFile, text);
+      } finally {
+        snapshot.dispose();
+      }
+    },
+    close() {
+      api.close();
+    },
+  };
 }
 
 const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
@@ -2186,7 +2272,7 @@ export function resolveSubjects(root: string, testRel: string, imports: string[]
 
 Run: `npx vitest run tests/parse.test.ts`
 
-Expected: PASS, 14 tests.
+Expected: PASS, 15 tests.
 
 Run: `npm run typecheck`
 
@@ -2215,7 +2301,7 @@ Create `tests/detectors/shims.test.ts`:
 ```ts
 import { describe, expect, it } from 'vitest';
 import { detectShims } from '../../src/detectors/shims.ts';
-import { parseTestFile } from '../../src/parse.ts';
+import { parseTestFile } from '../helpers/parse.ts';
 
 const rules = (findings: Array<{ rule: string }>): string[] => findings.map(finding => finding.rule).sort();
 
@@ -2437,7 +2523,7 @@ Create `tests/detectors/redundancy.test.ts`:
 ```ts
 import { describe, expect, it } from 'vitest';
 import { detectRedundancy, layerOf } from '../../src/detectors/redundancy.ts';
-import { parseTestFile } from '../../src/parse.ts';
+import { parseTestFile } from '../helpers/parse.ts';
 
 describe('detectRedundancy', () => {
   const file = (rel: string, subjects: string[], text: string) => {
@@ -3500,7 +3586,7 @@ import { detectShims } from './detectors/shims.ts';
 import { detectWiring } from './detectors/wiring.ts';
 import { detectWorktreeHazards } from './detectors/worktree.ts';
 import { detectRunner, discoverTests } from './discover.ts';
-import { parseTestFile, resolveSubjects, type ParsedFile } from './parse.ts';
+import { openParseSession, resolveSubjects, type ParsedFile } from './parse.ts';
 import { candidateDirs } from './riskdraft.ts';
 import { loadRiskMap, tierFor } from './riskmap.ts';
 import { EVIDENCE_SCHEMA, Tier, type EvidenceReport, type FileFlag, type Finding, type RiskMap, type TestFileRecord } from './schema.ts';
@@ -3537,13 +3623,19 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
   const map = loadRiskMap(root);
   const sets = commitFileSets(root, options.commitLimit ?? 500);
 
-  const loaded = discoverTests(root).map(rel => {
-    const text = readFileSync(join(root, rel), 'utf8');
-    const parsed = parseTestFile(rel, text);
-    const declared = (parsed.tags.subjects ?? []).filter(path => existsSync(join(root, path)));
-    const subjects = [...new Set([...resolveSubjects(root, rel, parsed.imports), ...declared])].sort();
-    return { rel, text, lines: text.split(/\r?\n/), parsed, subjects };
-  });
+  const session = openParseSession();
+  let loaded;
+  try {
+    loaded = discoverTests(root).map(rel => {
+      const text = readFileSync(join(root, rel), 'utf8');
+      const parsed = session.parse(rel, text);
+      const declared = (parsed.tags.subjects ?? []).filter(path => existsSync(join(root, path)));
+      const subjects = [...new Set([...resolveSubjects(root, rel, parsed.imports), ...declared])].sort();
+      return { rel, text, lines: text.split(/\r?\n/), parsed, subjects };
+    });
+  } finally {
+    session.close();
+  }
 
   const records = new Map<string, TestFileRecord>();
   for (const file of loaded) {
@@ -4481,7 +4573,7 @@ Invoke `h-superpowers:verification-before-completion` first: nothing below may b
 
 Run: `npm test`
 
-Expected: `Test Files  18 passed (18)` and `Tests  154 passed (154)`.
+Expected: `Test Files  18 passed (18)` and `Tests  155 passed (155)`.
 
 Run: `npm run typecheck`
 
@@ -4542,7 +4634,7 @@ Invoke `h-superpowers:finishing-a-development-branch`. Do not publish the reposi
 
 | Spec requirement | Task |
 |---|---|
-| Managed runtime, `tests-setup`, launcher, Node 24+, no native addons | 1, 4, 17 |
+| Managed runtime, `tests-setup`, launcher, Node 24+, nothing to compile (prebuilt TypeScript 7 binary) | 1, 4, 17 |
 | Evidence-record schema as the CLI/skills contract | 3 |
 | Risk map `.testing/risk.yml`: phase, consumers, weights, lanes, areas, first match wins | 3, 11 |
 | `risk-draft`, owner confirms once, drift flagged later | 11, 13, 16 |
