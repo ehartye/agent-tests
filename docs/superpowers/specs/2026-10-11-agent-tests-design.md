@@ -15,7 +15,7 @@ Goals:
 - Structure tests by project phase (dev, test, production) and frequency lane, driven by an explicit risk map.
 - Audit an existing suite for five problems: redundant coverage, backward-compat and fallback shim tests, worktree-hostile tests, tests not wired for risk-based testing, tests run too often.
 - Remediate by demotion, merge, rewrite, quarantine or deletion, with before/after evidence.
-- Answer "do we need CI?" per phase. Solo pre-release default: no automatic on-push CI.
+- Answer "do we need CI?" per phase. Solo pre-release default (owner confirmed, 2026-10-11, for a pull-request workflow): one non-blocking Linux job per pull-request update, no push trigger, and the Windows and macOS runs on demand, weekly and on release tags.
 
 Non-goals (v1): Python/pytest (follows v0.4), runners beyond vitest and jest, auto-applying deletions without owner approval, enterprise test-management features.
 
@@ -38,13 +38,13 @@ Verdicts: **keep, demote, merge, rewrite, quarantine, delete.**
 
 | Phase | Goal | Tests that matter | Automatic CI | Compat tests |
 |---|---|---|---|---|
-| dev (pre-release) | Iteration speed | Core invariants, a few journeys | None; on-demand only | None (no consumers) |
-| test (stabilizing) | Release confidence | Journeys, public-surface contracts, critical-tier depth | Scheduled, Windows+macOS matrix; release tags | Only for declared consumers |
-| production | Don't break people | Regression and compat for declared consumers, post-deploy smoke | PR-level with path filters | Yes, for declared consumers |
+| dev (pre-release) | Iteration speed | Core invariants, a few journeys | One non-blocking Linux job per pull request; OS matrix on demand only | None (no consumers) |
+| test (stabilizing) | Release confidence | Journeys, public-surface contracts, critical-tier depth | The same, plus a scheduled Windows+macOS matrix and release tags | Only for declared consumers |
+| production | Don't break people | Regression and compat for declared consumers, post-deploy smoke | Required, path-filtered PR checks | Yes, for declared consumers |
 
 Lanes are defined by frequency: **edit** (tests affected by changed files, seconds), **merge** (fast lane for critical and standard tiers, run locally, writes an evidence stamp `{sha, lane, result}`), **scheduled** (full suite, OS matrix), **release** (everything, clean-environment install, packaging check). Moving between phases is an explicit step: populate `consumers`, change `phase`.
 
-CI guidance for solo pre-release work: no on-push workflow; `workflow_dispatch` or a label for on-demand runs; a cron for scheduled; tag triggers for release; local evidence stamp as the merge gate. The industry basis and runner pricing are verified in M0 and cited in `references/`; unsourced claims are labeled opinion.
+CI guidance for solo pre-release work through pull requests: the local merge lane is the gate; one non-blocking Linux job on `pull_request` (path-filtered, drafts skipped, `concurrency` cancelling older runs, not a required check) gives an observer outside the agent; no `push` trigger on branches and no post-merge run; `workflow_dispatch` (with an `os` input) or a label for on-demand OS-matrix runs; a weekly cron; tag triggers for release; a local evidence stamp written by a tool. Doctrine rule 7 records the evidence and the departure from the original "no automatic CI" default. The industry basis and runner pricing are verified in M0 and cited in `references/`; unsourced claims are labeled opinion.
 
 ## Architecture
 
@@ -101,7 +101,7 @@ Detectors for the five problems:
 - **test-strategy**: new projects and feature areas. Runs `risk-draft`; adds an agent-instruction block to `AGENTS.md`/`CLAUDE.md` (one test owner per invariant; test behavior at seams, not implementation; no compat tests pre-release; deterministic seeds, unique temp dirs, port 0; every test declares lane and risk). Prevention at the source is the cheapest remediation, since agents write most tests.
 - **test-audit**: checks setup, drafts the risk map if missing, runs `scan` then `time`, applies the rubric, outputs a verdict table.
 - **test-remediate**: works on a branch or worktree; applies verdicts in order of increasing risk (demote, merge, rewrite, quarantine, delete), one commit per verdict class, re-runs affected lanes, reports before/after cost columns. Never deletes a critical-tier test without a replacement; deletions need owner approval.
-- **test-lanes**: wires lanes into `package.json` scripts and vitest/jest projects, the local evidence stamp, git hooks (pre-push), and CI templates (`workflow_dispatch`, label, cron, tag). Default for solo pre-release: no on-push workflow.
+- **test-lanes**: wires lanes into `package.json` scripts and vitest/jest projects, the local evidence stamp, git hooks (pre-push), and CI templates (`workflow_dispatch`, label, cron, tag). Default for solo pre-release: a non-blocking Linux job on `pull_request`, no push workflow.
 
 ## Codex and cross-platform
 
@@ -119,7 +119,7 @@ Detectors for the five problems:
 
 - Seeded fixture repo plants every smell with known ground truth; a clean fixture must report nothing. Detector tests assert both.
 - Skill evals: an agent audits the bloated fixture; verdicts are scored against the planted truth (pattern follows agent-prose `evals/`).
-- Dogfooding: its own CI follows the doctrine. No on-push runs; on-demand PR checks; scheduled and release lanes run an Ubuntu, Windows and macOS matrix. macOS is verified only in CI.
+- Dogfooding: its own CI follows the doctrine. One non-blocking Ubuntu job per pull request (path-filtered, drafts skipped, older runs cancelled); no push runs; the Windows and macOS runs happen on demand, weekly and on release tags. macOS is verified only in CI.
 
 ## Milestones
 

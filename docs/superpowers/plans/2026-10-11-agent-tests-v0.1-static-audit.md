@@ -28,6 +28,9 @@
 3. **`scan` prints evidence JSON and `report` prints Markdown.** The spec listed `scan`, `time`, `report`; `time` belongs to the next plan.
 4. **Noise controls found by running the audit on this repository itself:** type-only imports are not subjects; a test counts for a subject only when it imports three or fewer modules or is named after it; shared-subject findings collapse to one per file; `fixtures` directories are never scanned; a tag-only `push` trigger is a release run, not "every push", and may carry an OS matrix; `risk-draft` adds a catch-all `src/**` area when code sits directly under `src`; `@subject <path>` declares code a test reaches without importing it (a CLI run in a subprocess), and `@risk <tier>` states a tier for a test with no code subject.
 5. **Doctrine is verified, not asserted.** Task 2 turns the spec's CI and testing claims into cited rules in `references/doctrine.md`. One claim was already corrected while planning: bare `vitest` starts watch mode only in an interactive terminal, so the skill says "can block", not "waits forever".
+6. **A test with no `@lane` tag is not a finding in v0.1.** Tagging is opt-in and the risk map's tier already places every test, so a `wiring.no-lane` rule would flag nearly every test in a project that has not adopted tags. A lane-versus-tier mismatch is flagged only when a tag exists. Revisit it once `test-lanes` (a later plan) writes the tags.
+7. **The CI default follows the owner's pull-request workflow, and replaces the spec's "no automatic CI in dev".** The doctrine research (rule 7) found team-oriented sources agree a build should run on every integration and that a local pass is an agent reporting on itself. The owner never pushes to the default branch, so the recommended default is one non-blocking Linux job per `pull_request` update (path-filtered, drafts skipped, newer runs cancel older ones), no `push` trigger and no post-merge run, with the Windows and macOS runs on demand, weekly and on release tags. The frequency detector accepts a Linux-only `pull_request` workflow and flags `push` triggers on branches and Windows or macOS on the pull-request path. The spec and doctrine rule 7 were amended to match.
+8. **Tasks 3 and 4 and the fixtures were hardened after code review, and the code blocks show the final versions.** Task 3: the risk-map schema rejects unknown keys, and read and parse failures are reported separately. Task 4: a stale `setup.lock` is reclaimed when its owner process is gone, the repair path never runs `npm ci` inside a live release, dependency-check failures keep the line that names the cause, and the install contract has tests. Task 5: the `clean` fixture gained near-miss cases. Task 14 compares exact sorted finding lists, so a rule that fires twice is caught.
 
 ## Not in this plan
 
@@ -455,6 +458,15 @@ git add tests/doctrine.test.ts references/doctrine.md
 git commit -m "docs: add cited doctrine for the testing rules the skills teach"
 ```
 
+- [ ] **Step 8: Amend rule 7 for the owner's pull-request workflow**
+
+The owner never pushes to the default branch and works only through feature branches and pull requests, so rule 7 recommends the non-blocking Linux job on `pull_request`, not on push to the default branch. Reword its `Claim:` accordingly (one non-blocking Linux job per pull-request update; OS matrix on demand, on a schedule and on release), change its `Opinion:` to say pull-request job instead of mainline job, and add a second `Note:` line recording the amendment and that no post-merge run is recommended because the pull-request job already ran on the same tree. Also tighten three phrases the spec review found stronger than their sources: say that the party whose commits more often touch tests runs the agent-reported merge gate (not "most often edits the tests"); label the "lots of unit tests would reward mock-heavy tests" clause as this doctrine's inference; and say a bare `vitest` call by an agent "may exit" because how Vitest detects an agent is not documented. Re-run `npx vitest run tests/doctrine.test.ts`; it still passes 26 tests.
+
+```bash
+git add references/doctrine.md
+git commit -m "docs: amend doctrine rule 7 for the pull-request workflow and trim three overstatements"
+```
+
 ---
 
 ## Task 3: Errors, schema and risk map
@@ -488,6 +500,12 @@ describe('RiskMap', () => {
     expect(RiskMap.safeParse(map).success).toBe(false);
   });
 
+  it('rejects unknown keys at every level', () => {
+    expect(RiskMap.safeParse({ ...defaultRiskMap(), extra: 1 }).success).toBe(false);
+    expect(RiskMap.safeParse({ ...defaultRiskMap(), weights: { wait: 1, agent: 1, ci: 1, churn: 1, extra: 1 } }).success).toBe(false);
+    expect(RiskMap.safeParse({ ...defaultRiskMap(), areas: [{ path: 'src/**', tier: 'low', Why: 'typo' }] }).success).toBe(false);
+  });
+
   it('rejects an unknown phase', () => {
     expect(RiskMap.safeParse({ ...defaultRiskMap(), phase: 'beta' }).success).toBe(false);
   });
@@ -505,6 +523,23 @@ describe('EvidenceReport', () => {
     const report = { schema: EVIDENCE_SCHEMA, root: '.', runner: 'vitest', phase: null, riskMapPresent: false, files: [], clusters: [], projectFindings: [] };
     expect(EvidenceReport.safeParse(report).success).toBe(true);
     expect(EvidenceReport.safeParse({ ...report, schema: 'other@1' }).success).toBe(false);
+  });
+
+  it('represents a static scan: unknown costs and tiers are null', () => {
+    const file = {
+      file: 'tests/a.test.ts',
+      tests: 1,
+      assertions: 1,
+      flags: [],
+      subjects: [],
+      tags: {},
+      tier: null,
+      area: null,
+      cost: { wait: null, agent: 120, ci: null, churn: null, edits: null },
+      findings: [],
+    };
+    const report = { schema: EVIDENCE_SCHEMA, root: '.', runner: 'vitest', phase: null, riskMapPresent: false, files: [file], clusters: [], projectFindings: [] };
+    expect(EvidenceReport.safeParse(report).success).toBe(true);
   });
 });
 ```
@@ -528,15 +563,38 @@ describe('loadRiskMap', () => {
     expect(loadRiskMap(root)).toEqual(map);
   });
 
-  it('throws E_RISKMAP naming the bad field', () => {
-    const root = makeTree({ [RISK_MAP_PATH]: 'phase: beta\nconsumers: []\n' });
-    expect(() => loadRiskMap(root)).toThrow(CliError);
+  const failure = (root: string): CliError => {
     try {
       loadRiskMap(root);
     } catch (error) {
-      expect((error as CliError).code).toBe('E_RISKMAP');
-      expect((error as CliError).message).toContain('phase');
+      return error as CliError;
     }
+    throw new Error('expected loadRiskMap to throw');
+  };
+
+  it('throws E_RISKMAP naming the bad field', () => {
+    const error = failure(makeTree({ [RISK_MAP_PATH]: 'phase: beta\nconsumers: []\n' }));
+    expect(error).toBeInstanceOf(CliError);
+    expect(error.code).toBe('E_RISKMAP');
+    expect(error.message).toContain('phase');
+  });
+
+  it('names the root when the file is empty', () => {
+    expect(failure(makeTree({ [RISK_MAP_PATH]: '' })).message).toContain('(root)');
+  });
+
+  it('rejects a mistyped key instead of dropping it', () => {
+    const typo = serializeRiskMap({ ...defaultRiskMap(), areas: [{ path: 'src/**', tier: 'low' }] }).replace('tier: low', 'tier: low\n    Why: typo');
+    const error = failure(makeTree({ [RISK_MAP_PATH]: typo }));
+    expect(error.code).toBe('E_RISKMAP');
+    expect(error.message).toContain('Why');
+  });
+
+  it('reports an unreadable risk map as unreadable, not unparseable', () => {
+    const error = failure(makeTree({ [`${RISK_MAP_PATH}/inner.txt`]: '' }));
+    expect(error.code).toBe('E_RISKMAP');
+    expect(error.message).toContain('Cannot read');
+    expect(error.cause).toBeDefined();
   });
 
   it('throws E_RISKMAP for unparseable YAML', () => {
@@ -578,11 +636,11 @@ Create `src/errors.ts`:
 ```ts
 /** Error with a stable machine-readable code; the CLI prints it as one-line JSON on stderr. */
 export class CliError extends Error {
-  code: string;
-  hint?: string;
+  readonly code: string;
+  readonly hint?: string;
 
-  constructor(code: string, message: string, hint?: string) {
-    super(message);
+  constructor(code: string, message: string, hint?: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = 'CliError';
     this.code = code;
     if (hint) this.hint = hint;
@@ -604,23 +662,24 @@ export type Phase = z.infer<typeof Phase>;
 export const LaneName = z.enum(['edit', 'merge', 'scheduled', 'release']);
 export type LaneName = z.infer<typeof LaneName>;
 
-const LaneSpec = z.object({
+// The risk map is hand-edited and committed, so unknown keys are errors: a typo like `Why:` must not be dropped silently.
+const LaneSpec = z.strictObject({
   runs: z.string().min(1),
   trigger: z.string().min(1),
   os: z.array(z.string()).optional(),
 });
 
-export const RiskMap = z.object({
+export const RiskMap = z.strictObject({
   phase: Phase,
   consumers: z.array(z.string()),
-  weights: z.object({
+  weights: z.strictObject({
     wait: z.number().nonnegative(),
     agent: z.number().nonnegative(),
     ci: z.number().nonnegative(),
     churn: z.number().nonnegative(),
   }),
-  lanes: z.object({ edit: LaneSpec, merge: LaneSpec, scheduled: LaneSpec, release: LaneSpec }),
-  areas: z.array(z.object({ path: z.string().min(1), tier: Tier, why: z.string().optional() })),
+  lanes: z.strictObject({ edit: LaneSpec, merge: LaneSpec, scheduled: LaneSpec, release: LaneSpec }),
+  areas: z.array(z.strictObject({ path: z.string().min(1), tier: Tier, why: z.string().optional() })),
 });
 export type RiskMap = z.infer<typeof RiskMap>;
 
@@ -714,15 +773,21 @@ export function defaultRiskMap(): RiskMap {
 export function loadRiskMap(root: string): RiskMap | null {
   const path = join(root, RISK_MAP_PATH);
   if (!existsSync(path)) return null;
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    throw new CliError('E_RISKMAP', `Cannot read ${RISK_MAP_PATH}: ${(error as Error).message}`, undefined, { cause: error });
+  }
   let raw: unknown;
   try {
-    raw = parse(readFileSync(path, 'utf8'));
+    raw = parse(text);
   } catch (error) {
-    throw new CliError('E_RISKMAP', `Cannot parse ${RISK_MAP_PATH}: ${(error as Error).message}`);
+    throw new CliError('E_RISKMAP', `Cannot parse ${RISK_MAP_PATH}: ${(error as Error).message}`, undefined, { cause: error });
   }
   const result = RiskMap.safeParse(raw);
   if (!result.success) {
-    const issues = result.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ');
+    const issues = result.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ');
     throw new CliError('E_RISKMAP', `Invalid ${RISK_MAP_PATH}: ${issues}`);
   }
   return result.data;
@@ -736,6 +801,7 @@ export function serializeRiskMap(map: RiskMap): string {
   return header + stringify(map, { lineWidth: 0 });
 }
 
+/** `relPath` must be repo-relative with forward slashes, as `relPosix` produces. */
 export function tierFor(map: RiskMap, relPath: string): { tier: Tier; area: string } | null {
   for (const area of map.areas) {
     if (globToRegExp(area.path).test(relPath)) return { tier: area.tier, area: area.path };
@@ -748,7 +814,7 @@ export function tierFor(map: RiskMap, relPath: string): { tier: Tier; area: stri
 
 Run: `npx vitest run tests/schema.test.ts tests/riskmap.test.ts`
 
-Expected: PASS, 6 plus 6 tests.
+Expected: PASS, 8 plus 9 tests.
 
 Run: `npm run typecheck`
 
@@ -775,11 +841,15 @@ Adapted from agent-prose. The cache holds source only; setup copies a fingerprin
 Create `tests/managed-runtime.test.ts`:
 
 ```ts
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { describeSource, installRuntime, inspectInstallation, resolveRuntime } from '../scripts/managed-runtime.js';
+import { checkDependencies, describeSource, installRuntime, inspectInstallation, resolveRuntime } from '../scripts/managed-runtime.js';
 import { makeTree } from './helpers/tree.ts';
+
+const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
 const source = (extra: Record<string, string> = {}): string =>
   makeTree({
@@ -819,6 +889,28 @@ describe('describeSource', () => {
     const root = source({ '.claude-plugin/plugin.json': JSON.stringify({ name: 'agent-tests', version: '0.0.1' }) });
     expect(() => describeSource(root)).toThrow(/version mismatch/);
   });
+
+  it('covers tsconfig, skills and references but not docs, tests or node_modules', () => {
+    const described = describeSource(source({
+      'tsconfig.json': '{}',
+      'skills/audit/SKILL.md': '# skill\n',
+      'references/doctrine.md': '# doctrine\n',
+      'docs/plan.md': '# plan\n',
+      'tests/a.test.ts': 'export {};\n',
+      'node_modules/dep/index.js': 'module.exports = 1;\n',
+    }));
+    expect(described.files).toContain('tsconfig.json');
+    expect(described.files).toContain('skills/audit/SKILL.md');
+    expect(described.files).toContain('references/doctrine.md');
+    expect(described.files.filter(name => /^(docs|tests|node_modules)\//.test(name))).toEqual([]);
+  });
+
+  it('ignores editor and OS litter, so it neither ships nor changes the fingerprint', () => {
+    const plain = describeSource(source());
+    const littered = describeSource(source({ 'src/.DS_Store': 'x', 'src/Thumbs.db': 'x', 'src/cli.ts~': 'x' }));
+    expect(littered.files).toEqual(plain.files);
+    expect(littered.fingerprint).toBe(plain.fingerprint);
+  });
 });
 
 describe('resolveRuntime', () => {
@@ -829,6 +921,11 @@ describe('resolveRuntime', () => {
   it('refuses a home inside the plugin checkout', () => {
     const root = source();
     expect(() => resolveRuntime(root, { home: join(root, 'home') })).toThrow(/outside the plugin/);
+  });
+
+  it('refuses a home that contains the plugin checkout', () => {
+    const root = source();
+    expect(() => resolveRuntime(root, { home: dirname(root) })).toThrow(/outside the plugin/);
   });
 });
 
@@ -856,11 +953,58 @@ describe('installRuntime', () => {
     expect(() => installRuntime(root, { home, ...fakes })).toThrow(/Another setup may be running/);
   });
 
+  it('keeps a live setup lock when it refuses, and names the owner', () => {
+    const root = source();
+    const started = '2026-01-02T03:04:05.000Z';
+    const home = makeTree({ 'setup.lock': JSON.stringify({ pid: process.pid, started }) });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(() => installRuntime(root, { home, ...fakes })).toThrow(new RegExp(`Another setup may be running.*${process.pid}.*${started}`));
+      expect(existsSync(join(home, 'setup.lock'))).toBe(true);
+    }
+  });
+
+  it('refuses an unreadable lock and leaves it on disk', () => {
+    const root = source();
+    const home = makeTree({ 'setup.lock': 'not json' });
+    expect(() => installRuntime(root, { home, ...fakes })).toThrow(/Another setup may be running/);
+    expect(readFileSync(join(home, 'setup.lock'), 'utf8')).toBe('not json');
+  });
+
+  it('reclaims a lock left by an exited process and sweeps abandoned staging directories', () => {
+    const root = source();
+    const gone = spawnSync(process.execPath, ['-e', '']).pid;
+    const home = makeTree({ 'setup.lock': JSON.stringify({ pid: gone, started: '2026-01-01T00:00:00.000Z' }) });
+    mkdirSync(join(home, 'releases', '.install-abc'), { recursive: true });
+    const installed = installRuntime(root, { home, ...fakes });
+    expect(existsSync(join(installed.root, 'managed-install.json'))).toBe(true);
+    expect(existsSync(join(home, 'setup.lock'))).toBe(false);
+    expect(readdirSync(join(home, 'releases')).filter(name => name.startsWith('.install-'))).toEqual([]);
+  });
+
+  it('installs production dependencies from the lockfile', () => {
+    const calls: string[][] = [];
+    installRuntime(source(), { home: makeTree(), npm: (args: string[]) => { calls.push(args); return ''; }, checkDependencies: () => {} });
+    expect(calls[0]?.slice(0, 2)).toEqual(['ci', '--omit=dev']);
+  });
+
   it('cleans its staging directory and lock when dependency checks fail', () => {
     const root = source();
     const home = makeTree();
     const failing = { npm: () => '', checkDependencies: () => { throw new Error('missing zod'); } };
     expect(() => installRuntime(root, { home, ...failing })).toThrow(/missing zod/);
+    expect(existsSync(join(home, 'setup.lock'))).toBe(false);
+    expect(readdirSync(join(home, 'releases')).filter(name => name.startsWith('.install-'))).toEqual([]);
+  });
+
+  it('never reinstalls inside a live release whose dependencies fail the check', () => {
+    const root = source();
+    const home = makeTree();
+    installRuntime(root, { home, ...fakes });
+    const calls: string[][] = [];
+    const broken = { npm: (args: string[]) => { calls.push(args); return ''; }, checkDependencies: () => { throw new Error('missing zod'); } };
+    expect(() => installRuntime(root, { home, ...broken })).toThrow(/Move this release directory aside and rerun tests-setup/);
+    expect(() => installRuntime(root, { home, ...broken })).toThrow(/missing zod/);
+    expect(calls).toEqual([]);
     expect(existsSync(join(home, 'setup.lock'))).toBe(false);
   });
 
@@ -881,6 +1025,71 @@ describe('inspectInstallation', () => {
     installRuntime(root, { home, ...fakes });
     const report = inspectInstallation(root, { home, checkDependencies: () => {} });
     expect(report).toMatchObject({ ok: true, pluginVersion: '1.2.3', cliVersion: '1.2.3', dependencies: true });
+  });
+});
+
+describe('checkDependencies', () => {
+  const failureOf = (root: string): string => {
+    try { checkDependencies(root); } catch (error) { return (error as Error).message; }
+    return '';
+  };
+
+  it('names the missing module and does not echo the probe source', () => {
+    // yaml and zod resolve, but the runtime has no src/parse.ts.
+    const root = makeTree({
+      'node_modules/yaml/package.json': JSON.stringify({ name: 'yaml', version: '0.0.0', main: 'index.js' }),
+      'node_modules/yaml/index.js': 'module.exports = {};\n',
+      'node_modules/zod/package.json': JSON.stringify({ name: 'zod', version: '0.0.0', main: 'index.js' }),
+      'node_modules/zod/index.js': 'module.exports = {};\n',
+    });
+    const message = failureOf(root);
+    expect(message).toMatch(/^Dependency check failed: /);
+    expect(message).toMatch(/Cannot find module/);
+    expect(message).not.toContain('openParseSession');
+  });
+
+  it('keeps the line that names the problem when a package is missing entirely', () => {
+    const message = failureOf(makeTree());
+    expect(message).toMatch(/^Dependency check failed: .*Cannot find package 'yaml'/);
+    expect(message).not.toMatch(/Node\.js v|\bat .*:\d+:\d+/);
+  });
+});
+
+describe('launcher contract', () => {
+  const run = (script: string, args: string[], home: string) =>
+    spawnSync(process.execPath, [join(repoRoot, 'scripts', script), ...args], { encoding: 'utf8', env: { ...process.env, AGENT_TESTS_HOME: home } });
+  const errorOf = (stderr: string) => {
+    expect(stderr.trim().split('\n')).toHaveLength(1);
+    return JSON.parse(stderr).error;
+  };
+
+  it('setup.js rejects unknown flags with E_USAGE and exit 2', () => {
+    const result = run('setup.js', ['--bogus'], makeTree());
+    expect(result.status).toBe(2);
+    expect(errorOf(result.stderr).code).toBe('E_USAGE');
+  });
+
+  it('setup.js --check --json reports ok:false on stdout and exits 1 when nothing is installed', () => {
+    const result = run('setup.js', ['--check', '--json'], makeTree());
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('setup.js reports an install failure as E_SETUP_FAILED without the circular hint', () => {
+    const home = makeTree({ 'setup.lock': JSON.stringify({ pid: process.pid, started: '2026-01-02T03:04:05.000Z' }) });
+    const result = run('setup.js', [], home);
+    expect(result.status).toBe(1);
+    const error = errorOf(result.stderr);
+    expect(error.code).toBe('E_SETUP_FAILED');
+    expect(error.message).toMatch(/Another setup may be running/);
+    expect(error.hint).toMatch(/^Fix the cause in the message, then rerun node /);
+    expect(error.hint).not.toContain('tests-setup skill');
+  });
+
+  it('run-managed.js reports a missing runtime as E_RUNTIME_MISSING and exit 1', () => {
+    const result = run('run-managed.js', ['capabilities'], makeTree());
+    expect(result.status).toBe(1);
+    expect(errorOf(result.stderr).code).toBe('E_RUNTIME_MISSING');
   });
 });
 ```
@@ -911,6 +1120,7 @@ const NAME = 'agent-tests';
 const RUNTIME_FILES = ['package.json', 'package-lock.json', 'tsconfig.json', 'scripts', 'src', 'skills', 'references'];
 const RECEIPT = 'managed-install.json';
 const TEXT = /\.(?:[cm]?[jt]s|json|ya?ml|md|txt)$/;
+const LITTER = name => name === '.DS_Store' || name === 'Thumbs.db' || name.endsWith('~');
 export const managedHome = () => resolve(process.env.AGENT_TESTS_HOME || join(homedir(), '.agent-tests'));
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
 const inside = (parent, child) => { const rel = relative(parent, child); return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel)); };
@@ -923,6 +1133,7 @@ function canonical(path) {
 function runtimeFiles(root) {
   const paths = [];
   function visit(name) {
+    if (LITTER(basename(name))) return;
     const path = join(root, name);
     if (!existsSync(path)) return;
     const stat = lstatSync(path);
@@ -978,6 +1189,11 @@ export function resolveRuntime(source, { home = managedHome() } = {}) {
   return runtime;
 }
 
+function assertNode() {
+  const major = Number(process.versions.node.split('.')[0]);
+  if (major < 24) throw new Error(`agent-tests runs TypeScript directly and needs Node 24 or newer; this is Node ${process.versions.node}`);
+}
+
 function npmCli() {
   const candidates = [process.env.npm_execpath, join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')];
   for (const entry of (process.env.PATH || '').split(delimiter).filter(Boolean)) {
@@ -1003,8 +1219,7 @@ export function runNpm(args, { cwd, progress = false } = {}) {
 
 /** Exercise the runtime rather than only checking that directories exist. */
 export function checkDependencies(root) {
-  const major = Number(process.versions.node.split('.')[0]);
-  if (major < 24) throw new Error(`agent-tests runs TypeScript directly and needs Node 24 or newer; this is Node ${process.versions.node}`);
+  assertNode();
   // Parsing a line proves the platform's native TypeScript binary installed and starts, not just that the packages exist.
   const probe = [
     "await import('yaml'); await import('zod');",
@@ -1012,24 +1227,70 @@ export function checkDependencies(root) {
     'const session = openParseSession();',
     "try { session.parse('check.test.ts', \"it('x', () => {});\"); } finally { session.close(); }",
   ].join(' ');
-  execFileSync(process.execPath, ['--input-type=module', '-e', probe], { cwd: root, windowsHide: true, stdio: 'pipe', encoding: 'utf8' });
+  try {
+    execFileSync(process.execPath, ['--input-type=module', '-e', probe], { cwd: root, windowsHide: true, stdio: 'pipe', encoding: 'utf8', timeout: 60_000 });
+  } catch (error) {
+    throw new Error(`Dependency check failed: ${summarizeFailure(error.stderr, error.message)}`);
+  }
+}
+
+/** The raw error message echoes the probe source. Keep the line that names the problem and what follows it. */
+function summarizeFailure(stderr, fallback) {
+  const lines = String(stderr || '').split(/\r?\n/)
+    .filter(line => line.trim() && !/^\s+at /.test(line) && !/^\s*[{}]\s*$/.test(line) && !/^\s*\^+\s*$/.test(line) && !/^Node\.js v/.test(line.trim()))
+    .map(line => line.trim());
+  const start = lines.findIndex(line => /\w*Error\b|Cannot find module/.test(line));
+  const picked = start >= 0 ? lines.slice(start, start + 3) : lines.slice(0, 3);
+  return picked.length ? picked.join(' | ') : fallback;
+}
+
+function lockOwner(lock) {
+  try {
+    const owner = JSON.parse(readFileSync(lock, 'utf8'));
+    return Number.isInteger(owner?.pid) && owner.pid > 0 ? owner : null;
+  } catch { return null; }
+}
+
+function isAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
+}
+
+/** Take setup.lock. A lock whose owner process has exited is stale: remove it and retry once. */
+function acquireLock(lock) {
+  for (let attempt = 0; ; attempt++) {
+    try { return openSync(lock, 'wx'); } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      let owner = lockOwner(lock);
+      if (attempt === 0 && owner && !isAlive(owner.pid)) {
+        // Re-read just before unlinking: if another setup already reclaimed the lock and wrote its own, leave it alone.
+        // A sliver remains between this read and the unlink (no atomic compare-and-delete on a file); it is not worth a lock of its own.
+        const again = lockOwner(lock);
+        if (again && again.pid === owner.pid && again.started === owner.started) {
+          try { unlinkSync(lock); } catch (unlinkError) { if (unlinkError.code !== 'ENOENT') throw unlinkError; }
+          continue;
+        }
+        owner = again;
+      }
+      const who = owner ? ` by pid ${owner.pid}${typeof owner.started === 'string' ? `, started ${owner.started}` : ''}` : '';
+      throw new Error(`Another setup may be running (${lock}${who}). Remove a stale lock only after confirming no setup is active.`);
+    }
+  }
 }
 
 export function installRuntime(source, { home = managedHome(), npm = runNpm, checkDependencies: check = checkDependencies } = {}) {
+  assertNode();
   const runtime = location(source, home);
   mkdirSync(runtime.home, { recursive: true });
   const lock = join(runtime.home, 'setup.lock');
-  let fd;
-  try { fd = openSync(lock, 'wx'); } catch (error) {
-    if (error.code === 'EEXIST') throw new Error(`Another setup may be running (${lock}). Remove a stale lock only after confirming no setup is active.`);
-    throw error;
-  }
+  const fd = acquireLock(lock);
   let stage;
   try {
     writeFileSync(fd, JSON.stringify({ pid: process.pid, started: new Date().toISOString() }));
+    const releases = join(runtime.home, 'releases');
+    mkdirSync(releases, { recursive: true });
+    // Holding the lock, so any .install-* directory is left over from a killed run.
+    for (const name of readdirSync(releases)) if (name.startsWith('.install-')) rmSync(join(releases, name), { recursive: true, force: true });
     if (!existsSync(runtime.root)) {
-      const releases = join(runtime.home, 'releases');
-      mkdirSync(releases, { recursive: true });
       stage = mkdtempSync(join(releases, '.install-'));
       for (const name of runtime.files) {
         mkdirSync(dirname(join(stage, name)), { recursive: true });
@@ -1043,9 +1304,9 @@ export function installRuntime(source, { home = managedHome(), npm = runNpm, che
       stage = undefined;
     } else {
       resolveRuntime(source, { home });
-      try { check(runtime.root); } catch {
-        npm(['ci', '--omit=dev', '--no-audit', '--no-fund'], { cwd: runtime.root, progress: true });
-        check(runtime.root);
+      try { check(runtime.root); } catch (error) {
+        // The receipt is valid, so only node_modules is suspect. Never rewrite a live release in place.
+        throw new Error(`Managed release at ${runtime.root} fails its dependency check: ${error.message}. Move this release directory aside and rerun tests-setup.`);
       }
     }
     return runtime;
@@ -1080,19 +1341,26 @@ import { fileURLToPath } from 'node:url';
 import { inspectInstallation, installRuntime } from './managed-runtime.js';
 
 class UsageError extends Error {}
+class SetupError extends Error {}
 const source = join(dirname(fileURLToPath(import.meta.url)), '..');
+const setupCommand = `node "${join(source, 'scripts', 'setup.js')}"`;
 try {
   const args = process.argv.slice(2);
   if (args.some(arg => !['--check', '--json'].includes(arg))) throw new UsageError('Usage: node scripts/setup.js [--check] [--json]');
-  if (!args.includes('--check')) installRuntime(source);
+  if (!args.includes('--check')) {
+    try { installRuntime(source); } catch (error) { throw new SetupError(error.message, { cause: error }); }
+  }
   const report = inspectInstallation(source);
   report.node = process.versions.node;
   console.log(JSON.stringify(report, null, args.includes('--json') ? undefined : 2));
   if (!report.ok) process.exitCode = 1;
 } catch (error) {
   // Same error contract as the CLI and the launcher, whatever the flags; --json keeps its stdout report too.
-  const hint = `Run the tests-setup skill (node "${join(source, 'scripts', 'setup.js')}")`;
-  console.error(JSON.stringify({ error: { code: error instanceof UsageError ? 'E_USAGE' : 'E_RUNTIME_MISSING', message: error.message, hint } }));
+  // An install failure must not point back at the setup skill that just failed.
+  const [code, hint] = error instanceof UsageError ? ['E_USAGE', `Run the tests-setup skill (${setupCommand})`]
+    : error instanceof SetupError ? ['E_SETUP_FAILED', `Fix the cause in the message, then rerun ${setupCommand}`]
+    : ['E_RUNTIME_MISSING', `Run the tests-setup skill (${setupCommand})`];
+  console.error(JSON.stringify({ error: { code, message: error.message, hint } }));
   if (process.argv.includes('--json')) console.log(JSON.stringify({ ok: false, errors: [error.message] }));
   process.exitCode = error instanceof UsageError ? 2 : 1;
 }
@@ -1126,7 +1394,7 @@ try {
 
 Run: `npx vitest run tests/managed-runtime.test.ts`
 
-Expected: PASS, 13 tests.
+Expected: PASS, 27 tests.
 
 Run: `npm run typecheck`
 
@@ -1143,7 +1411,7 @@ git commit -m "feat: add managed runtime install, check and launcher"
 
 ## Task 5: Fixture repositories
 
-Two miniature repositories with known ground truth. `bloated` plants every smell the audit hunts; `clean` must report nothing. They are data, never executed: `vitest.config.ts` and `tsconfig.json` exclude `tests/fixtures`, and the scanner skips directories named `fixtures`. `expected.json` is the planted truth the acceptance test (Task 14) checks against.
+Two miniature repositories with known ground truth. `bloated` plants every smell the audit hunts; `clean` must report nothing, and it deliberately sits next to each detector's false-positive guards (mixed mock and value assertions, a snapshot plus a value, `mkdtemp`, dotfile names, a path-filtered `pull_request`, a tag-only `push`, a standard-tier area, a scoped pre-push hook). They are data, never executed: `vitest.config.ts` and `tsconfig.json` exclude `tests/fixtures`, and the scanner skips directories named `fixtures`. `expected.json` is the planted truth the acceptance test (Task 14) checks against.
 
 The files are deliberately crude: tautologies, a fixed port, a `/tmp` path and a bare `vitest` script are the point. Do not tidy them.
 
@@ -1615,6 +1883,7 @@ lanes:
   release: {runs: all+clean-install, trigger: tag, os: [ubuntu, windows, macos]}
 areas:
   - {path: "src/core/**", tier: critical, why: core arithmetic}
+  - {path: "src/util/**", tier: standard, why: small helpers}
   - {path: "src/ui/**", tier: low}
 ```
 
@@ -1628,6 +1897,76 @@ Create `tests/fixtures/clean/src/ui/label.ts`:
 
 ```ts
 export const label = (text: string): string => text.trim();
+```
+
+Create `tests/fixtures/clean/src/core/text.ts`:
+
+```ts
+export const slug = (text: string): string => text.trim().toLowerCase().replace(/\s+/g, '-');
+export const total = (items: number[]): number => items.reduce((sum, item) => sum + item, 0);
+```
+
+Create `tests/fixtures/clean/tests/core/text.test.ts` (every case sits next to a pattern a detector looks for, and none of them may be flagged):
+
+```ts
+/**
+ * @lane merge
+ */
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { slug, total } from '../../src/core/text.ts';
+
+// Every case below sits next to a pattern a detector looks for, and none of them may be flagged.
+describe('text helpers', () => {
+  it('mixes a mock assertion with a real value assertion', () => {
+    const report = vi.fn();
+    report(slug(' Hello World '));
+    expect(report).toHaveBeenCalledWith('hello-world');
+    expect(slug(' Hello World ')).toBe('hello-world');
+  });
+
+  it('pairs a snapshot with a plain value assertion', () => {
+    expect(slug('A B')).toMatchSnapshot();
+    expect(total([1, 2, 3])).toBe(6);
+  });
+
+  it('compares two different expressions', () => {
+    expect(total([2, 2])).toBe(total([4]));
+  });
+
+  it('uses a unique scratch directory and dotfile names that are not .git', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'text-'));
+    const names = ['.gitignore', '.github/workflows'];
+    expect(scratch.length).toBeGreaterThan(0);
+    expect(names).toHaveLength(2);
+  });
+
+  it.todo('handles unicode');
+});
+```
+
+Create `tests/fixtures/clean/src/util/pad.ts`:
+
+```ts
+export const pad = (text: string, width: number): string => text.padStart(width, ' ');
+```
+
+Create `tests/fixtures/clean/tests/util/pad.test.ts` (a standard-tier area with a `scheduled` lane, which that tier allows):
+
+```ts
+/**
+ * @lane scheduled
+ */
+import { describe, expect, it } from 'vitest';
+import { pad } from '../../src/util/pad.ts';
+
+describe('pad', () => {
+  it('pads on the left to the requested width', () => {
+    expect(pad('a', 3)).toBe('  a');
+  });
+});
 ```
 
 Create `tests/fixtures/clean/tests/core/math.test.ts`:
@@ -1670,7 +2009,7 @@ Create `tests/fixtures/clean/.husky/pre-push`:
 
 ```
 #!/usr/bin/env sh
-npx vitest related --run
+npx vitest run --changed origin/main
 ```
 
 Create `tests/fixtures/clean/.github/workflows/ci.yml`:
@@ -1681,6 +2020,10 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 6 * * 1'
+  pull_request:
+    paths: ['src/**']
+  push:
+    tags: ['v*']
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -2729,7 +3072,7 @@ git commit -m "feat: detect shared subjects, repeated sweeps and duplicate title
 
 ## Task 10: Frequency detector
 
-Reads hooks, `package.json` scripts, GitHub workflows and agent instruction files for places the suite runs too often: an unscoped suite in a hook, a `test` script that can start watch mode, CI on every push or pull request, an OS matrix on the push path, and "run all tests" instructions. A scheduled, manual or tag-only workflow is accepted.
+Reads hooks, `package.json` scripts, GitHub workflows and agent instruction files for places the suite runs too often: an unscoped suite in a hook, a `test` script that can start watch mode, CI on every branch push, a pull-request workflow that runs Windows or macOS, an OS matrix on an automatic trigger, and "run all tests" instructions. A scheduled, manual or tag-only workflow, a path-filtered trigger, and a Linux-only `pull_request` job (the recommended non-blocking check) are accepted.
 
 **Files:**
 - Create: `tests/detectors/frequency.test.ts`, `src/detectors/frequency.ts`
@@ -2770,6 +3113,20 @@ describe('detectFrequency', () => {
     expect(rules(detectFrequency(automatic, null))).toEqual(['frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
     const manual = makeTree({ '.github/workflows/ci.yml': "on:\n  workflow_dispatch:\n  schedule:\n    - cron: '0 6 * * 1'\njobs: {}\n" });
     expect(detectFrequency(manual, null)).toEqual([]);
+  });
+
+  it('accepts a single Linux job on pull_request, the recommended non-blocking check', () => {
+    const root = makeTree({ '.github/workflows/ci.yml': 'on:\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps: []\n' });
+    expect(detectFrequency(root, null)).toEqual([]);
+  });
+
+  it('flags a pull_request workflow that runs on Windows or macOS', () => {
+    const literal = makeTree({ '.github/workflows/ci.yml': 'on:\n  pull_request:\njobs:\n  test:\n    runs-on: macos-latest\n    steps: []\n' });
+    expect(rules(detectFrequency(literal, null))).toEqual(['frequency.ci-on-pull-request']);
+    const matrix = makeTree({
+      '.github/workflows/ci.yml': 'on:\n  pull_request:\njobs:\n  t:\n    strategy:\n      matrix:\n        os: [ubuntu-latest, windows-latest]\n    runs-on: ${{ matrix.os }}\n    steps: []\n',
+    });
+    expect(rules(detectFrequency(matrix, null))).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-os-matrix-on-push']);
   });
 
   it('accepts a path-filtered pull_request trigger', () => {
@@ -2830,7 +3187,7 @@ const readText = (path: string): string | null => (existsSync(path) ? readFileSy
 
 function phaseAdvice(map: RiskMap | null): string {
   if (!map) return '';
-  if (map.phase === 'dev') return ' In the dev phase, prefer workflow_dispatch plus a scheduled run.';
+  if (map.phase === 'dev') return ' In the dev phase, prefer one non-blocking Linux job on pull_request, plus workflow_dispatch and a scheduled run for the OS matrix.';
   return '';
 }
 
@@ -2910,6 +3267,16 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
         continue;
       }
       const triggers = triggersOf(workflow);
+      const jobs = (workflow.jobs ?? {}) as Record<string, { 'runs-on'?: unknown; strategy?: { matrix?: { os?: unknown } } }>;
+      const expensiveRunners = [
+        ...new Set(
+          Object.values(jobs).flatMap(job => {
+            const os = job?.strategy?.matrix?.os;
+            const runsOn = job?.['runs-on'];
+            return [...(Array.isArray(os) ? os : []), ...(typeof runsOn === 'string' ? [runsOn] : [])].map(String).filter(entry => EXPENSIVE_OS.test(entry));
+          }),
+        ),
+      ];
       const automatic: string[] = [];
       for (const trigger of ['push', 'pull_request'].filter(name => name in triggers)) {
         const config = triggers[trigger];
@@ -2917,17 +3284,21 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
         // A tag-only push trigger is a release-lane run, not a run on every push.
         const filtered = has('paths') || has('paths-ignore') || (trigger === 'push' && has('tags') && !has('branches'));
         if (filtered) continue;
+        // One Linux job per pull-request update is the recommended non-blocking check; only Windows or macOS makes it costly.
+        if (trigger === 'pull_request' && expensiveRunners.length === 0) continue;
         automatic.push(trigger);
         findings.push({
           category: 'frequency',
           rule: trigger === 'push' ? 'frequency.ci-on-push' : 'frequency.ci-on-pull-request',
           file,
-          message: `CI runs automatically on every ${trigger} with no path filter.${phaseAdvice(map)}`,
+          message:
+            trigger === 'push'
+              ? `CI runs on every push to a branch with no path filter. A pull_request trigger fires once per pull-request update instead.${phaseAdvice(map)}`
+              : `A pull_request workflow runs on ${expensiveRunners.join(', ')}, which bills at a higher rate than Linux. Keep the OS matrix off the pull-request path.${phaseAdvice(map)}`,
           evidence: `on: ${trigger}`,
         });
       }
       if (automatic.length > 0) {
-        const jobs = (workflow.jobs ?? {}) as Record<string, { strategy?: { matrix?: { os?: unknown } } }>;
         for (const job of Object.values(jobs)) {
           const os = job?.strategy?.matrix?.os;
           const expensive = Array.isArray(os) ? os.map(String).filter(entry => EXPENSIVE_OS.test(entry)) : [];
@@ -2969,7 +3340,7 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
 
 Run: `npx vitest run tests/detectors/frequency.test.ts`
 
-Expected: PASS, 9 tests.
+Expected: PASS, 11 tests.
 
 Run: `npm run typecheck`
 
@@ -3471,18 +3842,10 @@ describe('scan of the bloated fixture', () => {
     expect(report.phase).toBe('dev');
   });
 
-  it('finds every planted smell', () => {
-    const found = new Set(everyFinding(report).map(finding => `${finding.rule}@${finding.file}`));
-    const missing = expected.findings.filter(finding => !found.has(`${finding.rule}@${finding.file}`));
-    expect(missing).toEqual([]);
-  });
-
-  it('reports nothing beyond the planted smells', () => {
-    const planted = new Set(expected.findings.map(finding => `${finding.rule}@${finding.file}`));
-    const extra = everyFinding(report)
-      .map(finding => `${finding.rule}@${finding.file}`)
-      .filter(key => !planted.has(key));
-    expect(extra).toEqual([]);
+  // Compared as sorted lists, not sets, so a rule that fires twice on one file is caught too.
+  it('reports exactly the planted smells, each once', () => {
+    const key = (finding: { rule: string; file: string }): string => `${finding.rule}@${finding.file}`;
+    expect(everyFinding(report).map(key).sort()).toEqual(expected.findings.map(key).sort());
   });
 
   it('sets the quality flags on exactly the planted files', () => {
@@ -3492,6 +3855,7 @@ describe('scan of the bloated fixture', () => {
 
   it('clusters files that share a subject', () => {
     expect(report.clusters.map(({ subject, files }) => ({ subject, files }))).toEqual(expected.clusters);
+    expect(report.clusters.map(cluster => cluster.layers)).toEqual([['integration', 'unit'], ['unit']]);
   });
 
   it('annotates shim findings with the empty consumers list', () => {
@@ -3520,7 +3884,7 @@ describe('scan of the clean fixture', () => {
   });
 
   it('still tiers every file', () => {
-    expect(report.files.map(file => file.tier)).toEqual(['critical', 'low']);
+    expect(report.files.map(file => file.tier)).toEqual(['critical', 'critical', 'low', 'standard']);
   });
 });
 
@@ -3696,7 +4060,7 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
 
 Run: `npx vitest run tests/scan.test.ts`
 
-Expected: PASS, 15 tests. If "finds every planted smell" or "reports nothing beyond the planted smells" fails, the failure message names the exact `rule@file` that is missing or extra; fix the fixture file or code block you mis-typed, never `expected.json`.
+Expected: PASS, 14 tests. If "reports exactly the planted smells, each once" fails, the diff names the exact `rule@file` that is missing, extra or duplicated; fix the fixture file or code block you mis-typed, never `expected.json`.
 
 Run: `npm run typecheck`
 
@@ -4168,7 +4532,7 @@ Create `skills/test-audit/SKILL.md`:
 ---
 name: test-audit
 description: Audit a project's test suite for necessity and efficiency - redundant coverage, compat and fallback shim tests, worktree-hostile tests, tests not tied to a risk tier or lane, and tests that run too often - and return a verdict per test file.
-when_to_use: Use when a test suite or CI has grown large or slow, when asked whether tests are redundant or overkill, before pruning or consolidating tests, or when asked to audit or review a project's test strategy.
+when_to_use: Use when an existing test suite or its CI feels too big, slow or redundant ("tests take forever", "too many tests", "is this overkill", "do we need all of these"), before pruning, merging or demoting tests, or when asked to audit how a project's tests are structured.
 ---
 # test-audit
 
@@ -4191,7 +4555,8 @@ The CLI gathers evidence and never judges. You judge, using the rubric below. Do
    Churn is commits that edited the test without touching the code it covers.
 4. **Read before judging.** Findings are evidence, not verdicts. Open the test files behind the highest-ranked findings
    and the files in each cluster. Pattern matches produce false positives: a test titled "falls back to the default" may
-   guard real behavior.
+   guard real behavior. Read the code under test too: a test of a one-line pass-through, or a bound the code can never
+   reach, protects nothing however it is tagged, and a loose bound can hide a real bug.
 5. **Judge** each file with the rubric, then write the verdict table.
 
 ## Rubric
@@ -4232,8 +4597,9 @@ Never recommend deleting a critical-tier test without naming its replacement.
    into one score unless the risk map's `weights` ask you to.
 2. Project-level actions from the `frequency.*` and `wiring.*` findings: hooks, watch mode, CI triggers, OS matrices,
    missing risk-map areas, critical areas with no tests.
-3. CI advice for the phase: `dev` needs no automatic CI (on-demand plus a scheduled run), `test` adds a scheduled
-   OS matrix and release-tag runs, `production` adds path-filtered pull-request runs.
+3. CI advice for the phase: `dev` wants one non-blocking Linux job per pull request and the OS matrix on demand only,
+   `test` adds a scheduled OS matrix and release-tag runs, `production` makes path-filtered pull-request checks
+   required. Flag any `push` trigger on branches and any Windows or macOS run on the pull-request path.
 4. What this audit could not measure: wait time, CI minutes and flakiness need a timed run.
 
 Stop after the table and let the owner decide what to apply.
@@ -4245,7 +4611,7 @@ Create `skills/test-strategy/SKILL.md`:
 ---
 name: test-strategy
 description: Structure a project's tests by phase (dev, test, production) and run frequency (edit, merge, scheduled, release lanes) using a risk map, and keep agent-written tests from bloating the suite.
-when_to_use: Use when starting a project or feature area, deciding what to test and how often it runs, setting up test scripts or CI, writing testing rules for agents, or when an agent is about to write many tests.
+when_to_use: Use when starting a project or feature area, or deciding how a project's tests and CI should be structured (what to test, how often each test runs, whether CI is needed and where, and what testing rules to give coding agents). For an existing suite that already feels bloated, use test-audit first.
 ---
 # test-strategy
 
@@ -4256,9 +4622,9 @@ nightly, so most of the win is putting each test in the right lane, not deleting
 
 | Phase | Goal | Tests that matter | Automatic CI | Compat tests |
 |---|---|---|---|---|
-| dev (pre-release) | Iteration speed | Core invariants, a few user journeys | None. On-demand only. | None: no consumers |
-| test (stabilizing) | Release confidence | Journeys, public-surface contracts, critical-tier depth | Scheduled OS matrix, release tags | Only for declared consumers |
-| production | Do not break people | Regression and compat for declared consumers, post-deploy smoke | Pull-request level, path-filtered | Yes, for declared consumers |
+| dev (pre-release) | Iteration speed | Core invariants, a few user journeys | One non-blocking Linux job per pull request. OS matrix on demand only. | None: no consumers |
+| test (stabilizing) | Release confidence | Journeys, public-surface contracts, critical-tier depth | The same, plus a scheduled OS matrix and release-tag runs | Only for declared consumers |
+| production | Do not break people | Regression and compat for declared consumers, post-deploy smoke | Required, path-filtered pull-request checks | Yes, for declared consumers |
 
 Ask the owner which phase the project is in. Moving to the next phase is an explicit step: fill in `consumers`,
 change `phase`.
@@ -4285,22 +4651,30 @@ release. A test file declares its lane in a leading docblock: `/** @lane merge *
 Starting scripts until the lane tooling exists:
 
 - vitest: edit `vitest related --run <changed files>`, merge `vitest run --changed origin/main`, full `vitest run`.
+  `--changed` needs an `origin/main` ref; with no remote yet, `vitest run --changed` covers uncommitted changes.
 - jest: edit `jest --findRelatedTests <changed files>`, merge `jest --onlyChanged`, full `jest`.
 
 Make the `test` script a single run: `vitest run`, or `jest` without `--watch`. Bare `vitest` can start watch mode in an
 interactive terminal, which blocks an agent that runs it there.
 
-## 4. CI by phase, for a solo developer running tests locally
+## 4. CI by phase, for a solo developer who works in pull requests
 
-Automatic CI on every push buys little: it re-runs what you ran. It still earns its place in three ways, each cheaper
-than a push trigger.
+The local merge lane is the gate. CI adds an observer outside the agent, because an agent's "tests pass" is otherwise
+its own report. Keep that observer cheap and non-blocking.
 
-- **Clean environment** (lockfile drift, "works on my machine", Windows against macOS): run on demand with
-  `workflow_dispatch`, and on a schedule or release tag. Windows and macOS runners bill at a higher rate than Linux, so
-  keep the OS matrix off the push path.
-- **Proof that main is green:** only matters once someone else depends on main.
-- **An agent that says "tests pass" without running them:** have the merge lane write evidence (`{sha, lane, result}`)
-  and refuse to merge without evidence for the current commit.
+- **One Linux job on `pull_request`.** Path-filter it to code, config and lockfile, skip draft pull requests, set
+  `concurrency` with `cancel-in-progress` so a newer push replaces the older run, and do not make it a required check.
+  Nothing waits on it and a flaky red cannot block a merge. Read it at merge time: a red result means look, not block.
+- **No `push` trigger on branches.** A pushed pull-request branch would fire both triggers. Skip a post-merge run too:
+  the pull-request job already ran on the same tree.
+- **OS matrix off the pull-request path.** Run Windows and macOS with `workflow_dispatch` (take an `os` input), a label
+  such as `ci:full`, a weekly schedule and release tags. They bill at a higher per-minute rate than Linux on private
+  repositories.
+- **Evidence for the merge lane.** Have it write `{sha, lane, result}` and refuse to merge without evidence for the
+  current commit.
+- **Make checks required** only when someone else depends on main.
+
+CI runs whatever suite was pushed, so it does not catch an agent weakening tests. The audit does.
 
 ## 5. Rules for writing tests
 
@@ -4331,11 +4705,16 @@ Evidence for these rules, and where they are opinion, is in `references/doctrine
 
 - [ ] **Step 4: Reconcile the skills with the doctrine**
 
-Open `references/doctrine.md` from Task 2. For every rule whose claim was revised or whose evidence contradicted a seed claim, edit the matching sentence in `test-strategy` or `test-audit` so the skill never states more than the doctrine supports. The rules most likely to need it are 7 (automatic CI), 8 (runner pricing: the skill says only "a higher rate", keep it that way unless you cite numbers), 9 (watch mode) and 3 (test shapes).
+Open `references/doctrine.md` from Task 2. For every rule whose claim was revised or whose evidence contradicted a seed claim, edit the matching sentence in `test-strategy` or `test-audit` so the skill never states more than the doctrine supports. Rule 7 (automatic CI) was already amended for the owner's pull-request workflow and the skill drafts below follow it. Check the others: 8 (runner pricing: the skill says only "a higher rate", keep it that way unless you cite numbers), 9 (watch mode) and 3 (test shapes).
 
 - [ ] **Step 5: Review the skills' triggers**
 
-Invoke `hartye-skills:yoda` on the three `SKILL.md` files. Apply only changes that sharpen when each skill fires or that remove ambiguity. Keep descriptions at 400 characters or fewer and every body at 160 lines or fewer.
+The skill drafts above were already reviewed with `hartye-skills:yoda`, including paired with-skill and without-skill runs on the `bloated` fixture and on a new project. What that review changed, so you do not undo it:
+- `test-audit` and `test-strategy` triggers were separated (audit is for an existing suite that feels big or slow; strategy is for deciding structure) and `test-strategy` no longer claims "an agent is about to write many tests", which belongs to the test-driven-development skill;
+- `test-audit` now tells the reader to read the code under test, because a test of a pass-through or an unreachable bound protects nothing;
+- `test-strategy` notes that `--changed origin/main` needs a remote.
+
+Frontmatter values are plain YAML scalars, so a colon followed by a space inside one makes the skill fail to load without any error; `tests/skills.test.ts` catches it. Re-run yoda only if Step 4 changes a description. Keep descriptions plus `when_to_use` under 1,536 characters in total and every body at 160 lines or fewer.
 
 - [ ] **Step 6: Run the test and the typecheck**
 
@@ -4370,9 +4749,21 @@ Create `.github/workflows/ci.yml`:
 ```yaml
 name: CI
 
-# Follows the doctrine in skills/test-strategy: nothing runs on every push.
-# Run it on demand, weekly, and on release tags; the OS matrix is the point.
+# Follows the doctrine in skills/test-strategy: one non-blocking Linux job per pull-request update,
+# and the Windows and macOS runs only on demand, weekly and on release tags. Nothing runs on a plain push.
 on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'skills/**'
+      - 'references/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'vitest.config.ts'
+      - '.github/workflows/ci.yml'
   workflow_dispatch:
   schedule:
     - cron: '0 6 * * 1'
@@ -4382,12 +4773,31 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request cancels the older run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  linux:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+
+  os-matrix:
+    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -4537,7 +4947,7 @@ remediation and CI templates (0.3), Codex packaging verified on both hosts (0.4)
     npm test
     npm run typecheck
 
-CI runs on demand, weekly, and on release tags, on Ubuntu, Windows and macOS.
+CI follows the plugin's own doctrine: one non-blocking Ubuntu job per pull request (path-filtered, drafts skipped, newer pushes cancel older runs), and the Windows and macOS runs on demand, weekly and on release tags.
 
 ## License
 
@@ -4551,8 +4961,8 @@ Run: `node scripts/tests.mjs report --root .`
 Expected:
 - `Phase: dev`, `Risk map: present`, 18 test files;
 - `wiring | 0` and `frequency | 0` in the findings table;
-- `shim | 5` and `worktree | 8`: false positives from `tests/detectors/shims.test.ts` (3), `tests/detectors/worktree.test.ts` (8) and `tests/scan.test.ts` (2), whose test data is made of those very patterns;
-- `redundancy | 10`, all `redundancy.shared-subject`: several tests import `src/riskmap.ts` or `src/schema.ts` to build fixtures, not to test them.
+- `shim | 5` and `worktree | 9`: false positives from `tests/detectors/shims.test.ts` (3), `tests/detectors/worktree.test.ts` (8), `tests/managed-runtime.test.ts` (1), `tests/scan.test.ts` (2), whose test data is made of those very patterns;
+- `redundancy | 7`, all `redundancy.shared-subject`: several tests import `src/riskmap.ts` or `src/schema.ts` to build fixtures, not to test them.
 
 Do not "fix" any of these. They are the evidence the audit skill would read and dismiss, and they are listed under Known limitations in the README. If your counts differ, a code block was mis-typed.
 
@@ -4573,7 +4983,7 @@ Invoke `h-superpowers:verification-before-completion` first: nothing below may b
 
 Run: `npm test`
 
-Expected: `Test Files  18 passed (18)` and `Tests  155 passed (155)`.
+Expected: `Test Files  18 passed (18)` and `Tests  175 passed (175)`.
 
 Run: `npm run typecheck`
 
@@ -4610,7 +5020,7 @@ Expected, in order:
 2. `setup.js --json` prints `"ok":true`, `"dependencies":true` and `"errors":[]`;
 3. `--check` prints `"ok":true` with `cliVersion` equal to `pluginVersion`;
 4. the second `capabilities` prints `{"name":"agent-tests","version":"0.1.0","commands":["capabilities","risk-draft","scan","report"]}`;
-5. `report` prints `# Test audit evidence` with `Test files: 2` and `None.` under Findings.
+5. `report` prints `# Test audit evidence` with `Test files: 4` and `None.` under Findings.
 
 This proves the real `npm ci`, the receipt, and Node 24 running the `.ts` CLI from the managed release on this OS.
 
