@@ -113,21 +113,33 @@ function startsWatchMode(segment: string): boolean {
   return !tokens.slice(position + 1).some(token => NOT_WATCH_COMMANDS.has(token) || /^--run(?:=true)?$/.test(token));
 }
 
-/** Windows or macOS runners a job uses: literal `runs-on`, `matrix.os` and `matrix.include`. Self-hosted jobs are ignored. */
-function expensiveRunnersOf(job: Record<string, unknown>): string[] {
+/**
+ * Windows or macOS runners a job uses: `all` covers a literal `runs-on`, `matrix.os` and `matrix.include`;
+ * `matrix` is the part that comes from a real matrix. Self-hosted jobs are ignored.
+ */
+function expensiveRunnersOf(job: Record<string, unknown>): { all: string[]; matrix: string[] } {
   const runsOn = job['runs-on'];
   const labels = isRecord(runsOn) ? asStrings(runsOn.labels) : asStrings(runsOn);
-  if (labels.some(label => /^self-hosted$/i.test(label))) return [];
+  if (labels.some(label => /^self-hosted$/i.test(label))) return { all: [], matrix: [] };
   const strategy = isRecord(job.strategy) ? job.strategy : {};
   const matrix = isRecord(strategy.matrix) ? strategy.matrix : {};
   const include = Array.isArray(matrix.include) ? matrix.include.flatMap(entry => (isRecord(entry) ? asStrings(entry.os) : [])) : [];
-  return [...new Set([...asStrings(matrix.os), ...include, ...labels].filter(entry => EXPENSIVE_OS.test(entry)))];
+  const expensive = (entries: string[]): string[] => [...new Set(entries.filter(entry => EXPENSIVE_OS.test(entry)))];
+  return { all: expensive([...asStrings(matrix.os), ...include, ...labels]), matrix: expensive([...asStrings(matrix.os), ...include]) };
 }
 
-/** A job whose `if:` names another event and never pull_request does not run on pull requests. */
-function skipsPullRequests(job: Record<string, unknown>): boolean {
+/**
+ * False when a job's `if:` keeps it off pull requests: it names github.event_name as something other than
+ * pull_request (`!= 'pull_request'`, or `== 'push'`, `'schedule'`, `'workflow_dispatch'`), has no positive
+ * `== 'pull_request'`, and has no `||` clause that ignores the event name (a draft check, for example).
+ */
+function runsOnPullRequest(job: Record<string, unknown>): boolean {
   const condition = job.if;
-  return typeof condition === 'string' && /\bworkflow_dispatch\b|\bschedule\b|github\.event_name/.test(condition) && !/pull_request/.test(condition);
+  if (typeof condition !== 'string') return true;
+  if (/github\.event_name\s*==\s*['"]pull_request['"]/.test(condition)) return true;
+  const otherEvent = /github\.event_name\s*(?:!=\s*['"]pull_request['"]|==\s*['"](?:push|schedule|workflow_dispatch)['"])/.test(condition);
+  if (!otherEvent) return true;
+  return condition.split('||').some(clause => !/github\.event_name/.test(clause));
 }
 
 /** Where and how often the suite runs: hooks, watch mode, CI triggers and OS matrices, and agent instructions. */
@@ -218,18 +230,18 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
     }
     if (!isRecord(workflow)) continue;
     const triggers = triggersOf(workflow);
-    const jobs = (isRecord(workflow.jobs) ? Object.values(workflow.jobs) : []).filter(isRecord).map(job => ({ expensive: expensiveRunnersOf(job), onPullRequest: !skipsPullRequests(job) }));
+    const jobs = (isRecord(workflow.jobs) ? Object.values(workflow.jobs) : []).filter(isRecord).map(job => ({ ...expensiveRunnersOf(job), onPullRequest: runsOnPullRequest(job) }));
     const reportedMatrix = new Set<number>();
     const reportMatrix = (applies: (job: { onPullRequest: boolean }) => boolean): void => {
       jobs.forEach((job, index) => {
-        if (job.expensive.length === 0 || reportedMatrix.has(index) || !applies(job)) return;
+        if (job.matrix.length === 0 || reportedMatrix.has(index) || !applies(job)) return;
         reportedMatrix.add(index);
         findings.push({
           category: 'frequency',
           rule: 'frequency.ci-os-matrix-on-push',
           file,
           message: 'An automatic workflow fans out to Windows or macOS runners, which bill at a higher rate than Linux.',
-          evidence: `runners: ${job.expensive.join(', ')}`,
+          evidence: `matrix.os: ${job.matrix.join(', ')}`,
         });
       });
     };
@@ -240,7 +252,19 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
       // A tag-only push trigger is a release-lane run, not a run on every push.
       const tagOnly = has('tags') && !has('branches') && !has('branches-ignore');
       if (!tagOnly) {
-        if (!has('paths') && !has('paths-ignore')) {
+        const pushRunners = [...new Set(jobs.flatMap(job => job.all))];
+        if (has('paths') || has('paths-ignore')) {
+          // A path filter excuses Linux but not Windows or macOS.
+          if (pushRunners.length > 0) {
+            findings.push({
+              category: 'frequency',
+              rule: 'frequency.ci-on-push',
+              file,
+              message: `A push-triggered workflow runs on ${pushRunners.join(', ')}, which bills at a higher rate than Linux, and a path filter does not change that. Keep Windows and macOS off the push path.${phaseAdvice(map)}`,
+              evidence: 'on: push',
+            });
+          }
+        } else {
           const branches = isRecord(config) ? asStrings(config.branches) : [];
           const defaultBranchOnly = branches.length > 0 && !has('branches-ignore') && branches.every(branch => /^(?:main|master)$/.test(branch));
           findings.push({
@@ -258,7 +282,7 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
     }
     if ('pull_request' in triggers) {
       // One Linux job per pull-request update is the recommended non-blocking check; a path filter does not excuse Windows or macOS.
-      const runners = [...new Set(jobs.filter(job => job.onPullRequest).flatMap(job => job.expensive))];
+      const runners = [...new Set(jobs.filter(job => job.onPullRequest).flatMap(job => job.all))];
       if (runners.length > 0) {
         findings.push({
           category: 'frequency',

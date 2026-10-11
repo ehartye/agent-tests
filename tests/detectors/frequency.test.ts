@@ -41,7 +41,7 @@ describe('detectFrequency', () => {
 
   it('flags a pull_request workflow that runs on Windows or macOS', () => {
     const literal = makeTree({ '.github/workflows/ci.yml': 'on:\n  pull_request:\njobs:\n  test:\n    runs-on: macos-latest\n    steps: []\n' });
-    expect(rules(detectFrequency(literal, null))).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-os-matrix-on-push']);
+    expect(rules(detectFrequency(literal, null))).toEqual(['frequency.ci-on-pull-request']);
     const matrix = makeTree({
       '.github/workflows/ci.yml': 'on:\n  pull_request:\njobs:\n  t:\n    strategy:\n      matrix:\n        os: [ubuntu-latest, windows-latest]\n    runs-on: ${{ matrix.os }}\n    steps: []\n',
     });
@@ -176,20 +176,20 @@ describe('detectFrequency workflows', () => {
   });
 
   it('still counts a pull-request-excluded job against a branch push', () => {
-    const root = workflow("on:\n  push:\n    branches: [dev]\njobs:\n  t:\n    if: github.event_name == 'push'\n    runs-on: windows-latest\n    steps: []\n");
+    const root = workflow("on:\n  push:\n    branches: [dev]\njobs:\n  t:\n    if: github.event_name == 'push'\n    strategy:\n      matrix:\n        os: [windows-latest]\n    runs-on: ${{ matrix.os }}\n    steps: []\n");
     expect(rules(detectFrequency(root, null))).toEqual(['frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
   });
 
   it.each([
-    ['a matrix os string', 'strategy:\n      matrix:\n        os: windows-latest\n    runs-on: ${{ matrix.os }}'],
-    ['matrix include entries', 'strategy:\n      matrix:\n        include:\n          - os: ubuntu-latest\n          - os: macos-14\n    runs-on: ${{ matrix.os }}'],
-    ['a runs-on string', 'runs-on: windows-2022'],
-    ['a runs-on array', 'runs-on: [macos-latest]'],
-    ['a runs-on object with labels', 'runs-on:\n      group: big\n      labels: windows-latest'],
-    ['a runs-on object with a label list', 'runs-on:\n      labels: [macos-latest]'],
-  ])('finds expensive runners in %s', (_label, jobBody) => {
+    ['a matrix os string', 'strategy:\n      matrix:\n        os: windows-latest\n    runs-on: ${{ matrix.os }}', true],
+    ['matrix include entries', 'strategy:\n      matrix:\n        include:\n          - os: ubuntu-latest\n          - os: macos-14\n    runs-on: ${{ matrix.os }}', true],
+    ['a runs-on string', 'runs-on: windows-2022', false],
+    ['a runs-on array', 'runs-on: [macos-latest]', false],
+    ['a runs-on object with labels', 'runs-on:\n      group: big\n      labels: windows-latest', false],
+    ['a runs-on object with a label list', 'runs-on:\n      labels: [macos-latest]', false],
+  ])('finds expensive runners in %s', (_label, jobBody, isMatrix) => {
     const root = workflow(`on:\n  pull_request:\njobs:\n  t:\n    ${jobBody}\n    steps: []\n`);
-    expect(rules(detectFrequency(root, null))).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-os-matrix-on-push']);
+    expect(rules(detectFrequency(root, null))).toEqual(isMatrix ? ['frequency.ci-on-pull-request', 'frequency.ci-os-matrix-on-push'] : ['frequency.ci-on-pull-request']);
   });
 
   it('ignores self-hosted runners', () => {
@@ -204,21 +204,23 @@ describe('detectFrequency workflows', () => {
   it('does not let a path filter excuse Windows or macOS on pull_request', () => {
     const windows = workflow("on:\n  pull_request:\n    paths: ['src/**']\njobs:\n  t:\n    runs-on: windows-latest\n    steps: []\n");
     const found = detectFrequency(windows, null);
-    expect(rules(found)).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-os-matrix-on-push']);
+    expect(rules(found)).toEqual(['frequency.ci-on-pull-request']);
     expect(found.find(finding => finding.rule === 'frequency.ci-on-pull-request')?.message).not.toContain('no path filter');
     const linux = workflow("on:\n  pull_request:\n    paths-ignore: ['docs/**']\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps: []\n");
     expect(detectFrequency(linux, null)).toEqual([]);
   });
 
-  it('reports Windows or macOS on a path-filtered push through the matrix rule only', () => {
-    const filtered = workflow("on:\n  push:\n    paths: ['src/**']\njobs:\n  t:\n    runs-on: macos-latest\n    steps: []\n");
-    expect(rules(detectFrequency(filtered, null))).toEqual(['frequency.ci-os-matrix-on-push']);
+  it('reports Windows or macOS on a path-filtered push, and the matrix rule only for a real matrix', () => {
+    const literal = workflow("on:\n  push:\n    paths: ['src/**']\njobs:\n  t:\n    runs-on: macos-latest\n    steps: []\n");
+    expect(rules(detectFrequency(literal, null))).toEqual(['frequency.ci-on-push']);
+    const matrix = workflow("on:\n  push:\n    paths: ['src/**']\njobs:\n  t:\n    strategy:\n      matrix:\n        os: [macos-latest]\n    runs-on: ${{ matrix.os }}\n    steps: []\n");
+    expect(rules(detectFrequency(matrix, null))).toEqual(['frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
     const linux = workflow("on:\n  push:\n    paths: ['src/**']\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps: []\n");
     expect(detectFrequency(linux, null)).toEqual([]);
   });
 
   it('reports each matrix finding once when push and pull_request both fire', () => {
-    const root = workflow('on:\n  push:\n    branches: [dev]\n  pull_request:\njobs:\n  t:\n    runs-on: windows-latest\n    steps: []\n');
+    const root = workflow('on:\n  push:\n    branches: [dev]\n  pull_request:\njobs:\n  t:\n    strategy:\n      matrix:\n        os: [windows-latest]\n    runs-on: ${{ matrix.os }}\n    steps: []\n');
     expect(rules(detectFrequency(root, null))).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
   });
 
@@ -368,5 +370,74 @@ describe('detectFrequency fixtures', () => {
 
   it('finds nothing in the clean fixture', () => {
     expect(detectFrequency(fixture('clean'), null)).toEqual([]);
+  });
+});
+
+describe('detectFrequency job if-gates', () => {
+  const RECOMMENDED = `on:
+  pull_request:
+    paths: ['src/**', 'package.json']
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+  push:
+    tags: ['v*']
+concurrency:
+  group: ci-\${{ github.workflow }}-\${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    steps: []
+  os-matrix:
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: \${{ matrix.os }}
+    steps: []
+`;
+
+  const macJob = (condition: string | null): string => {
+    const gate = condition === null ? '' : `    if: ${condition}\n`;
+    return `on:\n  pull_request:\njobs:\n  t:\n${gate}    runs-on: macos-latest\n    steps: []\n`;
+  };
+
+  it('accepts the recommended workflow without findings', () => {
+    expect(detectFrequency(workflow(RECOMMENDED), null)).toEqual([]);
+    expect(detectFrequency(workflow(RECOMMENDED), defaultRiskMap())).toEqual([]);
+  });
+
+  it.each([
+    "github.event_name != 'pull_request'",
+    'github.event_name != "pull_request"',
+    "github.event_name!='pull_request'",
+    "${{ github.event_name != 'pull_request' }}",
+    "github.event_name == 'push'",
+    "github.event_name == 'schedule'",
+    'github.event_name == "workflow_dispatch"',
+    "github.event_name == 'push' || github.event_name == 'schedule'",
+  ])('treats a macOS job gated by %s as off the pull-request path', condition => {
+    expect(detectFrequency(workflow(macJob(condition)), null)).toEqual([]);
+  });
+
+  it.each([
+    ['no if at all', null],
+    ['a positive pull_request check', "github.event_name == 'pull_request'"],
+    ['a condition that ignores the event name', "github.ref == 'refs/heads/main'"],
+    ['a draft clause beside a negation', "github.event_name != 'pull_request' || !github.event.pull_request.draft"],
+  ])('treats a macOS job with %s as running on pull requests', (_label, condition) => {
+    expect(rules(detectFrequency(workflow(macJob(condition)), null))).toEqual(['frequency.ci-on-pull-request']);
+  });
+});
+
+describe('detectFrequency matrix rule', () => {
+  it('fires only for a real matrix, never for a literal runs-on', () => {
+    const literal = workflow('on:\n  push:\n    branches: [dev]\njobs:\n  t:\n    runs-on: macos-latest\n    steps: []\n');
+    expect(rules(detectFrequency(literal, null))).toEqual(['frequency.ci-on-push']);
+    const matrix = workflow('on:\n  push:\n    branches: [dev]\njobs:\n  t:\n    strategy:\n      matrix:\n        os: [ubuntu-latest, macos-latest]\n    runs-on: ${{ matrix.os }}\n    steps: []\n');
+    expect(rules(detectFrequency(matrix, null))).toEqual(['frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
   });
 });
