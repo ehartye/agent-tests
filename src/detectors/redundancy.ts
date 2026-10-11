@@ -10,7 +10,7 @@ export interface RedundancyInput {
 
 const SWEEP = /\bfor\s*\(\s*(?:let|const|var)\s+(\w+)\s*=\s*(\d+)\s*;\s*\w+\s*(<=|<)\s*(\d+)\s*;/;
 /** A sweep repeats a test over many generated inputs. A loop counter named `i` is just a loop. */
-const SWEEP_VARIABLE = /seed|trial|run|case|sample|iter|round/i;
+const SWEEP_VARIABLE = /^(?:seed|trial|run|case|sample|iter|round)\w*$/i;
 const MIN_SWEEP = 10;
 const MIN_TITLE = 12;
 
@@ -27,9 +27,9 @@ const stem = (rel: string): string =>
 /** A test that imports many modules touches most of them incidentally. It counts for a subject only when it is focused or named after it. */
 const isFocused = (file: RedundancyInput, subject: string): boolean => file.subjects.length <= MAX_FOCUSED_SUBJECTS || stem(subject).toLowerCase() === stem(file.rel).toLowerCase();
 
-/** Two test files share a subject only when both are focused on it. */
-const sharesFocusedSubject = (a: RedundancyInput, b: RedundancyInput): boolean =>
-  a.subjects.some(subject => b.subjects.includes(subject) && isFocused(a, subject) && isFocused(b, subject));
+/** Two test files share a subject only when both are focused on it. A hub is shared infrastructure, so it never counts. */
+const sharesFocusedSubject = (a: RedundancyInput, b: RedundancyInput, hubs: ReadonlySet<string>): boolean =>
+  a.subjects.some(subject => !hubs.has(subject) && b.subjects.includes(subject) && isFocused(a, subject) && isFocused(b, subject));
 
 export function layerOf(rel: string): string {
   if (/(?:^|[/._-])(?:e2e|end-to-end)(?:[/._-]|$)/i.test(rel)) return 'e2e';
@@ -49,6 +49,7 @@ export function detectRedundancy(files: RedundancyInput[]): { clusters: Cluster[
       if (isFocused(file, subject)) bySubject.set(subject, [...(bySubject.get(subject) ?? []), file.rel]);
     }
   }
+  const hubSubjects = new Set([...bySubject].filter(([, members]) => members.length > MAX_CLUSTER).map(([subject]) => subject));
   const clusters: Cluster[] = [];
   const sharedBy = new Map<string, string[]>();
   const hubs: Array<{ subject: string; files: string[] }> = [];
@@ -99,7 +100,7 @@ export function detectRedundancy(files: RedundancyInput[]): { clusters: Cluster[
   }
   for (const [key, spots] of sweeps) {
     // A location counts only with a partner in the same file or in a test file that shares a focused subject.
-    const related = spots.filter(spot => spots.some(other => other !== spot && (other.input === spot.input || sharesFocusedSubject(spot.input, other.input))));
+    const related = spots.filter(spot => spots.some(other => other !== spot && (other.input === spot.input || sharesFocusedSubject(spot.input, other.input, hubSubjects))));
     if (related.length < 2) continue;
     for (const spot of related) {
       findings.push({
@@ -123,7 +124,7 @@ export function detectRedundancy(files: RedundancyInput[]): { clusters: Cluster[
   }
   for (const spots of byTitle.values()) {
     for (const spot of spots) {
-      const sharesSubject = spots.some(other => other.file !== spot.file && sharesFocusedSubject(spot.file, other.file));
+      const sharesSubject = spots.some(other => other.file !== spot.file && sharesFocusedSubject(spot.file, other.file, hubSubjects));
       if (!sharesSubject) continue;
       findings.push({
         category: 'redundancy',

@@ -100,6 +100,15 @@ describe('detectRedundancy', () => {
       expect(findings.map(finding => [finding.file, finding.line])).toEqual([['tests/a.test.ts', 3], ['tests/b.test.ts', 2]]);
     });
 
+    it('accepts loop variables that start with a sweep word and rejects look-alikes', () => {
+      const counts = (name: string) => {
+        const loop = `for (let ${name} = 1; ${name} <= 30; ${name}++) {}`;
+        return sweepFindings([file('tests/a.test.ts', ['src/s.ts'], loop), file('tests/b.test.ts', ['src/s.ts'], loop)]).length === 2;
+      };
+      for (const name of ['seed', 'seedValue', 'trial', 'run', 'caseIndex', 'iteration', 'round2', 'sampleIdx']) expect(counts(name), name).toBe(true);
+      for (const name of ['ground', 'around', 'rerun', 'lowercase', 'i', 'index']) expect(counts(name), name).toBe(false);
+    });
+
     it('does not pair files that share only an incidental subject', () => {
       const wide = ['src/s.ts', 'src/x.ts', 'src/y.ts', 'src/z.ts'];
       expect(sweepFindings([file('tests/a.test.ts', ['src/s.ts'], sweep), file('tests/b.test.ts', wide, sweep)])).toEqual([]);
@@ -127,6 +136,29 @@ describe('detectRedundancy', () => {
       expect(clusters).toHaveLength(1);
       expect(clusters[0]?.subject).toBe('src/helper.ts');
       expect(clusters[0]?.files).toHaveLength(12);
+    });
+
+    it('does not let a hub subject drive sweep or title findings', () => {
+      const body = "for (let seed = 1; seed <= 30; seed++) {}\nit('round-trips a saved value through load', () => {});";
+      const inputs = Array.from({ length: 11 }, (_, index) => file(`tests/t${index}.test.ts`, ['src/helper.ts', `src/m${index}.ts`], body));
+      const { findings } = detectRedundancy(inputs);
+      expect(findings.filter(finding => finding.rule === 'redundancy.repeated-sweep')).toEqual([]);
+      expect(findings.filter(finding => finding.rule === 'redundancy.duplicate-title')).toEqual([]);
+      expect(findings.map(finding => finding.rule)).toEqual(['redundancy.hub-subject']);
+    });
+
+    it('still reports sweep and title findings for a cluster of exactly 10 files', () => {
+      const body = "for (let seed = 1; seed <= 30; seed++) {}\nit('round-trips a saved value through load', () => {});";
+      const inputs = Array.from({ length: 10 }, (_, index) => file(`tests/t${index}.test.ts`, ['src/helper.ts', `src/m${index}.ts`], body));
+      const { findings } = detectRedundancy(inputs);
+      expect(findings.filter(finding => finding.rule === 'redundancy.repeated-sweep')).toHaveLength(10);
+      expect(findings.filter(finding => finding.rule === 'redundancy.duplicate-title')).toHaveLength(10);
+    });
+
+    it('still counts a sweep repeated inside one file of a hub', () => {
+      const inputs = Array.from({ length: 11 }, (_, index) => file(`tests/t${index}.test.ts`, ['src/helper.ts', `src/m${index}.ts`], index === 0 ? 'for (let seed = 1; seed <= 30; seed++) {}\nfor (let seed = 1; seed <= 30; seed++) {}' : ''));
+      const sweeps = detectRedundancy(inputs).findings.filter(finding => finding.rule === 'redundancy.repeated-sweep');
+      expect(sweeps.map(finding => [finding.file, finding.line])).toEqual([['tests/t0.test.ts', 1], ['tests/t0.test.ts', 2]]);
     });
 
     it('still reports per-file findings for a cluster of exactly 10 files', () => {
