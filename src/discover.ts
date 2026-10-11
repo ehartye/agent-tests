@@ -35,7 +35,7 @@ export const isSupportPath = (rel: string): boolean => SUPPORT_DIR.test(rel);
 const UNREADABLE = new Set(['ENOENT', 'EACCES', 'EPERM']);
 
 /** List a directory, or nothing when it is missing or not permitted; any other error still throws. */
-function readEntries(dir: string): Dirent[] {
+export function readEntries(dir: string): Dirent[] {
   try {
     return readdirSync(dir, { withFileTypes: true });
   } catch (error) {
