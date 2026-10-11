@@ -1,3 +1,6 @@
+import { symlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { detectFrequency } from '../../src/detectors/frequency.ts';
 import { defaultRiskMap } from '../../src/riskmap.ts';
@@ -38,7 +41,7 @@ describe('detectFrequency', () => {
 
   it('flags a pull_request workflow that runs on Windows or macOS', () => {
     const literal = makeTree({ '.github/workflows/ci.yml': 'on:\n  pull_request:\njobs:\n  test:\n    runs-on: macos-latest\n    steps: []\n' });
-    expect(rules(detectFrequency(literal, null))).toEqual(['frequency.ci-on-pull-request']);
+    expect(rules(detectFrequency(literal, null))).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-os-matrix-on-push']);
     const matrix = makeTree({
       '.github/workflows/ci.yml': 'on:\n  pull_request:\njobs:\n  t:\n    strategy:\n      matrix:\n        os: [ubuntu-latest, windows-latest]\n    runs-on: ${{ matrix.os }}\n    steps: []\n',
     });
@@ -72,5 +75,298 @@ describe('detectFrequency', () => {
   it('flags agent instructions that say to run every test', () => {
     const root = makeTree({ 'AGENTS.md': 'Be brief.\nAlways run all tests after every change.\n' });
     expect(detectFrequency(root, null).map(finding => `${finding.rule}:${finding.line}`)).toEqual(['frequency.agent-run-all:2']);
+  });
+});
+
+const WF = '.github/workflows/ci.yml';
+const workflow = (text: string): string => makeTree({ [WF]: text });
+const scriptsTree = (scripts: Record<string, unknown>): string => makeTree({ 'package.json': JSON.stringify({ scripts }) });
+const watchRules = (script: unknown): string[] => rules(detectFrequency(scriptsTree({ test: script }), null)).filter(rule => rule === 'frequency.watch-default');
+
+describe('detectFrequency on odd input', () => {
+  it.each([
+    ['a directory named AGENTS.md', { 'AGENTS.md/x': '' }],
+    ['a directory named CLAUDE.md', { 'CLAUDE.md/x': '' }],
+    ['a directory named package.json', { 'package.json/x': '' }],
+    ['a directory named like a hook file', { '.husky/pre-commit/x': '' }],
+    ['a directory named like a lefthook file', { 'lefthook.yml/x': '' }],
+    ['.github/workflows being a file', { '.github/workflows': 'not a directory' }],
+    ['a directory named x.yml', { '.github/workflows/x.yml/inner': '' }],
+    ['an invalid package.json', { 'package.json': '{not json' }],
+    ['a package.json holding null', { 'package.json': 'null' }],
+    ['a package.json whose scripts is a string', { 'package.json': '{"scripts": "vitest"}' }],
+    ['a workflow that is not valid YAML', { [WF]: 'on: [push\njobs: {' }],
+    ['a workflow that is a scalar', { [WF]: 'just text\n' }],
+    ['a workflow whose jobs is a list', { [WF]: 'on: push\njobs:\n  - a\n  - b\n' }],
+    ['a workflow whose job is null', { [WF]: 'on: pull_request\njobs:\n  a:\n' }],
+    ['a workflow whose matrix is a string', { [WF]: 'on: pull_request\njobs:\n  a:\n    strategy:\n      matrix: ${{ fromJson(x) }}\n    runs-on: ubuntu-latest\n' }],
+  ])('does not throw on %s', (_label, files) => {
+    expect(() => detectFrequency(makeTree(files), null)).not.toThrow();
+  });
+
+  it('reports nothing for a non-string test script', () => {
+    expect(detectFrequency(scriptsTree({ test: 5 }), null)).toEqual([]);
+    expect(detectFrequency(scriptsTree({ test: ['vitest'] }), null)).toEqual([]);
+    expect(detectFrequency(scriptsTree({ pretest: 5 }), null)).toEqual([]);
+    expect(detectFrequency(scriptsTree({ pretest: { run: 'npm test' } }), null)).toEqual([]);
+  });
+
+  it('does not throw on a dangling symlink where a file is expected', () => {
+    const root = makeTree({});
+    try {
+      symlinkSync(join(root, 'nowhere'), join(root, 'AGENTS.md'));
+    } catch {
+      return; // Creating symlinks needs a privilege this machine does not grant.
+    }
+    expect(() => detectFrequency(root, null)).not.toThrow();
+  });
+});
+
+describe('detectFrequency agent instructions', () => {
+  const agentFindings = (line: string, file = 'AGENTS.md'): string[] => detectFrequency(makeTree({ [file]: `${line}\n` }), null).map(finding => finding.rule);
+
+  it.each([
+    'Always run all tests after every change.',
+    'Run the whole test suite after each edit',
+    'Execute every test before you answer.',
+    'Always run the tests.',
+  ])('flags %s', line => {
+    expect(agentFindings(line)).toEqual(['frequency.agent-run-all']);
+  });
+
+  it.each([
+    'Do not run all tests after every change.',
+    'Never run the full suite.',
+    "Don't always run all tests.",
+    'Agents should not run every test.',
+    'Avoid running all tests when one file changed. Only run all tests in CI.',
+    'Always run tests that cover the changed file.',
+    'Always run tests related to the change.',
+    'Always run tests for the module you touched.',
+    'Always run affected tests.',
+    'Run all tests before opening a PR.',
+    'Run the full test suite before merge.',
+    'Run all tests before pushing.',
+    'Run every test once before you merge.',
+  ])('does not flag %s', line => {
+    expect(agentFindings(line)).toEqual([]);
+  });
+
+  it('does not flag a line inside a fenced code block', () => {
+    const text = 'Use this:\n```sh\nalways run all tests after every change\n```\n~~~\nrun all tests\n~~~\n';
+    expect(detectFrequency(makeTree({ 'AGENTS.md': text }), null)).toEqual([]);
+    const after = detectFrequency(makeTree({ 'AGENTS.md': `${text}Always run all tests after every change.\n` }), null);
+    expect(after.map(finding => finding.line)).toEqual([8]);
+  });
+
+  it.each(['GEMINI.md', '.github/copilot-instructions.md', '.cursorrules', 'CLAUDE.md'])('scans %s', file => {
+    const found = detectFrequency(makeTree({ [file]: 'Always run all tests after every change.\n' }), null);
+    expect(found.map(finding => `${finding.rule}@${finding.file}`)).toEqual([`frequency.agent-run-all@${file}`]);
+  });
+});
+
+describe('detectFrequency workflows', () => {
+  it('ignores a job that its if condition keeps off pull requests', () => {
+    const nightly = workflow("on:\n  pull_request:\njobs:\n  nightly:\n    if: github.event_name == 'schedule'\n    runs-on: windows-latest\n    steps: []\n");
+    expect(detectFrequency(nightly, null)).toEqual([]);
+    const dispatch = workflow("on:\n  pull_request:\njobs:\n  manual:\n    if: github.event_name == 'workflow_dispatch'\n    runs-on: macos-latest\n    steps: []\n");
+    expect(detectFrequency(dispatch, null)).toEqual([]);
+    const counted = workflow("on:\n  pull_request:\njobs:\n  t:\n    if: github.event_name == 'pull_request'\n    runs-on: macos-latest\n    steps: []\n");
+    expect(rules(detectFrequency(counted, null))).toContain('frequency.ci-on-pull-request');
+  });
+
+  it('still counts a pull-request-excluded job against a branch push', () => {
+    const root = workflow("on:\n  push:\n    branches: [dev]\njobs:\n  t:\n    if: github.event_name == 'push'\n    runs-on: windows-latest\n    steps: []\n");
+    expect(rules(detectFrequency(root, null))).toEqual(['frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
+  });
+
+  it.each([
+    ['a matrix os string', 'strategy:\n      matrix:\n        os: windows-latest\n    runs-on: ${{ matrix.os }}'],
+    ['matrix include entries', 'strategy:\n      matrix:\n        include:\n          - os: ubuntu-latest\n          - os: macos-14\n    runs-on: ${{ matrix.os }}'],
+    ['a runs-on string', 'runs-on: windows-2022'],
+    ['a runs-on array', 'runs-on: [macos-latest]'],
+    ['a runs-on object with labels', 'runs-on:\n      group: big\n      labels: windows-latest'],
+    ['a runs-on object with a label list', 'runs-on:\n      labels: [macos-latest]'],
+  ])('finds expensive runners in %s', (_label, jobBody) => {
+    const root = workflow(`on:\n  pull_request:\njobs:\n  t:\n    ${jobBody}\n    steps: []\n`);
+    expect(rules(detectFrequency(root, null))).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-os-matrix-on-push']);
+  });
+
+  it('ignores self-hosted runners', () => {
+    const labelled = workflow('on:\n  pull_request:\njobs:\n  t:\n    runs-on: [self-hosted, macos]\n    steps: []\n');
+    expect(detectFrequency(labelled, null)).toEqual([]);
+    const withMatrix = workflow('on:\n  pull_request:\njobs:\n  t:\n    strategy:\n      matrix:\n        os: [macos-latest]\n    runs-on: [self-hosted, "${{ matrix.os }}"]\n    steps: []\n');
+    expect(detectFrequency(withMatrix, null)).toEqual([]);
+    const object = workflow('on:\n  pull_request:\njobs:\n  t:\n    runs-on:\n      labels: [self-hosted, windows]\n    steps: []\n');
+    expect(detectFrequency(object, null)).toEqual([]);
+  });
+
+  it('does not let a path filter excuse Windows or macOS on pull_request', () => {
+    const windows = workflow("on:\n  pull_request:\n    paths: ['src/**']\njobs:\n  t:\n    runs-on: windows-latest\n    steps: []\n");
+    const found = detectFrequency(windows, null);
+    expect(rules(found)).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-os-matrix-on-push']);
+    expect(found.find(finding => finding.rule === 'frequency.ci-on-pull-request')?.message).not.toContain('no path filter');
+    const linux = workflow("on:\n  pull_request:\n    paths-ignore: ['docs/**']\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps: []\n");
+    expect(detectFrequency(linux, null)).toEqual([]);
+  });
+
+  it('reports Windows or macOS on a path-filtered push through the matrix rule only', () => {
+    const filtered = workflow("on:\n  push:\n    paths: ['src/**']\njobs:\n  t:\n    runs-on: macos-latest\n    steps: []\n");
+    expect(rules(detectFrequency(filtered, null))).toEqual(['frequency.ci-os-matrix-on-push']);
+    const linux = workflow("on:\n  push:\n    paths: ['src/**']\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps: []\n");
+    expect(detectFrequency(linux, null)).toEqual([]);
+  });
+
+  it('reports each matrix finding once when push and pull_request both fire', () => {
+    const root = workflow('on:\n  push:\n    branches: [dev]\n  pull_request:\njobs:\n  t:\n    runs-on: windows-latest\n    steps: []\n');
+    expect(rules(detectFrequency(root, null))).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
+  });
+
+  it('describes a push restricted to the default branch as a post-merge run', () => {
+    const root = workflow('on:\n  push:\n    branches: [main]\n  pull_request:\njobs: {}\n');
+    const message = detectFrequency(root, null)[0]?.message ?? '';
+    expect(message).toContain('post-merge');
+    expect(message).toContain('already ran on the same tree');
+    const master = workflow('on:\n  push:\n    branches: [master]\njobs: {}\n');
+    expect(detectFrequency(master, null)[0]?.message).toContain('post-merge');
+    const other = workflow('on:\n  push:\n    branches: [main, dev]\njobs: {}\n');
+    expect(detectFrequency(other, null)[0]?.message).toContain('every push to a branch');
+    const bare = workflow('on: push\njobs: {}\n');
+    expect(detectFrequency(bare, null)[0]?.message).toContain('every push to a branch');
+  });
+
+  it('does not treat tags with branches-ignore as tag-only', () => {
+    const root = workflow("on:\n  push:\n    tags: ['v*']\n    branches-ignore: [wip]\njobs: {}\n");
+    expect(rules(detectFrequency(root, null))).toEqual(['frequency.ci-on-push']);
+  });
+
+  it('gives the whole dev-phase recommendation', () => {
+    const message = detectFrequency(workflow('on: push\njobs: {}\n'), defaultRiskMap())[0]?.message ?? '';
+    for (const part of ['non-blocking Linux job', 'path-filtered', 'drafts skipped', 'newer runs cancelled', 'workflow_dispatch', 'weekly schedule', 'release tags']) {
+      expect(message).toContain(part);
+    }
+  });
+});
+
+describe('detectFrequency hooks', () => {
+  const hookRules = (files: Record<string, string>): string[] => detectFrequency(makeTree(files), null).map(finding => `${finding.rule}@${finding.file}`);
+
+  it('ignores trailing comments and lines that only echo', () => {
+    expect(hookRules({ '.husky/pre-commit': '#!/usr/bin/env sh\necho "skipping npm test"\nnpx prettier --check . # npm test\nprintf "vitest\\n"\n' })).toEqual([]);
+    expect(hookRules({ '.husky/pre-commit': 'echo start && npm test\n' })).toEqual(['frequency.hook-full-suite@.husky/pre-commit']);
+  });
+
+  it.each([
+    'npx vitest run $FILES',
+    'npx vitest run "$@"',
+    'npx jest --findRelatedTests {staged_files}',
+    'npx vitest run {push_files}',
+    'pnpm test --filter=...[HEAD^]',
+  ])('treats %s as scoped', command => {
+    expect(hookRules({ '.husky/pre-commit': `${command}\n` })).toEqual([]);
+  });
+
+  it('reads only the run values of a lefthook file', () => {
+    const scoped = 'pre-commit:\n  commands:\n    jest:\n      run: npx jest --findRelatedTests {staged_files}\n    vitest:\n      glob: "*.ts"\n      run: npx vitest related --run {staged_files}\n';
+    expect(hookRules({ 'lefthook.yml': scoped })).toEqual([]);
+    const full = 'pre-commit:\n  commands:\n    unit:\n      run: npm test\n';
+    const found = detectFrequency(makeTree({ 'lefthook.yml': full }), null);
+    expect(found.map(finding => `${finding.rule}@${finding.file}:${finding.line}`)).toEqual(['frequency.hook-full-suite@lefthook.yml:4']);
+    const block = 'pre-push:\n  jobs:\n    - name: t\n      run: |\n        echo hi\n        npm test\n';
+    expect(detectFrequency(makeTree({ 'lefthook.yml': block }), null).map(finding => finding.line)).toEqual([6]);
+  });
+
+  it.each(['lefthook.yaml', '.lefthook.yml', '.config/lefthook.yml'])('scans %s', file => {
+    expect(hookRules({ [file]: 'pre-commit:\n  commands:\n    t:\n      run: npm test\n' })).toEqual([`frequency.hook-full-suite@${file}`]);
+  });
+
+  it('scans .husky/pre-merge-commit', () => {
+    expect(hookRules({ '.husky/pre-merge-commit': 'npm test\n' })).toEqual(['frequency.hook-full-suite@.husky/pre-merge-commit']);
+  });
+
+  it('scans simple-git-hooks values in package.json', () => {
+    const flagged = JSON.stringify({ 'simple-git-hooks': { 'pre-commit': 'npm test' } });
+    expect(hookRules({ 'package.json': flagged })).toEqual(['frequency.hook-full-suite@package.json']);
+    const scoped = JSON.stringify({ 'simple-git-hooks': { 'pre-commit': 'npx vitest related --run', 'pre-push': 5 } });
+    expect(hookRules({ 'package.json': scoped })).toEqual([]);
+  });
+
+  it.each(['npm t', 'pnpm -r test', 'pnpm --filter x test', 'npm run -s test', 'yarn test', 'bun run test'])('recognises %s as a suite run', command => {
+    expect(hookRules({ '.husky/pre-commit': `${command}\n` })).toEqual(['frequency.hook-full-suite@.husky/pre-commit']);
+  });
+
+  it('does not take npm tsc or npm run lint for a suite run', () => {
+    expect(hookRules({ '.husky/pre-commit': 'npm run lint\nnpm tsc\n' })).toEqual([]);
+  });
+});
+
+describe('detectFrequency watch mode', () => {
+  it.each([
+    'vitest',
+    'npx vitest',
+    'pnpm vitest',
+    'pnpm exec vitest',
+    'yarn vitest',
+    'cross-env NODE_ENV=test vitest',
+    'vitest --coverage',
+    'vitest --watch',
+    'vitest --watch=true',
+    'vitest dev',
+    'jest --watch',
+    'jest --watchAll',
+    'npm run lint && vitest',
+  ])('flags %s', script => {
+    expect(watchRules(script)).toEqual(['frequency.watch-default']);
+  });
+
+  it.each([
+    'vitest run',
+    'vitest --run',
+    'vitest --watch=false',
+    'vitest --watch false',
+    'jest --watchAll=false',
+    'jest --watch=false',
+    'vitest --no-watch',
+    'vitest list',
+    'vitest typecheck',
+    'vitest bench',
+    'vitest related src/a.ts',
+    'CI=1 vitest',
+    'cross-env CI=1 vitest',
+    'jest',
+    'npm run build',
+    'tsc --noEmit && vitest run',
+  ])('does not flag %s', script => {
+    expect(watchRules(script)).toEqual([]);
+  });
+
+  it('words the finding without over-claiming', () => {
+    const message = detectFrequency(scriptsTree({ test: 'vitest' }), null)[0]?.message ?? '';
+    expect(message).toContain('stdin is a terminal');
+    expect(message).toContain('CI is unset');
+    expect(message).toContain('vitest run');
+  });
+});
+
+describe('detectFrequency fixtures', () => {
+  const fixture = (name: string): string => fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url));
+
+  it('finds each planted problem in the bloated fixture exactly once', () => {
+    const found = detectFrequency(fixture('bloated'), null).map(finding => `${finding.rule}@${finding.file}`);
+    expect(found.sort()).toEqual(
+      [
+        'frequency.agent-run-all@AGENTS.md',
+        'frequency.ci-on-pull-request@.github/workflows/ci.yml',
+        'frequency.ci-on-push@.github/workflows/ci.yml',
+        'frequency.ci-os-matrix-on-push@.github/workflows/ci.yml',
+        'frequency.hook-full-suite@.husky/pre-commit',
+        'frequency.hook-full-suite@package.json',
+        'frequency.watch-default@package.json',
+      ].sort(),
+    );
+  });
+
+  it('finds nothing in the clean fixture', () => {
+    expect(detectFrequency(fixture('clean'), null)).toEqual([]);
   });
 });
