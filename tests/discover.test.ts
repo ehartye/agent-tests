@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { detectRunner, discoverTests, isSupportPath, isTestPath } from '../src/discover.ts';
+import { join } from 'node:path';
+import { detectRunner, discoverTests, isSupportPath, isTestPath, walk } from '../src/discover.ts';
 import { makeTree } from './helpers/tree.ts';
 
 describe('isTestPath', () => {
@@ -10,6 +11,13 @@ describe('isTestPath', () => {
     expect(isTestPath('src/a.ts')).toBe(false);
     expect(isTestPath('src/a.test.md')).toBe(false);
   });
+
+  it('covers module-flavored extensions and rejects declaration files', () => {
+    expect(isTestPath('src/a.test.d.ts')).toBe(false);
+    expect(isTestPath('src/a.test.mts')).toBe(true);
+    expect(isTestPath('src/a.spec.cts')).toBe(true);
+    expect(isTestPath('src/a.test.tsx')).toBe(true);
+  });
 });
 
 describe('isSupportPath', () => {
@@ -17,6 +25,15 @@ describe('isSupportPath', () => {
     expect(isSupportPath('tests/helpers/tree.ts')).toBe(true);
     expect(isSupportPath('src/__mocks__/fs.ts')).toBe(true);
     expect(isSupportPath('src/persistence/store.ts')).toBe(false);
+  });
+});
+
+describe('walk', () => {
+  it('skips a directory that cannot be read instead of throwing', () => {
+    const root = makeTree({ 'a.test.ts': '' });
+    const visited: string[] = [];
+    expect(() => walk(join(root, 'missing'), (_absolute, rel) => visited.push(rel))).not.toThrow();
+    expect(visited).toEqual([]);
   });
 });
 
@@ -33,6 +50,20 @@ describe('discoverTests', () => {
     });
     expect(discoverTests(root)).toEqual(['a.test.ts', 'b.test.ts', 'src/__tests__/helper.ts']);
   });
+
+  it('skips nested git worktrees', () => {
+    const root = makeTree({
+      'a.test.ts': '',
+      '.worktrees/x/a.test.ts': '',
+      '.claude/worktrees/y/b.test.ts': '',
+    });
+    expect(discoverTests(root)).toEqual(['a.test.ts']);
+  });
+
+  it('returns plain code-unit order of the full path, not traversal order', () => {
+    const root = makeTree({ 'a/x.test.ts': '', 'a-b/x.test.ts': '' });
+    expect(discoverTests(root)).toEqual(['a-b/x.test.ts', 'a/x.test.ts']);
+  });
 });
 
 describe('detectRunner', () => {
@@ -47,6 +78,14 @@ describe('detectRunner', () => {
 
   it('falls back to a config file', () => {
     expect(detectRunner(makeTree({ 'package.json': '{}', 'jest.config.js': '' }))).toBe('jest');
+  });
+
+  it('reports unknown for a root with no package.json and no config', () => {
+    expect(detectRunner(makeTree())).toBe('unknown');
+  });
+
+  it('detects vitest from a config file when package.json lists no dependencies', () => {
+    expect(detectRunner(makeTree({ 'package.json': '{}', 'vitest.config.ts': '' }))).toBe('vitest');
   });
 
   it('reports unknown when nothing identifies a runner', () => {
