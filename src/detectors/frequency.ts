@@ -3,8 +3,10 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import type { Finding, RiskMap } from '../schema.ts';
 
-const RUNS_TESTS =
-  /\b(?:(?:npm|pnpm|yarn|bun)\s+(?:(?:run|-r|--recursive|-s|--silent|--if-present|--filter(?:=|\s+)\S+|-F\s+\S+)\s+)*(?:test|t)|npx\s+(?:vitest|jest)|vitest|jest|pytest)\b/;
+const PM_TEST = /^(?:npm|pnpm|yarn|bun)\s+(?:(?:run|-r|--recursive|-s|--silent|--if-present|--filter(?:=|\s+)\S+|-F\s+\S+)\s+)*(?:test|t)\b/;
+const TEST_TOOLS = new Set(['vitest', 'jest', 'pytest']);
+const TOOL_WRAPPERS = new Set(['cross-env', 'env', 'npx', 'pnpm', 'exec', 'yarn', 'bunx', 'bun', 'npm', 'run', 'dlx', 'x', 'uv', 'poetry', 'pipenv', 'then', 'do', 'else', 'time', 'nohup']);
+const ENV_ASSIGNMENT = /^[A-Za-z_]\w*=/;
 const SCOPED = /--changed|--related|\brelated\b|--findRelatedTests|--onlyChanged|--affected|\baffected\b|\{staged_files\}|\{push_files\}|\$\{?FILES\b|\$@|\[HEAD/;
 const HOOK_FILES = ['.husky/pre-commit', '.husky/pre-push', '.husky/pre-merge-commit', '.githooks/pre-commit', '.githooks/pre-push'];
 const LEFTHOOK_FILES = ['lefthook.yml', 'lefthook.yaml', '.lefthook.yml', '.config/lefthook.yml'];
@@ -46,13 +48,52 @@ function triggersOf(workflow: Record<string, unknown>): Record<string, unknown> 
   return {};
 }
 
+/** True when one command starts a test run: a package-manager test script, or a test tool at command position. */
+function runsTestTool(part: string): boolean {
+  const tokens = part.split(/\s+/).filter(Boolean);
+  let position = 0;
+  while (position < tokens.length && (ENV_ASSIGNMENT.test(tokens[position] ?? '') || tokens[position] === 'cross-env' || tokens[position] === 'env')) position++;
+  if (PM_TEST.test(tokens.slice(position).join(' '))) return true;
+  while (position < tokens.length) {
+    const token = tokens[position] ?? '';
+    if (!TOOL_WRAPPERS.has(token) && !token.startsWith('-') && !ENV_ASSIGNMENT.test(token)) break;
+    position++;
+  }
+  const name = (value: string | undefined): string => (value ?? '').replace(/^.*[\\/]/, '').replace(/\.cmd$/, '');
+  const command = name(tokens[position]);
+  return TEST_TOOLS.has(/^(?:python3?|py)$/.test(command) && tokens[position + 1] === '-m' ? name(tokens[position + 2]) : command);
+}
+
 /** True when a hook command runs the whole suite: any `&&`, `||` or `;` part that runs tests, is not scoped and is not an echo. */
 function runsWholeSuite(raw: string): boolean {
   const line = raw.replace(/(^|\s)#.*$/, '$1');
   return line.split(/&&|\|\||;/).some(part => {
     const command = part.trim();
-    return command !== '' && !/^(?:echo|printf)\b/.test(command) && RUNS_TESTS.test(command) && !SCOPED.test(command);
+    return command !== '' && !/^(?:echo|printf)\b/.test(command) && runsTestTool(command) && !SCOPED.test(command);
   });
+}
+
+/** Join lines that end in a backslash with the next one; each result keeps the number of its first physical line. */
+function joinContinuations(entries: Array<{ line: number; command: string }>): Array<{ line: number; command: string }> {
+  const joined: Array<{ line: number; command: string }> = [];
+  let carry: { line: number; command: string; last: number } | null = null;
+  for (const entry of entries) {
+    if (carry && entry.line !== carry.last + 1) {
+      joined.push({ line: carry.line, command: carry.command });
+      carry = null;
+    }
+    const merged: { line: number; command: string; last: number } = carry
+      ? { line: carry.line, command: `${carry.command} ${entry.command.trim()}`, last: entry.line }
+      : { line: entry.line, command: entry.command, last: entry.line };
+    if (/\\\s*$/.test(merged.command)) {
+      carry = { ...merged, command: merged.command.replace(/\\\s*$/, '') };
+    } else {
+      joined.push({ line: merged.line, command: merged.command });
+      carry = null;
+    }
+  }
+  if (carry) joined.push({ line: carry.line, command: carry.command });
+  return joined;
 }
 
 /** The `run:` values of a lefthook file, with their line numbers; a block scalar yields one entry per line. */
@@ -128,18 +169,24 @@ function expensiveRunnersOf(job: Record<string, unknown>): { all: string[]; matr
   return { all: expensive([...asStrings(matrix.os), ...include, ...labels]), matrix: expensive([...asStrings(matrix.os), ...include]) };
 }
 
+/** Condition fragments that cannot hold on a pull request: another event, a tag ref, or a dispatch input. */
+const NOT_PULL_REQUEST = [
+  /github\.event_name\s*(?:!=\s*['"]pull_request['"]|==\s*['"](?:push|schedule|workflow_dispatch|release)['"])/,
+  /(?<!!\s*)startsWith\(\s*github\.ref\s*,\s*['"]refs\/tags\//,
+  /github\.ref_type\s*==\s*['"]tag['"]/,
+  /\binputs\./,
+];
+
 /**
- * False when a job's `if:` keeps it off pull requests: it names github.event_name as something other than
- * pull_request (`!= 'pull_request'`, or `== 'push'`, `'schedule'`, `'workflow_dispatch'`), has no positive
- * `== 'pull_request'`, and has no `||` clause that ignores the event name (a draft check, for example).
+ * False when a job's `if:` keeps it off pull requests: it has no positive `github.event_name == 'pull_request'` and
+ * every `||` clause of it holds only for another event, a tag ref or a dispatch input. A clause that says
+ * nothing of those (a draft check, a branch ref) can still hold on a pull request.
  */
 function runsOnPullRequest(job: Record<string, unknown>): boolean {
   const condition = job.if;
   if (typeof condition !== 'string') return true;
   if (/github\.event_name\s*==\s*['"]pull_request['"]/.test(condition)) return true;
-  const otherEvent = /github\.event_name\s*(?:!=\s*['"]pull_request['"]|==\s*['"](?:push|schedule|workflow_dispatch)['"])/.test(condition);
-  if (!otherEvent) return true;
-  return condition.split('||').some(clause => !/github\.event_name/.test(clause));
+  return condition.split('||').some(clause => !NOT_PULL_REQUEST.some(marker => marker.test(clause)));
 }
 
 /** Where and how often the suite runs: hooks, watch mode, CI triggers and OS matrices, and agent instructions. */
@@ -160,14 +207,14 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
   for (const hook of HOOK_FILES) {
     const text = readText(join(root, hook));
     if (text === null) continue;
-    text.split(/\r?\n/).forEach((line, index) => {
-      if (runsWholeSuite(line)) addHookFinding(hook, index + 1, line);
-    });
+    for (const { line, command } of joinContinuations(text.split(/\r?\n/).map((command, index) => ({ line: index + 1, command })))) {
+      if (runsWholeSuite(command)) addHookFinding(hook, line, command);
+    }
   }
   for (const hook of LEFTHOOK_FILES) {
     const text = readText(join(root, hook));
     if (text === null) continue;
-    for (const { line, command } of lefthookCommands(text)) {
+    for (const { line, command } of joinContinuations(lefthookCommands(text))) {
       if (runsWholeSuite(command)) addHookFinding(hook, line, command);
     }
   }

@@ -441,3 +441,91 @@ describe('detectFrequency matrix rule', () => {
     expect(rules(detectFrequency(matrix, null))).toEqual(['frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
   });
 });
+
+describe('detectFrequency tag-gated and dispatch-gated jobs', () => {
+  const macJob = (condition: string): string => `on:\n  pull_request:\njobs:\n  t:\n    if: ${condition}\n    runs-on: macos-latest\n    steps: []\n`;
+
+  it.each([
+    "startsWith(github.ref, 'refs/tags/')",
+    'startsWith(github.ref, "refs/tags/v")',
+    "github.ref_type == 'tag'",
+    "github.event_name == 'release'",
+    "github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')",
+    "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'",
+    "inputs.full == 'true'",
+    "github.event.inputs.os == 'mac'",
+    "github.event_name == 'workflow_dispatch' || inputs.full",
+    "${{ startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' }}",
+  ])('treats a macOS job gated by %s as off the pull-request path', condition => {
+    expect(detectFrequency(workflow(macJob(condition)), null)).toEqual([]);
+  });
+
+  it.each([
+    "startsWith(github.ref, 'refs/heads/')",
+    "github.ref == 'refs/heads/main'",
+    "github.ref_type != 'tag'",
+    "${{ !startsWith(github.ref, 'refs/tags/') }}",
+    "github.event_name == 'release' || github.ref == 'refs/heads/main'",
+  ])('still flags a macOS job gated by %s', condition => {
+    expect(rules(detectFrequency(workflow(macJob(condition)), null))).toEqual(['frequency.ci-on-pull-request']);
+  });
+
+  it('keeps the draft-skip Linux job on the pull-request path without findings', () => {
+    const root = workflow("on:\n  pull_request:\njobs:\n  linux:\n    if: github.event_name != 'pull_request' || !github.event.pull_request.draft\n    runs-on: ubuntu-latest\n    steps: []\n");
+    expect(detectFrequency(root, null)).toEqual([]);
+  });
+});
+
+describe('detectFrequency test tools at command position', () => {
+  const hookRules = (hook: string): string[] => detectFrequency(makeTree({ '.husky/pre-commit': `${hook}\n` }), null).map(finding => finding.rule);
+
+  it.each(['node scripts/vitest.config.js', 'cat jest.config.js', 'npx eslint --plugin jest src', 'node scripts/run-jest-helper.js', 'git diff -- vitest.config.ts', 'grep -r pytest docs'])(
+    'does not count %s as running the suite',
+    command => {
+      expect(hookRules(command)).toEqual([]);
+    },
+  );
+
+  it.each([
+    'npm test',
+    'npm run test',
+    'pnpm test',
+    'vitest run',
+    'jest',
+    'pytest',
+    'npx vitest run',
+    'npx --no-install jest',
+    'pnpm exec vitest run',
+    'yarn jest',
+    'bunx vitest run',
+    'CI=1 jest',
+    'cross-env NODE_ENV=test jest',
+    'cross-env NODE_ENV=test npm test',
+    'echo start && jest',
+    'npm run lint; pytest',
+    'python -m pytest',
+    './node_modules/.bin/vitest run',
+  ])('counts %s as running the suite', command => {
+    expect(hookRules(command)).toEqual(['frequency.hook-full-suite']);
+  });
+
+  it('does not count vitest.config as a tool even at command position', () => {
+    expect(hookRules('vitest.config.js')).toEqual([]);
+  });
+});
+
+describe('detectFrequency hook line continuations', () => {
+  it('joins a backslash continuation so a scope flag on the next line counts', () => {
+    expect(detectFrequency(makeTree({ '.husky/pre-commit': 'npx vitest run \\\n  --changed origin/main\n' }), null)).toEqual([]);
+  });
+
+  it('reports the first physical line of a continued unscoped command', () => {
+    const found = detectFrequency(makeTree({ '.husky/pre-push': 'echo hi\nnpx vitest run \\\n  --reporter dot\n' }), null);
+    expect(found.map(finding => `${finding.rule}:${finding.line}`)).toEqual(['frequency.hook-full-suite:2']);
+  });
+
+  it('joins continuations inside a lefthook block scalar too', () => {
+    const text = 'pre-push:\n  jobs:\n    - run: |\n        npx jest \\\n          --findRelatedTests {push_files}\n';
+    expect(detectFrequency(makeTree({ 'lefthook.yml': text }), null)).toEqual([]);
+  });
+});
