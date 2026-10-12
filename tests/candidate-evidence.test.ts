@@ -52,9 +52,11 @@ describe('observational candidate evidence', () => {
     const f = fixture(), expected = canonicalRoot(f.root);
     const aliases = process.platform === 'win32' ? [f.root.replace(/^[A-Z]/, letter => letter.toLowerCase()), f.root.toUpperCase()] : [f.root];
     if (process.platform === 'win32') {
+      // This is fixture setup, not a five-second performance contract. Cold hosted PowerShell startup can exceed it.
       const short = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
         '(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AGENT_TESTS_FIXTURE_PATH).ShortPath'],
-      { env: { ...process.env, AGENT_TESTS_FIXTURE_PATH: f.root }, encoding: 'utf8', windowsHide: true, timeout: 5000 });
+      { env: { ...process.env, AGENT_TESTS_FIXTURE_PATH: f.root }, encoding: 'utf8', windowsHide: true, timeout: 15000 });
+      expect(short.error, short.stderr).toBeUndefined();
       expect(short.status, short.stderr).toBe(0);
       const path = short.stdout.trim();
       expect(existsSync(path)).toBe(true);
