@@ -84,6 +84,9 @@ an optional Node reporter, and explicitly invoked observational candidate eviden
 report never run tests. Candidate observation does not select lanes, suppress checks or authorize integration.
 CI charges and statistical flakiness are not measured; remediation and wider runner/language support remain separate work.
 
+Version 0.3.1 adds explicit Svelte component subjects and advisory evidence for full test suites chained into build scripts,
+based on the APcademy Government case study.
+
 ## Known limitations
 
 - Pattern detectors also match strings inside tests that are about those patterns, including this repository's own tests.
