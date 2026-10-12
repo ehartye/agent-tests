@@ -73,6 +73,24 @@ describe('scan of the clean fixture', () => {
 });
 
 describe('scan edge cases', () => {
+  it('tiers a mounted Svelte screen by the component it imports', () => {
+    const map = defaultRiskMap();
+    map.areas = [
+      { path: 'src/lib/screens/**', tier: 'critical' },
+      { path: 'src/lib/components/**', tier: 'low' },
+    ];
+    const root = makeTree({
+      '.testing/risk.yml': serializeRiskMap(map),
+      'src/lib/screens/Library.svelte': '<h1>Library</h1>',
+      'src/lib/components/render-live.svelte.js': 'export const renderLive = () => {};',
+      'src/lib/screens/Library.test.js': "import { test, expect } from 'vitest';\nimport Library from './Library.svelte';\nimport { renderLive } from '../components/render-live.svelte.js';\ntest('opens the library', () => { expect(renderLive(Library)).toBeDefined(); });",
+    });
+    const [file] = scan(root).files;
+    expect(file.subjects).toEqual(['src/lib/components/render-live.svelte.js', 'src/lib/screens/Library.svelte']);
+    expect(file.tier).toBe('critical');
+    expect(file.area).toBe('src/lib/screens/**');
+  });
+
   it('finds worktree hazards in browser configuration and shared test infrastructure', () => {
     const root = makeTree({
       'tests/live.test.mjs': "import test from 'node:test'; test('live',()=>{});",

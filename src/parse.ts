@@ -251,7 +251,8 @@ export function openParseSession({ restartEvery = RESTART_EVERY }: { restartEver
 }
 
 const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'];
-const CODE_FILE = /\.[cm]?[jt]sx?$/;
+// Svelte components are subjects of JS tests; their component bodies are not parsed as test files.
+const SUBJECT_FILE = /(?:\.[cm]?[jt]sx?|\.svelte)$/;
 
 /** Direct JSON configs only: inherited/JSONC/bundler-only aliases remain unresolved rather than guessed. */
 function aliasResolver(root: string): (specifier: string) => string[] {
@@ -278,7 +279,7 @@ function aliasResolver(root: string): (specifier: string) => string[] {
   }
 }
 
-/** Repo-relative non-test source files a test file imports through relative specifiers. */
+/** Repo-relative non-test JS/TS files and explicit Svelte components imported by a test. */
 export function resolveSubjects(root: string, testRel: string, imports: string[]): string[] {
   const dir = dirname(resolve(root, testRel));
   const found = new Set<string>();
@@ -287,8 +288,8 @@ export function resolveSubjects(root: string, testRel: string, imports: string[]
     const bases = spec.startsWith('.') ? [resolve(dir, spec)] : aliases(spec);
     for (const base of bases) {
     const stripped = base.replace(/\.[cm]?[jt]sx?$/, '');
-    const candidates = [base, ...EXTENSIONS.map(ext => stripped + ext), ...EXTENSIONS.map(ext => resolve(base, `index${ext}`))];
-    const hit = candidates.find(candidate => CODE_FILE.test(candidate) && existsSync(candidate) && statSync(candidate).isFile());
+    const candidates = base.endsWith('.svelte') ? [base] : [base, ...EXTENSIONS.map(ext => stripped + ext), ...EXTENSIONS.map(ext => resolve(base, `index${ext}`))];
+    const hit = candidates.find(candidate => SUBJECT_FILE.test(candidate) && existsSync(candidate) && statSync(candidate).isFile());
     if (!hit) continue;
     const rel = relPosix(root, hit);
     if (rel.startsWith('..') || isTestPath(rel) || isSupportPath(rel)) continue;

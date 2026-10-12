@@ -73,6 +73,69 @@ function runsWholeSuite(raw: string): boolean {
   });
 }
 
+/** Only local, literal package script calls. Cross-package flags and arbitrary JS/shell wrappers stay unresolved. */
+function localScriptCall(command: string): string | null {
+  const match = /^(npm|pnpm|yarn|bun)\s+(?:(run|run-script)\s+)?([\w:.-]+)(?:\s|$)/.exec(command);
+  if (!match || (!match[2] && match[1] === 'npm' && !['test', 't'].includes(match[3]!))) return null;
+  if (!match[2] && (['exec', 'dlx', 'x'].includes(match[3]!) || (match[1] === 'bun' && match[3] === 'test'))) return null;
+  return !match[2] && match[1] === 'npm' && match[3] === 't' ? 'test' : match[3]!;
+}
+
+/** Split simple shell command lists without inventing commands inside quoted arguments. */
+function literalCommands(script: string): string[] {
+  const commands: string[] = [];
+  let quote = '';
+  let start = 0;
+  for (let index = 0; index < script.length; index++) {
+    const char = script[index];
+    if (char === '\\' && quote !== "'") { index++; continue; }
+    if (quote) {
+      if (char === quote) quote = '';
+      continue;
+    }
+    if (char === '"' || char === "'") { quote = char; continue; }
+    if (char === '#' && (index === start || /\s/.test(script[index - 1]!))) {
+      commands.push(script.slice(start, index));
+      while (index < script.length && script[index] !== '\n') index++;
+      start = index + 1;
+      continue;
+    }
+    const pair = (char === '&' || char === '|') && script[index + 1] === char;
+    if (char !== ';' && char !== '\n' && !pair) continue;
+    commands.push(script.slice(start, index));
+    if (pair) index++;
+    start = index + 1;
+  }
+  if (quote) return []; // Incomplete quoting is not a statically understood command list.
+  commands.push(script.slice(start));
+  return commands;
+}
+
+/** Unknown positional filters, selectors and option values cannot establish a full-suite run. */
+const LITERAL_FULL_SUITE = /^(?:(?:npx|(?:npm|pnpm|yarn) exec|bunx|bun x)\s+)?(?:vitest(?:\s+run)?|jest|pytest|bun test)(?:\s+(?:--run|--ci|--runInBand|--coverage|--no-watch|--watch=false))*\s*$/;
+
+/** Find a statically visible full-suite gate, keeping the script path for review and stopping on cycles. */
+function buildSuiteTrace(scripts: Record<string, unknown>, name: string, chain: string[] = []): string | null {
+  const script = scripts[name];
+  if (typeof script !== 'string' || chain.includes(name)) return null;
+  const path = [...chain, name];
+  for (const part of literalCommands(script)) {
+    const command = part.trim();
+    if (SCOPED.test(command) || /(?:^|\s)--(?:prefix|workspace|workspaces|cwd|dir|filter)(?:=|\s|$)|(?:^|\s)-[wCF](?:\s|$)/.test(command)) continue;
+    if (/\.(?:test|spec)\.[cm]?[jt]sx?\b|(?:^|\s)(?:src|tests?|__tests__)[/\\]|[`]|\$[({]/.test(command)) continue;
+    const called = localScriptCall(command);
+    if (called) {
+      // Forwarded arguments may narrow a script's test scope; do not drop them when following its body.
+      if (!/^(?:npm|pnpm|yarn|bun)\s+(?:(?:run|run-script)\s+)?[\w:.-]+\s*$/.test(command)) continue;
+      const trace = buildSuiteTrace(scripts, called, path);
+      if (trace) return trace;
+    } else if (LITERAL_FULL_SUITE.test(command)) {
+      return `${path.join(' -> ')}: ${command}`;
+    }
+  }
+  return null;
+}
+
 /** Join lines that end in a backslash with the next one; each result keeps the number of its first physical line. */
 function joinContinuations(entries: Array<{ line: number; command: string }>): Array<{ line: number; command: string }> {
   const joined: Array<{ line: number; command: string }> = [];
@@ -229,6 +292,17 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
       // Unreadable package.json: nothing to report here.
     }
     const scripts = isRecord(pkg.scripts) ? pkg.scripts : {};
+    for (const name of ['prebuild', 'build', 'postbuild']) {
+      const trace = buildSuiteTrace(scripts, name);
+      if (!trace) continue;
+      findings.push({
+        category: 'frequency',
+        rule: 'frequency.build-full-suite',
+        file: 'package.json',
+        message: 'A build script reaches an unscoped test suite. Review whether this is a deliberate release gate or repeats tests during builds; retain equivalent protection before separating the commands.',
+        evidence: trace.slice(0, 300),
+      });
+    }
     for (const name of HOOK_SCRIPTS) {
       const script = scripts[name];
       if (typeof script === 'string' && runsWholeSuite(script)) {
