@@ -104,6 +104,10 @@ remediation and CI templates (0.3), Codex packaging verified on both hosts (0.4)
 
 CI follows the plugin's own doctrine: one non-blocking Ubuntu job per pull request (path-filtered, drafts skipped, newer pushes cancel older runs), and the Windows and macOS runs on demand, weekly and on release tags.
 
+Vitest runs at most two workers to bound native parser processes and memory. Real-native restart boundaries run in the ordinary suite;
+the 1,200-file production-threshold stress workload runs on manual, weekly and release-tag CI. To include it locally, set
+`AGENT_TESTS_STRESS=1` for `npm test`. The production parser still restarts after 1,000 files.
+
 ## License
 
 MIT

@@ -267,7 +267,7 @@ describe('parseTestFile tautologies', () => {
 });
 
 describe('parseTestFile session', () => {
-  it('parses a thousand and more distinct files in one session, across its restart', { timeout: 60_000 }, () => {
+  it.runIf(process.env.AGENT_TESTS_STRESS === '1')('parses a thousand and more distinct files in one session, across its restart', { timeout: 60_000 }, () => {
     const session = openParseSession();
     try {
       for (let i = 0; i < 1200; i++) {

@@ -207,7 +207,8 @@ function startNative(): { fs: WritableFs; api: API } {
  * Each file gets its own directory: reusing a path after its project was closed returned the old content. The previous
  * project is closed and its files removed on the next call, so the native side holds one project at a time.
  */
-export function openParseSession(): ParseSession {
+export function openParseSession({ restartEvery = RESTART_EVERY }: { restartEvery?: number } = {}): ParseSession {
+  if (!Number.isInteger(restartEvery) || restartEvery < 1) throw new Error('Native restart interval must be a positive integer');
   let native = startNative();
   let count = 0;
   let previous: { config: string; source: string } | null = null;
@@ -215,7 +216,7 @@ export function openParseSession(): ParseSession {
     parse(fileName, rawText) {
       // The native side drops a leading byte order mark from the text but node positions still count it, so drop it here too.
       const text = rawText.charCodeAt(0) === 0xfeff ? rawText.slice(1) : rawText;
-      if (count >= RESTART_EVERY) {
+      if (count >= restartEvery) {
         native.api.close();
         native = startNative();
         count = 0;
