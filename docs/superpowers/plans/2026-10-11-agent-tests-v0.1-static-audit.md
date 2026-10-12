@@ -23,14 +23,26 @@
 
 ## Deviations from the spec (and why)
 
-1. **TypeScript 7.0.2, not an older line.** The owner asked for current versions, so every pin is the registry's latest as of 2026-10-11. TypeScript 7 is a native compiler whose main entry has no `createSourceFile`; its JS API lives on `typescript/unstable/*` subpaths and talks to the native binary over RPC. `src/parse.ts` uses it: one `API` session, a virtual filesystem (`typescript/unstable/fs`), one tiny project per file, then `forEachChild` over the returned AST. The costs are accepted and contained: the subpaths are named `unstable`, so the version is pinned exactly and `src/parse.ts` is the only file that touches them; the platform binary must install, so the managed-runtime dependency check parses a line for real; and a session must be closed, so `scan` closes it in a `finally`. Measured: about half a second to start, then about one millisecond per file.
+1. **TypeScript 7.0.2, not an older line.** The owner asked for current versions, so every pin is the registry's latest as of 2026-10-11. TypeScript 7 is a native compiler whose main entry has no `createSourceFile`; its JS API lives on `typescript/unstable/*` subpaths and talks to the native binary over RPC. `src/parse.ts` uses it: one `API` session, a virtual filesystem (`typescript/unstable/fs`), one tiny project per file, then `forEachChild` over the returned AST. The costs are accepted and contained: the subpaths are named `unstable`, so the version is pinned exactly and `src/parse.ts` is the only file that touches them; the platform binary must install, so the managed-runtime dependency check parses a line for real; and a session must be closed, so `scan` closes it in a `finally`. Measured: about half a second to start, then about 1.5 milliseconds per file, flat, because each file's project is closed after use and the native process restarts every 1,000 files.
 2. **The managed runtime has no `npm link` step and no browser step.** Skills always call the launcher, so a bare `tests` on PATH is never used.
 3. **`scan` prints evidence JSON and `report` prints Markdown.** The spec listed `scan`, `time`, `report`; `time` belongs to the next plan.
 4. **Noise controls found by running the audit on this repository itself:** type-only imports are not subjects; a test counts for a subject only when it imports three or fewer modules or is named after it; shared-subject findings collapse to one per file; `fixtures` directories are never scanned; a tag-only `push` trigger is a release run, not "every push", and may carry an OS matrix; `risk-draft` adds a catch-all `src/**` area when code sits directly under `src`; `@subject <path>` declares code a test reaches without importing it (a CLI run in a subprocess), and `@risk <tier>` states a tier for a test with no code subject.
 5. **Doctrine is verified, not asserted.** Task 2 turns the spec's CI and testing claims into cited rules in `references/doctrine.md`. One claim was already corrected while planning: bare `vitest` starts watch mode only in an interactive terminal, so the skill says "can block", not "waits forever".
 6. **A test with no `@lane` tag is not a finding in v0.1.** Tagging is opt-in and the risk map's tier already places every test, so a `wiring.no-lane` rule would flag nearly every test in a project that has not adopted tags. A lane-versus-tier mismatch is flagged only when a tag exists. Revisit it once `test-lanes` (a later plan) writes the tags.
 7. **The CI default follows the owner's pull-request workflow, and replaces the spec's "no automatic CI in dev".** The doctrine research (rule 7) found team-oriented sources agree a build should run on every integration and that a local pass is an agent reporting on itself. The owner never pushes to the default branch, so the recommended default is one non-blocking Linux job per `pull_request` update (path-filtered, drafts skipped, newer runs cancel older ones), no `push` trigger and no post-merge run, with the Windows and macOS runs on demand, weekly and on release tags. The frequency detector accepts a Linux-only `pull_request` workflow and flags `push` triggers on branches and Windows or macOS on the pull-request path. The spec and doctrine rule 7 were amended to match.
-8. **Tasks 3 and 4 and the fixtures were hardened after code review, and the code blocks show the final versions.** Task 3: the risk-map schema rejects unknown keys, and read and parse failures are reported separately. Task 4: a stale `setup.lock` is reclaimed when its owner process is gone, the repair path never runs `npm ci` inside a live release, dependency-check failures keep the line that names the cause, and the install contract has tests. Task 5: the `clean` fixture gained near-miss cases. Task 14 compares exact sorted finding lists, so a rule that fires twice is caught.
+8. **Every task was reviewed twice (spec compliance, then code quality), and the code blocks show the final, reviewed versions.** The reviews ran the detectors against realistic inputs and changed behavior, so the blocks differ from a first draft in these ways:
+   - **Task 3:** the risk-map schema rejects unknown keys; read and parse failures are reported separately; `unparsed` is a file flag.
+   - **Task 4:** a stale `setup.lock` is reclaimed when its owner is gone; the repair path never runs `npm ci` inside a live release; dependency-check failures keep the line naming the cause; the install contract has tests.
+   - **Task 5:** the `clean` fixture sits next to each detector's false-positive guards.
+   - **Task 6:** an unreadable directory is skipped instead of aborting; nested worktrees (`.worktrees`, `.claude`) are never scanned.
+   - **Task 7:** BOM files parse; per-file time is flat; `it.skipIf`, `test.for`, `describe.each`, `expect.soft`, `require()` and `.mts` resolution are understood; tags come only from the leading comment; `declaredSubjects` validates `@subject` paths.
+   - **Tasks 8 to 10:** the detectors were tuned so they never flag the recommended fixes (a `mkdtemp` prefix split over lines, `process.env.HOME = tmp`), repeated sweeps need a seed-like variable and a shared subject, hub subjects collapse to one finding, job-level `if:` gates and tag-gated jobs are understood, and nothing throws on odd input.
+   - **Task 11:** `risk-draft` classifies by name tokens (not substrings), classifies loose files and route groups, and looks through generic container directories.
+   - **Task 12:** churn counts rewrites only (a creation, rename or deletion is not an edit), scopes the window to the project, and reports unknown for shallow clones.
+   - **Task 13:** drift ignores a one-segment catch-all such as `src/**`; findings point at the `@risk` and `@subject` tags.
+   - **Task 14:** a file that cannot be parsed is flagged `unparsed` and the scan continues.
+   - **Task 15:** the report ranks (unparsed files first, then distinct rules), caps its table and per-rule lists, separates project findings from per-file findings and de-duplicates messages, because an uncapped report would cost an agent about as much as reading the suite.
+   - **Task 16:** every failure, including a broken runtime and a broken pipe, stays inside the one-line JSON contract; `report` takes `--max-files` and `--max-per-rule`; `risk-draft --write` never overwrites.
 
 ## Not in this plan
 
@@ -697,7 +709,7 @@ export const Finding = z.object({
 });
 export type Finding = z.infer<typeof Finding>;
 
-export const FileFlag = z.enum(['tautological', 'snapshot-only', 'mock-only', 'no-direct-assertions']);
+export const FileFlag = z.enum(['tautological', 'snapshot-only', 'mock-only', 'no-direct-assertions', 'unparsed']);
 export type FileFlag = z.infer<typeof FileFlag>;
 
 export const TestFileRecord = z.object({
@@ -2070,7 +2082,8 @@ Create `tests/discover.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { detectRunner, discoverTests, isSupportPath, isTestPath } from '../src/discover.ts';
+import { join } from 'node:path';
+import { detectRunner, discoverTests, isSupportPath, isTestPath, walk } from '../src/discover.ts';
 import { makeTree } from './helpers/tree.ts';
 
 describe('isTestPath', () => {
@@ -2081,6 +2094,13 @@ describe('isTestPath', () => {
     expect(isTestPath('src/a.ts')).toBe(false);
     expect(isTestPath('src/a.test.md')).toBe(false);
   });
+
+  it('covers module-flavored extensions and rejects declaration files', () => {
+    expect(isTestPath('src/a.test.d.ts')).toBe(false);
+    expect(isTestPath('src/a.test.mts')).toBe(true);
+    expect(isTestPath('src/a.spec.cts')).toBe(true);
+    expect(isTestPath('src/a.test.tsx')).toBe(true);
+  });
 });
 
 describe('isSupportPath', () => {
@@ -2088,6 +2108,15 @@ describe('isSupportPath', () => {
     expect(isSupportPath('tests/helpers/tree.ts')).toBe(true);
     expect(isSupportPath('src/__mocks__/fs.ts')).toBe(true);
     expect(isSupportPath('src/persistence/store.ts')).toBe(false);
+  });
+});
+
+describe('walk', () => {
+  it('skips a directory that cannot be read instead of throwing', () => {
+    const root = makeTree({ 'a.test.ts': '' });
+    const visited: string[] = [];
+    expect(() => walk(join(root, 'missing'), (_absolute, rel) => visited.push(rel))).not.toThrow();
+    expect(visited).toEqual([]);
   });
 });
 
@@ -2104,6 +2133,20 @@ describe('discoverTests', () => {
     });
     expect(discoverTests(root)).toEqual(['a.test.ts', 'b.test.ts', 'src/__tests__/helper.ts']);
   });
+
+  it('skips nested git worktrees', () => {
+    const root = makeTree({
+      'a.test.ts': '',
+      '.worktrees/x/a.test.ts': '',
+      '.claude/worktrees/y/b.test.ts': '',
+    });
+    expect(discoverTests(root)).toEqual(['a.test.ts']);
+  });
+
+  it('returns plain code-unit order of the full path, not traversal order', () => {
+    const root = makeTree({ 'a/x.test.ts': '', 'a-b/x.test.ts': '' });
+    expect(discoverTests(root)).toEqual(['a-b/x.test.ts', 'a/x.test.ts']);
+  });
 });
 
 describe('detectRunner', () => {
@@ -2118,6 +2161,14 @@ describe('detectRunner', () => {
 
   it('falls back to a config file', () => {
     expect(detectRunner(makeTree({ 'package.json': '{}', 'jest.config.js': '' }))).toBe('jest');
+  });
+
+  it('reports unknown for a root with no package.json and no config', () => {
+    expect(detectRunner(makeTree())).toBe('unknown');
+  });
+
+  it('detects vitest from a config file when package.json lists no dependencies', () => {
+    expect(detectRunner(makeTree({ 'package.json': '{}', 'vitest.config.ts': '' }))).toBe('vitest');
   });
 
   it('reports unknown when nothing identifies a runner', () => {
@@ -2137,11 +2188,30 @@ Expected: FAIL. Cannot import `../src/discover.ts`.
 Create `src/discover.ts`:
 
 ```ts
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { type Dirent, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { relPosix } from './paths.ts';
 
-export const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.next', '.turbo', '.cache', 'out', 'fixtures']);
+/**
+ * Directory names skipped at any depth and case-sensitively, so a source directory named `build` or `out` is skipped too.
+ * `.worktrees` and `.claude` hold nested git worktrees, which would otherwise double-count every test.
+ */
+export const IGNORED_DIRS = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  'coverage',
+  '.next',
+  '.turbo',
+  '.cache',
+  'out',
+  'fixtures',
+  '.worktrees',
+  '.claude',
+  '.venv',
+  'vendor',
+]);
 
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const CODE_FILE = /\.[cm]?[jt]sx?$/;
@@ -2152,10 +2222,26 @@ export const isTestPath = (rel: string): boolean => TEST_FILE.test(rel) || (/(^|
 /** Test helpers and fixtures are not the code a test protects, so they never count as a test's subject. */
 export const isSupportPath = (rel: string): boolean => SUPPORT_DIR.test(rel);
 
+const UNREADABLE = new Set(['ENOENT', 'EACCES', 'EPERM']);
+
+/** List a directory, or nothing when it is missing or not permitted; any other error still throws. */
+export function readEntries(dir: string): Dirent[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true });
+  } catch (error) {
+    if (UNREADABLE.has((error as NodeJS.ErrnoException).code ?? '')) return [];
+    throw error;
+  }
+}
+
 const byName = (a: { name: string }, b: { name: string }): number => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
+/**
+ * Visit every regular file under root. Symbolic links and junctions are intentionally not followed (this prevents loops;
+ * a symlinked test file or directory is therefore not audited), and unreadable directories are skipped.
+ */
 export function walk(root: string, visit: (absolute: string, rel: string) => void, dir = root): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true }).sort(byName)) {
+  for (const entry of readEntries(dir).sort(byName)) {
     const absolute = join(dir, entry.name);
     if (entry.isDirectory()) {
       if (!IGNORED_DIRS.has(entry.name)) walk(root, visit, absolute);
@@ -2185,7 +2271,13 @@ export function detectRunner(root: string): Runner {
       // An unreadable package.json falls through to the config-file check.
     }
   }
-  const names = readdirSync(root);
+  let names: string[];
+  try {
+    names = readdirSync(root);
+  } catch (error) {
+    if (!UNREADABLE.has((error as NodeJS.ErrnoException).code ?? '')) throw error;
+    names = [];
+  }
   if (names.some(name => /^vitest\.config\./.test(name))) return 'vitest';
   if (names.some(name => /^jest\.config\./.test(name))) return 'jest';
   return 'unknown';
@@ -2196,7 +2288,7 @@ export function detectRunner(root: string): Runner {
 
 Run: `npx vitest run tests/discover.test.ts`
 
-Expected: PASS, 7 tests.
+Expected: PASS, 13 tests.
 
 Run: `npm run typecheck`
 
@@ -2230,6 +2322,8 @@ import { openParseSession, type ParseSession } from '../../src/parse.ts';
 
 let session: ParseSession | null = null;
 
+// This module-level session relies on vitest's per-file isolation: every test file gets a fresh copy of this module,
+// so each file starts its own session and this afterAll closes it. Turning isolation off would share one session.
 afterAll(() => {
   session?.close();
   session = null;
@@ -2245,8 +2339,9 @@ export function parseTestFile(fileName: string, text: string): ReturnType<ParseS
 Create `tests/parse.test.ts`:
 
 ```ts
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseTags, resolveSubjects } from '../src/parse.ts';
+import { declaredSubjects, openParseSession, parseTags, resolveSubjects } from '../src/parse.ts';
 import { parseTestFile } from './helpers/parse.ts';
 import { makeTree } from './helpers/tree.ts';
 
@@ -2324,10 +2419,28 @@ describe('parseTestFile', () => {
   });
 
   it('reports 1-based line numbers, including after non-ASCII text', () => {
-    const lines = parseTestFile('a.test.ts', "// héllo — ✓\nit('first', () => {});\n\nit('second', () => {});\n");
+    // Each padded line is far longer than any shift a byte-versus-character mix-up could cause on a short line.
+    const pad = `// ${'é—✓🙂'.repeat(60)}`;
+    const lines = parseTestFile('a.test.ts', `${pad}\n${pad}\n${pad}\nit('first', () => {});\n${pad}\n\nit('second', () => {});\n`);
     expect(lines.tests.map(test => [test.name, test.line])).toEqual([
-      ['first', 2],
-      ['second', 4],
+      ['first', 4],
+      ['second', 7],
+    ]);
+  });
+
+  it('reports the right lines in a CRLF source', () => {
+    const lines = parseTestFile('a.test.ts', "it('first', () => {});\r\n\r\nit('second', () => {});\r\n");
+    expect(lines.tests.map(test => [test.name, test.line])).toEqual([
+      ['first', 1],
+      ['second', 3],
+    ]);
+  });
+
+  it('parses a file that starts with a byte order mark', () => {
+    const parsed = parseTestFile('a.test.ts', "﻿it('first', () => {});\nit('second', () => {});");
+    expect(parsed.tests.map(test => [test.name, test.line])).toEqual([
+      ['first', 1],
+      ['second', 2],
     ]);
   });
 
@@ -2348,11 +2461,149 @@ describe('parseTestFile imports', () => {
     const parsed = parseTestFile('a.test.ts', source);
     expect(parsed.imports).toEqual(['./c.ts', './d.ts', './e.ts']);
   });
+
+  it('collects require and dynamic import specifiers but not mocked modules', () => {
+    const source = [
+      "const a = require('./a.cjs');",
+      "const b = await import('./b.js');",
+      "vi.mock('./mocked.ts');",
+      "jest.mock('./also-mocked.ts', () => ({}));",
+      'const c = require(name);',
+      'const d = await import(name);',
+    ].join('\n');
+    expect(parseTestFile('a.test.ts', source).imports).toEqual(['./a.cjs', './b.js']);
+  });
+});
+
+describe('parseTestFile test and suite forms', () => {
+  it('counts curried, tagged-template and line-split forms once each', () => {
+    const source = [
+      "it.each([1, 2])('each %s', value => {});",
+      "it.skipIf(true)('skip if', () => {});",
+      "it.runIf(false)('run if', () => {});",
+      "test.for([1])('for %s', value => {});",
+      "it.each`a | b\n${1} | ${2}`('tagged %s', () => {});",
+      "it\n  .skip('split over lines', () => {});",
+      "it.concurrent.each([1])('concurrent each', () => {});",
+      "it.sequential('sequential', () => {});",
+      "it.todo('not written');",
+      "describe.each([1])('suite %s', () => {});",
+      "describe\n  .skip('split suite', () => {});",
+    ].join('\n');
+    const parsed = parseTestFile('forms.test.ts', source);
+    expect(parsed.tests.map(test => test.name)).toEqual(['each %s', 'skip if', 'run if', 'for %s', 'tagged %s', 'split over lines', 'concurrent each', 'sequential', 'not written']);
+    expect(parsed.tests.map(test => test.todo)).toEqual([false, false, false, false, false, false, false, false, true]);
+    expect(parsed.titles.map(title => title.text)).toEqual([...parsed.tests.map(test => test.name), 'suite %s', 'split suite']);
+  });
+
+  it('does not count a one-argument call that only builds a curried test', () => {
+    const parsed = parseTestFile('forms.test.ts', "it.each([1, 2]);\nit.skipIf(true);\ndescribe.each([1]);");
+    expect(parsed.tests).toEqual([]);
+    expect(parsed.titles).toEqual([]);
+  });
+});
+
+describe('parseTestFile assertions and matchers', () => {
+  it('counts expect.soft and expect.poll but not expect.assertions', () => {
+    const source = [
+      "it('a', async () => {",
+      '  expect.assertions(2);',
+      '  expect.soft(a).toBe(1);',
+      '  await expect.poll(() => b).toBe(2);',
+      '  expect.soft(c).not.toBeNull();',
+      '});',
+    ].join('\n');
+    const parsed = parseTestFile('a.test.ts', source);
+    expect(parsed.assertions).toBe(3);
+    expect(parsed.tests[0]?.assertions).toBe(3);
+  });
+
+  it('recognises every snapshot matcher', () => {
+    const matchers = ['toMatchSnapshot', 'toMatchInlineSnapshot', 'toMatchFileSnapshot', 'toThrowErrorMatchingSnapshot', 'toThrowErrorMatchingInlineSnapshot'];
+    const source = `it('a', () => {\n${matchers.map(matcher => `  expect(x).${matcher}();`).join('\n')}\n});`;
+    expect(parseTestFile('a.test.ts', source).snapshotAssertions).toBe(matchers.length);
+  });
+
+  it('recognises every mock matcher, old and new', () => {
+    const matchers = [
+      'toHaveBeenCalled',
+      'toHaveBeenCalledWith',
+      'toHaveBeenCalledTimes',
+      'toHaveBeenLastCalledWith',
+      'toHaveBeenNthCalledWith',
+      'toBeCalled',
+      'toBeCalledWith',
+      'toBeCalledTimes',
+      'toHaveReturned',
+      'toHaveReturnedWith',
+      'toHaveReturnedTimes',
+      'toHaveBeenCalledOnce',
+      'toHaveBeenCalledExactlyOnceWith',
+      'toHaveLastReturnedWith',
+      'toHaveNthReturnedWith',
+      'toHaveResolved',
+      'toHaveResolvedWith',
+      'toHaveLastResolvedWith',
+      'toHaveNthResolvedWith',
+      'toHaveResolvedTimes',
+      'lastCalledWith',
+      'nthCalledWith',
+    ];
+    const source = `it('a', () => {\n${matchers.map(matcher => `  expect(x).${matcher}();`).join('\n')}\n});`;
+    expect(parseTestFile('a.test.ts', source).mockAssertions).toBe(matchers.length);
+  });
+
+  it('does not count ordinary matchers as mock or snapshot assertions', () => {
+    const parsed = parseTestFile('a.test.ts', "it('a', () => {\n  expect(x).toBe(1);\n  expect(x).toHaveLength(1);\n});");
+    expect([parsed.mockAssertions, parsed.snapshotAssertions]).toEqual([0, 0]);
+  });
+});
+
+describe('parseTestFile tautologies', () => {
+  const count = (body: string): number => parseTestFile('a.test.ts', `it('a', () => {\n${body}\n});`).tautologies;
+
+  it('flags a direct comparison of an expression with itself', () => {
+    expect(count('expect(true).toBe(true);')).toBe(1);
+    expect(count('expect(value).toEqual(value);')).toBe(1);
+  });
+
+  it('does not flag a negated or resolved comparison', () => {
+    expect(count('expect(value).not.toBe(value);')).toBe(0);
+    expect(count('await expect(value).resolves.toBe(value);')).toBe(0);
+  });
+
+  it('does not flag a repeated call, which is a determinism check', () => {
+    expect(count("expect(hash('a')).toBe(hash('a'));")).toBe(0);
+  });
+});
+
+describe('parseTestFile session', () => {
+  it('parses a thousand and more distinct files in one session, across its restart', { timeout: 60_000 }, () => {
+    const session = openParseSession();
+    try {
+      for (let i = 0; i < 1200; i++) {
+        const parsed = session.parse(`f${i}.test.ts`, `import { x${i} } from './x${i}.ts';\nit('t${i}', () => {\n  expect(x${i}).toBe(${i});\n});\n`);
+        expect(parsed.imports).toEqual([`./x${i}.ts`]);
+        expect(parsed.tests.map(test => [test.name, test.line, test.assertions])).toEqual([[`t${i}`, 2, 1]]);
+      }
+    } finally {
+      session.close();
+    }
+  });
 });
 
 describe('parseTags', () => {
   it('ignores an unknown lane', () => {
     expect(parseTags('/** @lane nightly */')).toEqual({});
+  });
+
+  it('reads tags from every leading comment, line or block', () => {
+    expect(parseTags('\n// @lane edit\n/* @risk high */\n\nimport x from "y";')).toEqual({ lane: 'edit', risk: 'high' });
+  });
+
+  it('ignores tag-like text outside the leading comments', () => {
+    expect(parseTags("import x from 'y';\nconst note = 'contact @risk critical';\n")).toEqual({});
+    expect(parseTags("/** @lane merge */\nimport x from 'y';\n// @risk critical\n")).toEqual({ lane: 'merge' });
   });
 
   it('collects every @subject path', () => {
@@ -2382,9 +2633,40 @@ describe('resolveSubjects', () => {
     expect(resolveSubjects(root, 'tests/a.test.ts', ['../src/store'])).toEqual(['src/store/index.ts']);
   });
 
+  it('maps .mjs and .cjs imports to .mts and .cts sources and finds an index.mts', () => {
+    const root = makeTree({ 'src/esm.mts': '', 'src/x.cts': '', 'src/lib/index.mts': '', 'tests/a.test.ts': '' });
+    expect(resolveSubjects(root, 'tests/a.test.ts', ['../src/esm.mjs', '../src/x.cjs', '../src/lib'])).toEqual(['src/esm.mts', 'src/lib/index.mts', 'src/x.cts']);
+  });
+
+  it('never treats a non-code file as a subject', () => {
+    const root = makeTree({ 'src/data.json': '{}', 'src/style.css': '', 'tests/a.test.ts': '' });
+    expect(resolveSubjects(root, 'tests/a.test.ts', ['../src/data.json', '../src/style.css'])).toEqual([]);
+  });
+
   it('skips test files, helpers and unresolved paths', () => {
     const root = makeTree({ 'src/a.test.ts': '', 'tests/helpers/tree.ts': '', 'tests/a.test.ts': '' });
     expect(resolveSubjects(root, 'tests/a.test.ts', ['../src/a.test.ts', './helpers/tree.ts', './missing.ts'])).toEqual([]);
+  });
+});
+
+describe('declaredSubjects', () => {
+  const tree = () => makeTree({ 'src/x.ts': '', 'src/y.sql': '', 'tests/b.test.ts': '', 'tests/helpers/tree.ts': '' });
+
+  it('normalises ./ and .. segments and dedupes', () => {
+    expect(declaredSubjects(tree(), ['./src/x.ts', 'src/x.ts', 'src/../src/x.ts'])).toEqual(['src/x.ts']);
+  });
+
+  it('accepts the backslash form', () => {
+    expect(declaredSubjects(tree(), ['src\\x.ts'])).toEqual(['src/x.ts']);
+  });
+
+  it('allows a non-code file such as a SQL migration, and sorts', () => {
+    expect(declaredSubjects(tree(), ['src/y.sql', 'src/x.ts'])).toEqual(['src/x.ts', 'src/y.sql']);
+  });
+
+  it('drops paths outside the root, directories, test files, helpers and missing files', () => {
+    const outside = makeTree({ 'x.ts': '' });
+    expect(declaredSubjects(tree(), ['../../x', '../x.ts', join(outside, 'x.ts'), 'src', 'tests/b.test.ts', 'tests/helpers/tree.ts', 'src/missing.ts'])).toEqual([]);
   });
 });
 ```
@@ -2401,9 +2683,9 @@ Create `src/parse.ts`:
 
 ```ts
 import { existsSync, statSync } from 'node:fs';
-import { dirname, extname, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, resolve } from 'node:path';
 import { SyntaxKind, type CallExpression, type ImportDeclaration, type Node, type PropertyAccessExpression, type SourceFile } from 'typescript/unstable/ast';
-import { isCallExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isPropertyAccessExpression, isStringLiteral } from 'typescript/unstable/ast/is';
+import { isCallExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isPropertyAccessExpression, isStringLiteral, isTaggedTemplateExpression } from 'typescript/unstable/ast/is';
 import { createVirtualFileSystem } from 'typescript/unstable/fs';
 import { API } from 'typescript/unstable/sync';
 import { isSupportPath, isTestPath } from './discover.ts';
@@ -2431,26 +2713,33 @@ export interface ParsedFile {
   tags: { lane?: LaneName; risk?: string; subjects?: string[] };
 }
 
-/** One native TypeScript process that parses many files. Call close() when done: the process outlives the script otherwise. */
+/**
+ * One native TypeScript process that parses many files. The child process does not keep Node alive and is killed
+ * when Node exits, but call close() anyway: it releases the process and its memory early, which matters in a
+ * long-lived process or when many sessions are opened.
+ */
 export interface ParseSession {
   parse(fileName: string, text: string): ParsedFile;
   close(): void;
 }
 
-const TEST_CALLEE = /^(?:it|test)(?:\.(?:only|skip|todo|concurrent|fails))?$/;
-const EACH_CALLEE = /^(?:it|test)\.each$/;
-const SUITE_CALLEE = /^describe(?:\.(?:only|skip|todo|concurrent))?$/;
+const TEST_CALLEE = /^(?:it|test)(?:\.(?:only|skip|todo|concurrent|sequential|fails|skipIf|runIf|each|for))*$/;
+const SUITE_CALLEE = /^describe(?:\.(?:only|skip|todo|concurrent|sequential|each|for|skipIf|runIf))*$/;
 const MOCK_CALLEE = /^(?:vi|jest)\.(?:mock|doMock|fn|spyOn)$/;
-const SNAPSHOT_MATCHER = /^toMatch(?:Inline|File)?Snapshot$/;
-const MOCK_MATCHER = /^(?:toHaveBeenCalled(?:With|Times)?|toHaveBeenLastCalledWith|toHaveBeenNthCalledWith|toBeCalled(?:With|Times)?|toHaveReturned(?:With|Times)?)$/;
+/** `expect(x)`, `expect.soft(x)` and `expect.poll(fn)` start an assertion; `expect.assertions(n)` does not. */
+const EXPECT_CALLEE = /^expect(?:\.(?:soft|poll))?$/;
+const SNAPSHOT_MATCHER = /^(?:toMatch(?:Inline|File)?Snapshot|toThrowErrorMatching(?:Inline)?Snapshot)$/;
+const MOCK_MATCHER = /^(?:toHaveBeen(?:Last|Nth)?Called(?:Once|With|Times|ExactlyOnceWith)?|toBeCalled(?:With|Times)?|toHave(?:Last|Nth)?(?:Returned|Resolved)(?:With|Times)?|lastCalledWith|nthCalledWith)$/;
 const IDENTITY_MATCHER = /^(?:toBe|toEqual|toStrictEqual)$/;
+/** Whitespace, block comments and line comments at the start of a file: the only place tags are read from. */
+const LEADING_COMMENTS = /^(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*)*/;
 const LANES: readonly LaneName[] = ['edit', 'merge', 'scheduled', 'release'];
 
 /** Parse only: no type information, no module resolution, no default library. */
 const COMPILER_OPTIONS = { allowJs: true, noResolve: true, noLib: true, types: [], jsx: 'preserve' };
 
 export function parseTags(text: string): ParsedFile['tags'] {
-  const head = text.slice(0, 2000);
+  const head = LEADING_COMMENTS.exec(text)?.[0] ?? '';
   const tags: ParsedFile['tags'] = {};
   const lane = head.match(/@lane\s+([a-z]+)/)?.[1];
   if (lane && (LANES as readonly string[]).includes(lane)) tags.lane = lane as LaneName;
@@ -2467,18 +2756,31 @@ function titleOf(call: CallExpression): string {
   return first ? first.getText() : '<dynamic>';
 }
 
-function isTestCall(call: CallExpression): boolean {
-  const callee = call.expression;
-  if (isCallExpression(callee)) return EACH_CALLEE.test(callee.expression.getText()); // it.each(table)('name', fn)
-  const text = callee.getText();
-  return TEST_CALLEE.test(text) && (call.arguments.length >= 2 || text.endsWith('.todo'));
+/**
+ * The dotted name a call goes through, ignoring whitespace, line breaks and the arguments of curried calls:
+ * `it\n  .skip`, `it.each(table)` and ``it.each`a | b` `` all name `it.skip` or `it.each`.
+ */
+function calleeName(node: Node): string {
+  if (isIdentifier(node)) return node.text;
+  if (isPropertyAccessExpression(node)) return `${calleeName(node.expression)}.${node.name.text}`;
+  if (isCallExpression(node)) return calleeName(node.expression);
+  if (isTaggedTemplateExpression(node)) return calleeName(node.tag);
+  return node.getText().replace(/\s+/g, '');
+}
+
+/**
+ * A test or suite declaration has a title and a body. In the curried forms `it.each(table)('name', fn)` and
+ * `it.skipIf(cond)('name', fn)` the inner call has one argument, so only the outer call counts.
+ */
+function isDeclaration(call: CallExpression, name: string): boolean {
+  return call.arguments.length >= 2 || (call.arguments.length === 1 && name.endsWith('.todo'));
 }
 
 /** The expect(...) call at the root of `expect(x).not.toBe(y)` style chains, or null. */
 function expectRoot(callee: PropertyAccessExpression): CallExpression | null {
   let node: Node = callee.expression;
   while (isPropertyAccessExpression(node)) node = node.expression;
-  if (isCallExpression(node) && isIdentifier(node.expression) && node.expression.text === 'expect') return node;
+  if (isCallExpression(node) && EXPECT_CALLEE.test(calleeName(node.expression))) return node;
   return null;
 }
 
@@ -2526,20 +2828,25 @@ function extractFacts(sourceFile: SourceFile, text: string): ParsedFile {
     if (isImportDeclaration(node) && isStringLiteral(node.moduleSpecifier) && !isTypeOnlyImport(node)) out.imports.push(node.moduleSpecifier.text);
     if (isCallExpression(node)) {
       const callee = node.expression;
-      const calleeText = callee.getText();
-      if (isTestCall(node)) {
-        const name = titleOf(node);
-        next = { name, line: lineOf(node), assertions: 0, todo: calleeText.endsWith('.todo') };
+      const name = calleeName(callee);
+      // require('x') and import('x') load code; vi.mock('x') and jest.mock('x') do not, so mocked modules are not imports.
+      const specifier = node.arguments[0];
+      if (specifier && isStringLiteral(specifier) && (callee.kind === SyntaxKind.ImportKeyword || (isIdentifier(callee) && callee.text === 'require'))) {
+        out.imports.push(specifier.text);
+      }
+      if (TEST_CALLEE.test(name) && isDeclaration(node, name)) {
+        const title = titleOf(node);
+        next = { name: title, line: lineOf(node), assertions: 0, todo: name.endsWith('.todo') };
         out.tests.push(next);
-        out.titles.push({ text: name, line: next.line });
-      } else if (SUITE_CALLEE.test(calleeText)) {
+        out.titles.push({ text: title, line: next.line });
+      } else if (SUITE_CALLEE.test(name) && isDeclaration(node, name)) {
         out.titles.push({ text: titleOf(node), line: lineOf(node) });
-      } else if (MOCK_CALLEE.test(calleeText)) {
+      } else if (MOCK_CALLEE.test(name)) {
         out.mockCalls++;
-      } else if (isIdentifier(callee) && callee.text === 'expect') {
+      } else if (EXPECT_CALLEE.test(name)) {
         out.assertions++;
         if (current) current.assertions++;
-      } else if (/^assert(?:\.\w+)?$/.test(calleeText)) {
+      } else if (/^assert(?:\.\w+)?$/.test(name)) {
         out.assertions++;
         if (current) current.assertions++;
       } else if (isPropertyAccessExpression(callee)) {
@@ -2548,8 +2855,10 @@ function extractFacts(sourceFile: SourceFile, text: string): ParsedFile {
           const matcher = callee.name.text;
           if (SNAPSHOT_MATCHER.test(matcher)) out.snapshotAssertions++;
           if (MOCK_MATCHER.test(matcher)) out.mockAssertions++;
-          if (IDENTITY_MATCHER.test(matcher) && root.arguments.length === 1 && node.arguments.length === 1) {
-            if (root.arguments[0].getText() === node.arguments[0].getText()) out.tautologies++;
+          // Only `expect(x).toBe(x)` itself: not `.not` or `.resolves`, and not a repeated call such as hash('a'), which checks determinism.
+          if (IDENTITY_MATCHER.test(matcher) && isCallExpression(callee.expression) && root.arguments.length === 1 && node.arguments.length === 1) {
+            const actual = root.arguments[0].getText();
+            if (actual === node.arguments[0].getText() && !actual.includes('(')) out.tautologies++;
           }
         }
       }
@@ -2563,34 +2872,69 @@ function extractFacts(sourceFile: SourceFile, text: string): ParsedFile {
   return out;
 }
 
-/** Open a parse session. Files are fed to the TypeScript 7 API through an in-memory filesystem, one tiny project per file. */
-export function openParseSession(): ParseSession {
+type VirtualFs = ReturnType<typeof createVirtualFileSystem>;
+type WritableFs = VirtualFs & Required<Pick<VirtualFs, 'writeFile' | 'removeFile'>>;
+
+/** The native process is restarted after this many files, so its memory stays bounded without relying on undocumented native cleanup. */
+const RESTART_EVERY = 1000;
+
+function startNative(): { fs: WritableFs; api: API } {
   const fs = createVirtualFileSystem({ '/agent-tests/session.json': '{}' });
-  const api = new API({ cwd: '/agent-tests', fs });
+  if (typeof fs.writeFile !== 'function' || typeof fs.removeFile !== 'function') {
+    throw new Error('The TypeScript virtual filesystem no longer offers writeFile and removeFile; src/parse.ts needs updating for this TypeScript version');
+  }
+  return { fs: fs as WritableFs, api: new API({ cwd: '/agent-tests', fs }) };
+}
+
+/**
+ * Open a parse session. Files are fed to the TypeScript 7 API through an in-memory filesystem, one tiny project per file.
+ * Each file gets its own directory: reusing a path after its project was closed returned the old content. The previous
+ * project is closed and its files removed on the next call, so the native side holds one project at a time.
+ */
+export function openParseSession(): ParseSession {
+  let native = startNative();
   let count = 0;
+  let previous: { config: string; source: string } | null = null;
   return {
-    parse(fileName, text) {
+    parse(fileName, rawText) {
+      // The native side drops a leading byte order mark from the text but node positions still count it, so drop it here too.
+      const text = rawText.charCodeAt(0) === 0xfeff ? rawText.slice(1) : rawText;
+      if (count >= RESTART_EVERY) {
+        native.api.close();
+        native = startNative();
+        count = 0;
+        previous = null;
+      }
+      const { api, fs } = native;
       const dir = `/agent-tests/${count++}`;
       const base = `source${extname(fileName) || '.ts'}`; // the extension picks TS, TSX, JS or JSX parsing
+      const source = `${dir}/${base}`;
       const config = `${dir}/tsconfig.json`;
-      fs.writeFile?.(`${dir}/${base}`, text);
-      fs.writeFile?.(config, JSON.stringify({ compilerOptions: COMPILER_OPTIONS, files: [base] }));
-      const snapshot = api.updateSnapshot({ openProject: config });
+      fs.writeFile(source, text);
+      fs.writeFile(config, JSON.stringify({ compilerOptions: COMPILER_OPTIONS, files: [base] }));
+      const stale = previous;
+      previous = { config, source };
+      const snapshot = api.updateSnapshot({ openProjects: [config], closeProjects: stale ? [stale.config] : [] });
       try {
-        const sourceFile = snapshot.getProject(config)?.program.getSourceFile(`${dir}/${base}`);
+        const sourceFile = snapshot.getProject(config)?.program.getSourceFile(source);
         if (!sourceFile) throw new Error(`TypeScript could not parse ${fileName}`);
         return extractFacts(sourceFile, text);
       } finally {
         snapshot.dispose();
+        if (stale) {
+          fs.removeFile(stale.source);
+          fs.removeFile(stale.config);
+        }
       }
     },
     close() {
-      api.close();
+      native.api.close();
     },
   };
 }
 
-const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'];
+const CODE_FILE = /\.[cm]?[jt]sx?$/;
 
 /** Repo-relative non-test source files a test file imports through relative specifiers. */
 export function resolveSubjects(root: string, testRel: string, imports: string[]): string[] {
@@ -2601,10 +2945,35 @@ export function resolveSubjects(root: string, testRel: string, imports: string[]
     const base = resolve(dir, spec);
     const stripped = base.replace(/\.[cm]?[jt]sx?$/, '');
     const candidates = [base, ...EXTENSIONS.map(ext => stripped + ext), ...EXTENSIONS.map(ext => resolve(base, `index${ext}`))];
-    const hit = candidates.find(candidate => existsSync(candidate) && statSync(candidate).isFile());
+    const hit = candidates.find(candidate => CODE_FILE.test(candidate) && existsSync(candidate) && statSync(candidate).isFile());
     if (!hit) continue;
     const rel = relPosix(root, hit);
     if (rel.startsWith('..') || isTestPath(rel) || isSupportPath(rel)) continue;
+    found.add(rel);
+  }
+  return [...found].sort();
+}
+
+const isRegularFile = (path: string): boolean => {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Repo-relative files a test declares with `@subject`. Paths are normalised (backslashes, `./`, `..` segments) and kept only
+ * when they name a regular file inside the root that is neither a test nor test support code. Any file type is allowed,
+ * because a SQL migration or a JSON config can be a deliberate subject.
+ */
+export function declaredSubjects(root: string, declared: string[]): string[] {
+  const found = new Set<string>();
+  for (const path of declared) {
+    const absolute = resolve(root, path.replaceAll('\\', '/'));
+    const rel = relPosix(root, absolute);
+    if (rel === '' || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) continue;
+    if (!isRegularFile(absolute) || isTestPath(rel) || isSupportPath(rel)) continue;
     found.add(rel);
   }
   return [...found].sort();
@@ -2615,7 +2984,7 @@ export function resolveSubjects(root: string, testRel: string, imports: string[]
 
 Run: `npx vitest run tests/parse.test.ts`
 
-Expected: PASS, 15 tests.
+Expected: PASS, 36 tests.
 
 Run: `npm run typecheck`
 
@@ -2624,7 +2993,7 @@ Expected: exit code 0 and no `error TS` lines (npm prints a two-line banner firs
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/parse.ts tests/parse.test.ts
+git add src/parse.ts tests/parse.test.ts tests/helpers/parse.ts
 git commit -m "feat: parse test files into assertion, mock, tag and subject facts"
 ```
 
@@ -2660,6 +3029,111 @@ describe('detectShims', () => {
   it('does not flag ordinary names', () => {
     const parsed = parseTestFile('tests/store.test.ts', "describe('store', () => { it('saves a value', () => {}); });");
     expect(detectShims('tests/store.test.ts', parsed)).toEqual([]);
+  });
+});
+
+describe('detectShims tuning', () => {
+  const shims = (file: string, source: string) => detectShims(file, parseTestFile(file, source));
+  const evidenceOf = (findings: Array<{ rule: string; evidence?: string }>, rule: string): Array<string | undefined> =>
+    findings.filter(finding => finding.rule === rule).map(finding => finding.evidence);
+  const titled = (title: string): string => `describe(${JSON.stringify(title)}, () => { it('works', () => {}); });`;
+
+  it('attributes each rule to the title, the path or the import that produced it', () => {
+    const found = shims(
+      'tests/legacy/compat.test.ts',
+      "import { x } from '../../src/legacy/x.ts';\ndescribe('legacy format', () => { it('falls back to defaults', () => {}); });",
+    );
+    expect(evidenceOf(found, 'shim.title-marker')).toEqual(['legacy format']);
+    expect(evidenceOf(found, 'shim.path-marker')).toEqual(['tests/legacy/compat.test.ts']);
+    expect(evidenceOf(found, 'shim.legacy-import')).toEqual(['../../src/legacy/x.ts']);
+    expect(found.find(finding => finding.rule === 'shim.title-marker')?.line).toBe(2);
+  });
+
+  it('matches inflected title markers', () => {
+    for (const title of [
+      'shim for old runtimes',
+      'shims the clock',
+      'loads the polyfill',
+      'polyfills fetch',
+      'deprecated option',
+      'deprecates the flag',
+      'deprecate the flag',
+      'deprecation warning',
+      'migrates from v1',
+      'migrated from v1',
+      'migrating from v1',
+      'migration from v1',
+      'uses a fallback',
+      'uses fallbacks',
+      'fall-back path',
+      'backwards compatible output',
+      'back-compat mode',
+      'back-compatibility',
+      'compat layer',
+      'compatibility layer',
+      'old format input',
+      'legacy input',
+    ]) {
+      const found = shims('tests/a.test.ts', titled(title));
+      expect(evidenceOf(found, 'shim.title-marker'), title).toEqual([title]);
+    }
+  });
+
+  it('stays quiet on near misses', () => {
+    for (const title of ['incompatible types', 'shimmer effect', 'legacies of the past', 'falls back to the default', 'compatible values']) {
+      expect(shims('tests/a.test.ts', titled(title)), title).toEqual([]);
+    }
+  });
+
+  it('caps title evidence at 160 characters', () => {
+    const title = `legacy ${'x'.repeat(300)}`;
+    const found = shims('tests/a.test.ts', titled(title));
+    expect(evidenceOf(found, 'shim.title-marker')).toEqual([title.slice(0, 160)]);
+  });
+
+  it('matches fallback in a path but not look-alike words', () => {
+    expect(evidenceOf(shims('tests/fallback/a.test.ts', titled('works')), 'shim.path-marker')).toEqual(['tests/fallback/a.test.ts']);
+    expect(shims('tests/incompatible.test.ts', titled('works'))).toEqual([]);
+    expect(shims('tests/shimmer.test.ts', titled('works'))).toEqual([]);
+    expect(shims('tests/legacies.test.ts', titled('works'))).toEqual([]);
+  });
+
+  it('accepts relative and alias import specifiers with a marker segment', () => {
+    const source = [
+      "import a from './legacy/a.ts';",
+      "import b from '@/legacy/b.ts';",
+      "import c from '~/compat/c.ts';",
+      "import d from '#shims/d.ts';",
+      "import e from 'src/deprecated/e.ts';",
+      "import f from '../fallback/f.ts';",
+    ].join('\n');
+    const found = shims('tests/a.test.ts', source);
+    expect(evidenceOf(found, 'shim.legacy-import')).toEqual([
+      './legacy/a.ts',
+      '@/legacy/b.ts',
+      '~/compat/c.ts',
+      '#shims/d.ts',
+      'src/deprecated/e.ts',
+      '../fallback/f.ts',
+    ]);
+    expect(found.every(finding => finding.rule === 'shim.legacy-import')).toBe(true);
+  });
+
+  it('excludes ordinary imports and package names with a marker', () => {
+    const source = [
+      "import a from './store.ts';",
+      "import b from '@/store.ts';",
+      "import c from 'core-js/shim';",
+      "import d from '@babel/polyfill';",
+      "import e from 'legacy-package';",
+      "import f from 'node:fs';",
+    ].join('\n');
+    expect(shims('tests/a.test.ts', source)).toEqual([]);
+  });
+
+  it('reports a repeated import specifier once', () => {
+    const source = "import a from './legacy/a.ts';\nimport b from './legacy/a.ts';\nimport './legacy/a.ts';";
+    expect(evidenceOf(shims('tests/a.test.ts', source), 'shim.legacy-import')).toEqual(['./legacy/a.ts']);
   });
 });
 ```
@@ -2711,6 +3185,163 @@ describe('detectWorktreeHazards', () => {
     expect(detectWorktreeHazards('t.test.ts', ['// uses localhost:3000 in prod', ' * homedir() is shared'])).toEqual([]);
   });
 });
+
+describe('detectWorktreeHazards tuning', () => {
+  const run = (...text: string[]) => detectWorktreeHazards('t.test.ts', text);
+
+  describe('shared-tmp', () => {
+    it('flags a fixed /tmp literal', () => {
+      expect(rules(run("const log = '/tmp/server-test.log';"))).toEqual(['worktree.shared-tmp']);
+      expect(rules(run('const log = `/tmp/fixed.log`;'))).toEqual(['worktree.shared-tmp']);
+    });
+
+    it('accepts per-run unique /tmp paths', () => {
+      expect(run("const a = '/tmp/' + id;")).toEqual([]);
+      expect(run('const b = `/tmp/${id}`;')).toEqual([]);
+      expect(run("const c = '/tmp/' + randomUUID();")).toEqual([]);
+    });
+
+    it('accepts a mkdtemp prefix on the previous line or ending in a separator', () => {
+      expect(run('const dir = mkdtempSync(', "  join(tmpdir(), 'x-'),", ');')).toEqual([]);
+      expect(run('const dir = mkdtempSync(', "  join(tmpdir(), 'x'),", ');')).toEqual([]);
+      expect(run("const dir = join(tmpdir(), 'run_');")).toEqual([]);
+      expect(run("const dir = join(tmpdir(), 'x-');")).toEqual([]);
+    });
+
+    it('still flags a fixed name under tmpdir()', () => {
+      expect(rules(run("const dir = join(tmpdir(), 'shared');"))).toEqual(['worktree.shared-tmp']);
+    });
+  });
+
+  describe('fixed-db-file', () => {
+    it('flags a fixed db name case-insensitively', () => {
+      expect(rules(run("const db = 'App.SQLite';"))).toEqual(['worktree.fixed-db-file']);
+      expect(rules(run("const db = 'data/app.db';"))).toEqual(['worktree.fixed-db-file']);
+    });
+
+    it('accepts a db inside a mkdtemp directory, a fixtures path, a bare extension and memory', () => {
+      expect(run("const db = join(await mkdtemp(tmp), 'app.sqlite');")).toEqual([]);
+      expect(run('const dir = mkdtempSync(prefix);', "const db = join(dir, 'app.sqlite');")).toEqual([]);
+      expect(run("const db = 'tests/fixtures/app.sqlite';")).toEqual([]);
+      expect(run("expect(extname(file)).toBe('.db');")).toEqual([]);
+      expect(run("const db = ':memory:';")).toEqual([]);
+    });
+  });
+
+  describe('home-dir', () => {
+    it('flags reads', () => {
+      expect(rules(run('const home = process.env.HOME;'))).toEqual(['worktree.home-dir']);
+      expect(rules(run('const home = process.env.USERPROFILE ?? x;'))).toEqual(['worktree.home-dir']);
+      expect(rules(run('if (process.env.HOME === x) {}'))).toEqual(['worktree.home-dir']);
+      expect(rules(run('const home = homedir();'))).toEqual(['worktree.home-dir']);
+    });
+
+    it('accepts assignments and deletes, the isolation fix', () => {
+      expect(run('process.env.HOME = tmp;')).toEqual([]);
+      expect(run('process.env.USERPROFILE = dir;')).toEqual([]);
+      expect(run('delete process.env.HOME;')).toEqual([]);
+    });
+  });
+
+  describe('fixed-port', () => {
+    it('flags compound names, quoted values and bracketed loopback', () => {
+      for (const line of [
+        'DB_PORT: 5432,',
+        'const TEST_PORT = 4000;',
+        'defaultPort: 8080,',
+        'redisPort: 6379,',
+        "process.env.PORT = '3000';",
+        "env: { PORT: '3000' },",
+        'port: "3000",',
+        "const url = 'http://[::1]:3000/x';",
+        'server.listen(3000);',
+      ]) {
+        expect(rules(run(line)), line).toEqual(['worktree.fixed-port']);
+      }
+    });
+
+    it('accepts port zero, variables, interpolation and look-alike names', () => {
+      for (const line of [
+        'port: 0,',
+        'server.listen(0);',
+        'server.listen(PORT);',
+        'const url = `http://localhost:${port}/x`;',
+        'report: 12345,',
+        'passport: 1234,',
+        'const viewport = 1280;',
+        'import: 12345,',
+        "const version = '1.2.3';",
+        'timeout: 5000,',
+      ]) {
+        expect(run(line), line).toEqual([]);
+      }
+    });
+  });
+
+  describe('comments', () => {
+    it('ignores block comments, doc comments and trailing comments', () => {
+      expect(run('/* localhost:3000 */')).toEqual([]);
+      expect(run('/** listen(3000) */')).toEqual([]);
+      expect(run('const a = 1; // localhost:3000')).toEqual([]);
+      expect(run('const a = 1; /* homedir() */ const b = 2;')).toEqual([]);
+    });
+
+    it('ignores the body of a multi-line block even without a leading star', () => {
+      expect(run('/*', 'localhost:3000', 'homedir()', '*/')).toEqual([]);
+    });
+
+    it('scans code after a block comment ends', () => {
+      const found = run('/*', 'note', '*/ homedir()');
+      expect(rules(found)).toEqual(['worktree.home-dir']);
+      expect(found[0]?.line).toBe(3);
+      expect(rules(run('/* c */ const home = homedir();'))).toEqual(['worktree.home-dir']);
+    });
+
+    it('does not open a block comment from a slash-star inside a regex literal', () => {
+      const found = run("s.replace(/\\/*$/, '');", 'server.listen(3000);', 'const home = homedir();');
+      expect(found.map(finding => [finding.rule, finding.line])).toEqual([
+        ['worktree.fixed-port', 2],
+        ['worktree.home-dir', 3],
+      ]);
+    });
+
+    it('still skips a genuine multi-line block comment', () => {
+      expect(run("s.replace(/\\/*$/, '');", '/* note', 'server.listen(3000);', 'const home = homedir(); */', 'const ok = 1;')).toEqual([]);
+    });
+
+    it('does not treat a url or a glob inside a string as a comment', () => {
+      expect(rules(run("const url = 'http://localhost:3000/x';"))).toEqual(['worktree.fixed-port']);
+      expect(rules(run("const g = 'src/**/*.ts'; const h = homedir();"))).toEqual(['worktree.home-dir']);
+      expect(rules(run("const g = 'src/**/*.ts';", 'const h = homedir();'))).toEqual(['worktree.home-dir']);
+    });
+  });
+
+  describe('other negatives', () => {
+    it('accepts .gitattributes, urls containing /home/ and a plain path', () => {
+      expect(run("const a = '.gitattributes';")).toEqual([]);
+      expect(run("const u = 'https://example.com/home/index';")).toEqual([]);
+      expect(run("const p = join(root, 'src', 'a.ts');")).toEqual([]);
+    });
+  });
+
+  describe('reporting', () => {
+    it('reports one-based line numbers', () => {
+      const found = run('const a = 1;', 'const b = 2;', 'const home = homedir();');
+      expect(found.map(finding => finding.line)).toEqual([3]);
+    });
+
+    it('centres the evidence window on the match', () => {
+      const line = `const pad = '${'x'.repeat(300)}'; const home = homedir(); const tail = '${'y'.repeat(300)}';`;
+      const [finding] = run(line);
+      expect(finding?.evidence?.length).toBeLessThanOrEqual(160);
+      expect(finding?.evidence).toContain('homedir()');
+    });
+
+    it('keeps short evidence whole and trimmed', () => {
+      expect(run('    const home = homedir();')[0]?.evidence).toBe('const home = homedir();');
+    });
+  });
+});
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
@@ -2728,8 +3359,11 @@ import type { ParsedFile } from '../parse.ts';
 import type { Finding } from '../schema.ts';
 
 const TITLE_MARKER =
-  /\b(?:legacy|back(?:wards?)?[- ]?compat(?:ibility|ible)?|compat(?:ibility)?|deprecated|fall-?back|polyfill|shim|migrat(?:e|es|ion|ing) from|old[- ]format)\b/i;
-const PATH_MARKER = /(?:^|[/._-])(?:legacy|compat|deprecated|shims?|polyfills?)(?:[/._-]|$)/i;
+  /\b(?:legacy|back(?:wards?)?[- ]?compat(?:ibility|ible)?|compat(?:ibility)?|deprecat(?:ed|es|e|ion)|fall-?backs?|polyfills?|shims?|migrat(?:e|es|ed|ing|ion) from|old[- ]format)\b/i;
+const PATH_MARKER = /(?:^|[/._-])(?:legacy|compat|deprecated|shims?|polyfills?|fallbacks?)(?:[/._-]|$)/i;
+/** A specifier is project code, not a package, when it is relative or starts with a common alias. */
+const PROJECT_SPECIFIER = /^(?:\.|@\/|~\/|#|src\/)/;
+const EVIDENCE_WIDTH = 160;
 
 /** Tests that protect legacy, compatibility or fallback paths. Whether anyone still needs them is the consumers list's call. */
 export function detectShims(file: string, parsed: ParsedFile): Finding[] {
@@ -2742,7 +3376,7 @@ export function detectShims(file: string, parsed: ParsedFile): Finding[] {
         file,
         line: title.line,
         message: 'Test title names a legacy, compatibility or fallback path. Check that a consumer still needs it.',
-        evidence: title.text,
+        evidence: title.text.slice(0, EVIDENCE_WIDTH),
       });
     }
   }
@@ -2755,8 +3389,8 @@ export function detectShims(file: string, parsed: ParsedFile): Finding[] {
       evidence: file,
     });
   }
-  for (const spec of parsed.imports) {
-    if (spec.startsWith('.') && PATH_MARKER.test(spec)) {
+  for (const spec of new Set(parsed.imports)) {
+    if (PROJECT_SPECIFIER.test(spec) && PATH_MARKER.test(spec.replace(/^(?:@\/|~\/|#)/, ''))) {
       findings.push({
         category: 'shim',
         rule: 'shim.legacy-import',
@@ -2779,13 +3413,16 @@ interface Rule {
   rule: string;
   pattern: RegExp;
   message: string;
+  /** When this matches the line or the line before it, the rule stays quiet (the fix is already in place). */
   skip?: RegExp;
 }
 
 const RULES: Rule[] = [
   {
     rule: 'worktree.fixed-port',
-    pattern: /(?:\blisten\(\s*|\bport\s*[:=]\s*|localhost:|127\.0\.0\.1:|0\.0\.0\.0:)(\d{4,5})\b/i,
+    // A name that is `port` or ends in `_PORT` or `Port` (not report, passport, viewport), a loopback host, or a listen call, then a 4-5 digit literal.
+    pattern:
+      /(?:\blisten\(\s*|(?:\b(?:port|PORT|Port)|[A-Za-z0-9]Port|_(?:port|PORT))['"`]?\s*(?::|=(?!=))\s*['"`]?|localhost:|127\.0\.0\.1:|0\.0\.0\.0:|\[::1\]:)(\d{4,5})\b/,
     message: 'Hard-coded port: two worktrees running tests at once collide. Use port 0 or a per-run port.',
   },
   {
@@ -2795,7 +3432,8 @@ const RULES: Rule[] = [
   },
   {
     rule: 'worktree.shared-tmp',
-    pattern: /['"`]\/tmp\/[^'"`]*['"`]|tmpdir\(\)\s*,\s*['"`][^'"`$]+['"`]\s*\)/,
+    // A fixed /tmp literal (not `'/tmp/' + id` or a template with ${}), or a fixed name under tmpdir() that is not a mkdtemp prefix ending in - or _.
+    pattern: /['"`]\/tmp\/[^'"`$]*['"`](?!\s*\+)|tmpdir\(\)\s*,\s*['"`][^'"`$]+(?<![-_])['"`]\s*\)/,
     skip: /mkdtemp/,
     message: 'Fixed temp path shared by every worktree and every parallel run. Use mkdtemp for a unique directory.',
   },
@@ -2806,29 +3444,103 @@ const RULES: Rule[] = [
   },
   {
     rule: 'worktree.home-dir',
-    pattern: /\bhomedir\(\)|process\.env\.(?:HOME|USERPROFILE)\b/,
+    // Reads only: assigning or deleting HOME and USERPROFILE is how a test isolates itself.
+    pattern: /\bhomedir\(\)|(?<!delete\s+)process\.env\.(?:HOME|USERPROFILE)\b(?!\s*(?:\?\?|\|\||&&)?=(?!=))/,
     message: 'State under the user home directory is shared by every worktree. Use a per-run temp directory.',
   },
   {
     rule: 'worktree.fixed-db-file',
-    pattern: /['"`][^'"`\s$]*\.(?:sqlite3?|db)['"`]/,
+    // A named database file outside fixtures/, not inside a mkdtemp directory; a bare '.db' extension is not a file name.
+    pattern: /['"`](?![^'"`]*fixtures[/\\])[^'"`\s$]*[^'"`\s$/\\.]\.(?:sqlite3?|db)['"`]/i,
+    skip: /mkdtemp/,
     message: 'Fixed database file name: concurrent worktrees share or clobber it unless the path is unique per run.',
   },
 ];
 
+const EVIDENCE_WIDTH = 160;
+
+/**
+ * Remove comments from one line, keeping string contents (the hazards live in strings).
+ * `inBlock` says a block comment is still open from an earlier line; the result says whether one is open after this line.
+ */
+function stripComments(line: string, inBlock: boolean): { code: string; inBlock: boolean } {
+  let code = '';
+  let quote = '';
+  let index = 0;
+  while (index < line.length) {
+    if (inBlock) {
+      const end = line.indexOf('*/', index);
+      if (end === -1) return { code, inBlock: true };
+      index = end + 2;
+      inBlock = false;
+      code += ' ';
+      continue;
+    }
+    const char = line.charAt(index);
+    if (quote) {
+      code += char;
+      if (char === '\\' && index + 1 < line.length) {
+        code += line.charAt(index + 1);
+        index += 2;
+        continue;
+      }
+      if (char === quote) quote = '';
+      index += 1;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      code += char;
+      index += 1;
+      continue;
+    }
+    // A backslash before the slash means this is an escaped slash in a regex literal, not a comment opener.
+    if (line.startsWith('/*', index) && line.charAt(index - 1) !== '\\') {
+      inBlock = true;
+      index += 2;
+      continue;
+    }
+    if (line.startsWith('//', index) && (index === 0 || /\s/.test(line.charAt(index - 1)))) break;
+    code += char;
+    index += 1;
+  }
+  return { code, inBlock };
+}
+
+/** Up to EVIDENCE_WIDTH characters of the line, centred on the match so a hit far along a long line stays visible. */
+function evidenceWindow(code: string, match: RegExpExecArray): string {
+  if (code.length <= EVIDENCE_WIDTH) return code;
+  const middle = match.index + Math.floor(match[0].length / 2);
+  const start = Math.max(0, Math.min(middle - EVIDENCE_WIDTH / 2, code.length - EVIDENCE_WIDTH));
+  return code.slice(start, start + EVIDENCE_WIDTH);
+}
+
 /** Hazards that make a test pass alone in one checkout and fail beside a second worktree. */
 export function detectWorktreeHazards(file: string, lines: string[]): Finding[] {
   const findings: Finding[] = [];
-  lines.forEach((text, index) => {
+  let inBlock = false;
+  let previous = '';
+  for (const [index, text] of lines.entries()) {
     const trimmed = text.trim();
-    if (trimmed.startsWith('//') || trimmed.startsWith('*')) return;
-    for (const rule of RULES) {
-      if (rule.skip?.test(text)) continue;
-      if (rule.pattern.test(text)) {
-        findings.push({ category: 'worktree', rule: rule.rule, file, line: index + 1, message: rule.message, evidence: trimmed.slice(0, 160) });
+    // A doc-comment body line (` * text`) whose opening comment is not among the lines we were given; `*/ code` closes a comment.
+    if (!inBlock && /^\*(?:\s|$)/.test(trimmed)) {
+      previous = '';
+      continue;
+    }
+    const stripped = stripComments(text, inBlock || trimmed.startsWith('*/'));
+    inBlock = stripped.inBlock;
+    const code = stripped.code.trim();
+    if (code) {
+      for (const rule of RULES) {
+        if (rule.skip && (rule.skip.test(code) || rule.skip.test(previous))) continue;
+        const match = rule.pattern.exec(code);
+        if (match) {
+          findings.push({ category: 'worktree', rule: rule.rule, file, line: index + 1, message: rule.message, evidence: evidenceWindow(code, match) });
+        }
       }
     }
-  });
+    previous = code;
+  }
   return findings;
 }
 ```
@@ -2837,7 +3549,7 @@ export function detectWorktreeHazards(file: string, lines: string[]): Finding[] 
 
 Run: `npx vitest run tests/detectors/shims.test.ts tests/detectors/worktree.test.ts`
 
-Expected: PASS, 2 plus 3 tests.
+Expected: PASS, 10 plus 23 tests.
 
 Run: `npm run typecheck`
 
@@ -2902,9 +3614,9 @@ describe('detectRedundancy', () => {
   it('flags a sweep repeated across files but not a short or unique one', () => {
     const sweep = 'for (let seed = 1; seed <= 30; seed++) {}';
     const { findings } = detectRedundancy([
-      file('tests/a.test.ts', [], `${sweep}\nfor (let i = 0; i < 3; i++) {}`),
-      file('tests/b.test.ts', [], sweep),
-      file('tests/c.test.ts', [], 'for (let seed = 1; seed <= 50; seed++) {}'),
+      file('tests/a.test.ts', ['src/s.ts'], `${sweep}\nfor (let i = 0; i < 3; i++) {}`),
+      file('tests/b.test.ts', ['src/s.ts'], sweep),
+      file('tests/c.test.ts', ['src/s.ts'], 'for (let seed = 1; seed <= 50; seed++) {}'),
     ]);
     expect(findings.filter(finding => finding.rule === 'redundancy.repeated-sweep').map(finding => finding.file)).toEqual(['tests/a.test.ts', 'tests/b.test.ts']);
   });
@@ -2922,6 +3634,139 @@ describe('detectRedundancy', () => {
     expect(layerOf('tests/store.integration.test.ts')).toBe('integration');
     expect(layerOf('tests/api.contract.test.ts')).toBe('contract');
     expect(layerOf('tests/store.test.ts')).toBe('unit');
+  });
+
+  it('matches layer words on boundaries only', () => {
+    expect(layerOf('tests/integration-helpers/foo.test.ts')).toBe('unit');
+    expect(layerOf('tests/disintegration.test.ts')).toBe('unit');
+    expect(layerOf('tests/a.integration.test.ts')).toBe('integration');
+    expect(layerOf('tests/integration/a.test.ts')).toBe('integration');
+    expect(layerOf('tests/integrations/a.test.ts')).toBe('integration');
+    expect(layerOf('tests/integration-tests/a.test.ts')).toBe('integration');
+    expect(layerOf('tests/store-integration.test.ts')).toBe('integration');
+    expect(layerOf('tests/contracts/a.test.ts')).toBe('contract');
+    expect(layerOf('tests/subcontract.test.ts')).toBe('unit');
+    expect(layerOf('tests/e2e/a.test.ts')).toBe('e2e');
+    expect(layerOf('tests/end-to-end/a.test.ts')).toBe('e2e');
+  });
+
+  describe('repeated sweeps', () => {
+    const sweep = 'for (let seed = 1; seed <= 30; seed++) {}';
+    const sweepFindings = (inputs: ReturnType<typeof file>[]) => detectRedundancy(inputs).findings.filter(finding => finding.rule === 'redundancy.repeated-sweep');
+
+    it('ignores the same sweep in files with unrelated subjects', () => {
+      expect(sweepFindings([file('tests/a.test.ts', ['src/a.ts'], sweep), file('tests/b.test.ts', ['src/b.ts'], sweep)])).toEqual([]);
+    });
+
+    it('ignores generic loop variables however long the loop', () => {
+      const generic = 'for (let i = 0; i < 100; i++) {}';
+      expect(sweepFindings([file('tests/a.test.ts', ['src/s.ts'], generic), file('tests/b.test.ts', ['src/s.ts'], generic)])).toEqual([]);
+    });
+
+    it('flags a seed sweep that appears twice in one file', () => {
+      const findings = sweepFindings([file('tests/a.test.ts', [], `${sweep}\n\n${sweep}`)]);
+      expect(findings.map(finding => [finding.file, finding.line])).toEqual([['tests/a.test.ts', 1], ['tests/a.test.ts', 3]]);
+    });
+
+    it('does not count a commented-out sweep', () => {
+      const text = `// ${sweep}\n * ${sweep}`;
+      expect(sweepFindings([file('tests/a.test.ts', ['src/s.ts'], text), file('tests/b.test.ts', ['src/s.ts'], sweep)])).toEqual([]);
+    });
+
+    it('flags a sweep in two files that share a focused subject, with line numbers', () => {
+      const findings = sweepFindings([file('tests/a.test.ts', ['src/s.ts'], `\n\n  ${sweep}`), file('tests/b.test.ts', ['src/s.ts'], `\n${sweep}`)]);
+      expect(findings.map(finding => [finding.file, finding.line])).toEqual([['tests/a.test.ts', 3], ['tests/b.test.ts', 2]]);
+    });
+
+    it('accepts loop variables that start with a sweep word and rejects look-alikes', () => {
+      const counts = (name: string) => {
+        const loop = `for (let ${name} = 1; ${name} <= 30; ${name}++) {}`;
+        return sweepFindings([file('tests/a.test.ts', ['src/s.ts'], loop), file('tests/b.test.ts', ['src/s.ts'], loop)]).length === 2;
+      };
+      for (const name of ['seed', 'seedValue', 'trial', 'run', 'caseIndex', 'iteration', 'round2', 'sampleIdx']) expect(counts(name), name).toBe(true);
+      for (const name of ['ground', 'around', 'rerun', 'lowercase', 'i', 'index']) expect(counts(name), name).toBe(false);
+    });
+
+    it('does not pair files that share only an incidental subject', () => {
+      const wide = ['src/s.ts', 'src/x.ts', 'src/y.ts', 'src/z.ts'];
+      expect(sweepFindings([file('tests/a.test.ts', ['src/s.ts'], sweep), file('tests/b.test.ts', wide, sweep)])).toEqual([]);
+    });
+  });
+
+  it('does not flag duplicate titles when the only shared subject is incidental to one file', () => {
+    const title = "it('round-trips a saved value through load', () => {});";
+    const wide = ['src/s.ts', 'src/x.ts', 'src/y.ts', 'src/z.ts'];
+    const { findings } = detectRedundancy([file('tests/a.test.ts', ['src/s.ts'], title), file('tests/b.test.ts', wide, title)]);
+    expect(findings.filter(finding => finding.rule === 'redundancy.duplicate-title')).toEqual([]);
+  });
+
+  describe('hub subjects', () => {
+    const hubFiles = (count: number) => Array.from({ length: count }, (_, index) => file(`tests/t${index}.test.ts`, ['src/helper.ts', `src/m${index}.ts`], ''));
+
+    it('reports one hub finding instead of per-file findings for a subject shared by more than 10 files', () => {
+      const { clusters, findings } = detectRedundancy(hubFiles(12));
+      expect(findings.filter(finding => finding.rule === 'redundancy.shared-subject')).toEqual([]);
+      const hubs = findings.filter(finding => finding.rule === 'redundancy.hub-subject');
+      expect(hubs).toHaveLength(1);
+      expect(hubs[0]?.file).toBe('src/helper.ts');
+      expect(hubs[0]?.message).toContain('12 test files');
+      expect(hubs[0]?.message).toContain('shared infrastructure');
+      expect(clusters).toHaveLength(1);
+      expect(clusters[0]?.subject).toBe('src/helper.ts');
+      expect(clusters[0]?.files).toHaveLength(12);
+    });
+
+    it('does not let a hub subject drive sweep or title findings', () => {
+      const body = "for (let seed = 1; seed <= 30; seed++) {}\nit('round-trips a saved value through load', () => {});";
+      const inputs = Array.from({ length: 11 }, (_, index) => file(`tests/t${index}.test.ts`, ['src/helper.ts', `src/m${index}.ts`], body));
+      const { findings } = detectRedundancy(inputs);
+      expect(findings.filter(finding => finding.rule === 'redundancy.repeated-sweep')).toEqual([]);
+      expect(findings.filter(finding => finding.rule === 'redundancy.duplicate-title')).toEqual([]);
+      expect(findings.map(finding => finding.rule)).toEqual(['redundancy.hub-subject']);
+    });
+
+    it('still reports sweep and title findings for a cluster of exactly 10 files', () => {
+      const body = "for (let seed = 1; seed <= 30; seed++) {}\nit('round-trips a saved value through load', () => {});";
+      const inputs = Array.from({ length: 10 }, (_, index) => file(`tests/t${index}.test.ts`, ['src/helper.ts', `src/m${index}.ts`], body));
+      const { findings } = detectRedundancy(inputs);
+      expect(findings.filter(finding => finding.rule === 'redundancy.repeated-sweep')).toHaveLength(10);
+      expect(findings.filter(finding => finding.rule === 'redundancy.duplicate-title')).toHaveLength(10);
+    });
+
+    it('still counts a sweep repeated inside one file of a hub', () => {
+      const inputs = Array.from({ length: 11 }, (_, index) => file(`tests/t${index}.test.ts`, ['src/helper.ts', `src/m${index}.ts`], index === 0 ? 'for (let seed = 1; seed <= 30; seed++) {}\nfor (let seed = 1; seed <= 30; seed++) {}' : ''));
+      const sweeps = detectRedundancy(inputs).findings.filter(finding => finding.rule === 'redundancy.repeated-sweep');
+      expect(sweeps.map(finding => [finding.file, finding.line])).toEqual([['tests/t0.test.ts', 1], ['tests/t0.test.ts', 2]]);
+    });
+
+    it('still reports per-file findings for a cluster of exactly 10 files', () => {
+      const { clusters, findings } = detectRedundancy(hubFiles(10));
+      expect(findings.filter(finding => finding.rule === 'redundancy.shared-subject')).toHaveLength(10);
+      expect(findings.filter(finding => finding.rule === 'redundancy.hub-subject')).toEqual([]);
+      expect(clusters).toHaveLength(1);
+    });
+  });
+
+  describe('focus', () => {
+    const shared = (extra: string[]) => ['src/shared.ts', ...extra];
+
+    it('counts a test with three imports as focused', () => {
+      const { clusters } = detectRedundancy([file('tests/a.test.ts', shared(['src/x.ts', 'src/y.ts']), ''), file('tests/b.test.ts', shared(['src/p.ts', 'src/q.ts']), '')]);
+      expect(clusters.map(cluster => cluster.subject)).toEqual(['src/shared.ts']);
+    });
+
+    it('does not count a test with four imports unless it is named after the subject', () => {
+      const { clusters } = detectRedundancy([file('tests/a.test.ts', shared(['src/x.ts', 'src/y.ts', 'src/w.ts']), ''), file('tests/b.test.ts', shared(['src/p.ts']), '')]);
+      expect(clusters).toEqual([]);
+    });
+
+    it('matches the test name to the subject case-insensitively', () => {
+      const { clusters } = detectRedundancy([
+        file('tests/Store.test.ts', ['src/store.ts', 'src/x.ts', 'src/y.ts', 'src/z.ts'], ''),
+        file('tests/store.unit.test.ts', ['src/store.ts'], ''),
+      ]);
+      expect(clusters.map(cluster => ({ subject: cluster.subject, files: cluster.files }))).toEqual([{ subject: 'src/store.ts', files: ['tests/Store.test.ts', 'tests/store.unit.test.ts'] }]);
+    });
   });
 });
 ```
@@ -2947,11 +3792,15 @@ export interface RedundancyInput {
   lines: string[];
 }
 
-const SWEEP = /\bfor\s*\(\s*(?:let|const|var)\s+\w+\s*=\s*(\d+)\s*;\s*\w+\s*(<=|<)\s*(\d+)\s*;/;
+const SWEEP = /\bfor\s*\(\s*(?:let|const|var)\s+(\w+)\s*=\s*(\d+)\s*;\s*\w+\s*(<=|<)\s*(\d+)\s*;/;
+/** A sweep repeats a test over many generated inputs. A loop counter named `i` is just a loop. */
+const SWEEP_VARIABLE = /^(?:seed|trial|run|case|sample|iter|round)\w*$/i;
 const MIN_SWEEP = 10;
 const MIN_TITLE = 12;
 
 const MAX_FOCUSED_SUBJECTS = 3;
+/** A subject imported by more than this many test files is shared infrastructure, not duplicated coverage. */
+const MAX_CLUSTER = 10;
 
 const stem = (rel: string): string =>
   (rel.split('/').pop() ?? rel)
@@ -2960,12 +3809,17 @@ const stem = (rel: string): string =>
     .replace(/\.(?:unit|integration|e2e|contract)$/, '');
 
 /** A test that imports many modules touches most of them incidentally. It counts for a subject only when it is focused or named after it. */
-const isFocused = (file: RedundancyInput, subject: string): boolean => file.subjects.length <= MAX_FOCUSED_SUBJECTS || stem(subject) === stem(file.rel);
+const isFocused = (file: RedundancyInput, subject: string): boolean => file.subjects.length <= MAX_FOCUSED_SUBJECTS || stem(subject).toLowerCase() === stem(file.rel).toLowerCase();
+
+/** Two test files share a subject only when both are focused on it. A hub is shared infrastructure, so it never counts. */
+const sharesFocusedSubject = (a: RedundancyInput, b: RedundancyInput, hubs: ReadonlySet<string>): boolean =>
+  a.subjects.some(subject => !hubs.has(subject) && b.subjects.includes(subject) && isFocused(a, subject) && isFocused(b, subject));
 
 export function layerOf(rel: string): string {
   if (/(?:^|[/._-])(?:e2e|end-to-end)(?:[/._-]|$)/i.test(rel)) return 'e2e';
-  if (/integration/i.test(rel)) return 'integration';
-  if (/(?:^|[/._-])contract(?:[/._-]|$)/i.test(rel)) return 'contract';
+  // A hyphen after the word does not end it: `integration-helpers/` is support code, but `integration-tests/` is the layer.
+  if (/(?:^|[/._-])integrations?(?:-tests?)?(?:[/._]|$)/i.test(rel)) return 'integration';
+  if (/(?:^|[/._-])contracts?(?:[/._-]|$)/i.test(rel)) return 'contract';
   return 'unit';
 }
 
@@ -2979,12 +3833,18 @@ export function detectRedundancy(files: RedundancyInput[]): { clusters: Cluster[
       if (isFocused(file, subject)) bySubject.set(subject, [...(bySubject.get(subject) ?? []), file.rel]);
     }
   }
+  const hubSubjects = new Set([...bySubject].filter(([, members]) => members.length > MAX_CLUSTER).map(([subject]) => subject));
   const clusters: Cluster[] = [];
   const sharedBy = new Map<string, string[]>();
+  const hubs: Array<{ subject: string; files: string[] }> = [];
   for (const [subject, members] of [...bySubject].sort(([a], [b]) => (a < b ? -1 : 1))) {
     if (members.length < 2) continue;
     const sorted = [...members].sort();
     clusters.push({ subject, files: sorted, layers: [...new Set(sorted.map(layerOf))].sort() });
+    if (sorted.length > MAX_CLUSTER) {
+      hubs.push({ subject, files: sorted });
+      continue;
+    }
     for (const member of sorted) {
       sharedBy.set(member, [...(sharedBy.get(member) ?? []), `${subject}: ${sorted.filter(other => other !== member).join(', ')}`]);
     }
@@ -2998,28 +3858,41 @@ export function detectRedundancy(files: RedundancyInput[]): { clusters: Cluster[
       evidence: shared.join('; ').slice(0, 300),
     });
   }
+  for (const hub of hubs) {
+    findings.push({
+      category: 'redundancy',
+      rule: 'redundancy.hub-subject',
+      file: hub.subject,
+      message: `${hub.files.length} test files import this module. It looks like shared infrastructure rather than duplicated coverage. Check each file's own assertions if you suspect duplication.`,
+      evidence: hub.files.slice(0, 5).join('; '),
+    });
+  }
 
-  const sweeps = new Map<string, Array<{ file: string; line: number; text: string }>>();
+  const sweeps = new Map<string, Array<{ input: RedundancyInput; line: number; text: string }>>();
   for (const file of files) {
     file.lines.forEach((text, index) => {
+      const trimmed = text.trim();
+      if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) return;
       const match = SWEEP.exec(text);
-      if (!match) return;
-      const start = Number(match[1]);
-      const end = Number(match[3]);
-      if (end - start + (match[2] === '<=' ? 1 : 0) < MIN_SWEEP) return;
-      const key = `${start}${match[2]}${end}`;
-      sweeps.set(key, [...(sweeps.get(key) ?? []), { file: file.rel, line: index + 1, text: text.trim() }]);
+      if (!match || !SWEEP_VARIABLE.test(match[1] ?? '')) return;
+      const start = Number(match[2]);
+      const end = Number(match[4]);
+      if (end - start + (match[3] === '<=' ? 1 : 0) < MIN_SWEEP) return;
+      const key = `${start}${match[3]}${end}`;
+      sweeps.set(key, [...(sweeps.get(key) ?? []), { input: file, line: index + 1, text: trimmed }]);
     });
   }
   for (const [key, spots] of sweeps) {
-    if (spots.length < 2) continue;
-    for (const spot of spots) {
+    // A location counts only with a partner in the same file or in a test file that shares a focused subject.
+    const related = spots.filter(spot => spots.some(other => other !== spot && (other.input === spot.input || sharesFocusedSubject(spot.input, other.input, hubSubjects))));
+    if (related.length < 2) continue;
+    for (const spot of related) {
       findings.push({
         category: 'redundancy',
         rule: 'redundancy.repeated-sweep',
-        file: spot.file,
+        file: spot.input.rel,
         line: spot.line,
-        message: `The same sweep (${key}) appears ${spots.length} times in the suite. Share the work or keep one owner.`,
+        message: `The same sweep (${key}) appears ${related.length} times in the suite. Share the work or keep one owner.`,
         evidence: spot.text.slice(0, 160),
       });
     }
@@ -3035,7 +3908,7 @@ export function detectRedundancy(files: RedundancyInput[]): { clusters: Cluster[
   }
   for (const spots of byTitle.values()) {
     for (const spot of spots) {
-      const sharesSubject = spots.some(other => other.file !== spot.file && other.file.subjects.some(subject => spot.file.subjects.includes(subject)));
+      const sharesSubject = spots.some(other => other.file !== spot.file && sharesFocusedSubject(spot.file, other.file, hubSubjects));
       if (!sharesSubject) continue;
       findings.push({
         category: 'redundancy',
@@ -3055,7 +3928,7 @@ export function detectRedundancy(files: RedundancyInput[]): { clusters: Cluster[
 
 Run: `npx vitest run tests/detectors/redundancy.test.ts`
 
-Expected: PASS, 6 tests.
+Expected: PASS, 23 tests.
 
 Run: `npm run typecheck`
 
@@ -3081,7 +3954,10 @@ Reads hooks, `package.json` scripts, GitHub workflows and agent instruction file
 
 Create `tests/detectors/frequency.test.ts`:
 
-```ts
+````ts
+import { symlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { detectFrequency } from '../../src/detectors/frequency.ts';
 import { defaultRiskMap } from '../../src/riskmap.ts';
@@ -3158,7 +4034,459 @@ describe('detectFrequency', () => {
     expect(detectFrequency(root, null).map(finding => `${finding.rule}:${finding.line}`)).toEqual(['frequency.agent-run-all:2']);
   });
 });
-```
+
+const WF = '.github/workflows/ci.yml';
+const workflow = (text: string): string => makeTree({ [WF]: text });
+const scriptsTree = (scripts: Record<string, unknown>): string => makeTree({ 'package.json': JSON.stringify({ scripts }) });
+const watchRules = (script: unknown): string[] => rules(detectFrequency(scriptsTree({ test: script }), null)).filter(rule => rule === 'frequency.watch-default');
+
+describe('detectFrequency on odd input', () => {
+  it.each([
+    ['a directory named AGENTS.md', { 'AGENTS.md/x': '' }],
+    ['a directory named CLAUDE.md', { 'CLAUDE.md/x': '' }],
+    ['a directory named package.json', { 'package.json/x': '' }],
+    ['a directory named like a hook file', { '.husky/pre-commit/x': '' }],
+    ['a directory named like a lefthook file', { 'lefthook.yml/x': '' }],
+    ['.github/workflows being a file', { '.github/workflows': 'not a directory' }],
+    ['a directory named x.yml', { '.github/workflows/x.yml/inner': '' }],
+    ['an invalid package.json', { 'package.json': '{not json' }],
+    ['a package.json holding null', { 'package.json': 'null' }],
+    ['a package.json whose scripts is a string', { 'package.json': '{"scripts": "vitest"}' }],
+    ['a workflow that is not valid YAML', { [WF]: 'on: [push\njobs: {' }],
+    ['a workflow that is a scalar', { [WF]: 'just text\n' }],
+    ['a workflow whose jobs is a list', { [WF]: 'on: push\njobs:\n  - a\n  - b\n' }],
+    ['a workflow whose job is null', { [WF]: 'on: pull_request\njobs:\n  a:\n' }],
+    ['a workflow whose matrix is a string', { [WF]: 'on: pull_request\njobs:\n  a:\n    strategy:\n      matrix: ${{ fromJson(x) }}\n    runs-on: ubuntu-latest\n' }],
+  ])('does not throw on %s', (_label, files) => {
+    expect(() => detectFrequency(makeTree(files), null)).not.toThrow();
+  });
+
+  it('reports nothing for a non-string test script', () => {
+    expect(detectFrequency(scriptsTree({ test: 5 }), null)).toEqual([]);
+    expect(detectFrequency(scriptsTree({ test: ['vitest'] }), null)).toEqual([]);
+    expect(detectFrequency(scriptsTree({ pretest: 5 }), null)).toEqual([]);
+    expect(detectFrequency(scriptsTree({ pretest: { run: 'npm test' } }), null)).toEqual([]);
+  });
+
+  it('does not throw on a dangling symlink where a file is expected', () => {
+    const root = makeTree({});
+    try {
+      symlinkSync(join(root, 'nowhere'), join(root, 'AGENTS.md'));
+    } catch {
+      return; // Creating symlinks needs a privilege this machine does not grant.
+    }
+    expect(() => detectFrequency(root, null)).not.toThrow();
+  });
+});
+
+describe('detectFrequency agent instructions', () => {
+  const agentFindings = (line: string, file = 'AGENTS.md'): string[] => detectFrequency(makeTree({ [file]: `${line}\n` }), null).map(finding => finding.rule);
+
+  it.each([
+    'Always run all tests after every change.',
+    'Run the whole test suite after each edit',
+    'Execute every test before you answer.',
+    'Always run the tests.',
+  ])('flags %s', line => {
+    expect(agentFindings(line)).toEqual(['frequency.agent-run-all']);
+  });
+
+  it.each([
+    'Do not run all tests after every change.',
+    'Never run the full suite.',
+    "Don't always run all tests.",
+    'Agents should not run every test.',
+    'Avoid running all tests when one file changed. Only run all tests in CI.',
+    'Always run tests that cover the changed file.',
+    'Always run tests related to the change.',
+    'Always run tests for the module you touched.',
+    'Always run affected tests.',
+    'Run all tests before opening a PR.',
+    'Run the full test suite before merge.',
+    'Run all tests before pushing.',
+    'Run every test once before you merge.',
+  ])('does not flag %s', line => {
+    expect(agentFindings(line)).toEqual([]);
+  });
+
+  it('does not flag a line inside a fenced code block', () => {
+    const text = 'Use this:\n```sh\nalways run all tests after every change\n```\n~~~\nrun all tests\n~~~\n';
+    expect(detectFrequency(makeTree({ 'AGENTS.md': text }), null)).toEqual([]);
+    const after = detectFrequency(makeTree({ 'AGENTS.md': `${text}Always run all tests after every change.\n` }), null);
+    expect(after.map(finding => finding.line)).toEqual([8]);
+  });
+
+  it.each(['GEMINI.md', '.github/copilot-instructions.md', '.cursorrules', 'CLAUDE.md'])('scans %s', file => {
+    const found = detectFrequency(makeTree({ [file]: 'Always run all tests after every change.\n' }), null);
+    expect(found.map(finding => `${finding.rule}@${finding.file}`)).toEqual([`frequency.agent-run-all@${file}`]);
+  });
+});
+
+describe('detectFrequency workflows', () => {
+  it('ignores a job that its if condition keeps off pull requests', () => {
+    const nightly = workflow("on:\n  pull_request:\njobs:\n  nightly:\n    if: github.event_name == 'schedule'\n    runs-on: windows-latest\n    steps: []\n");
+    expect(detectFrequency(nightly, null)).toEqual([]);
+    const dispatch = workflow("on:\n  pull_request:\njobs:\n  manual:\n    if: github.event_name == 'workflow_dispatch'\n    runs-on: macos-latest\n    steps: []\n");
+    expect(detectFrequency(dispatch, null)).toEqual([]);
+    const counted = workflow("on:\n  pull_request:\njobs:\n  t:\n    if: github.event_name == 'pull_request'\n    runs-on: macos-latest\n    steps: []\n");
+    expect(rules(detectFrequency(counted, null))).toContain('frequency.ci-on-pull-request');
+  });
+
+  it('still counts a pull-request-excluded job against a branch push', () => {
+    const root = workflow("on:\n  push:\n    branches: [dev]\njobs:\n  t:\n    if: github.event_name == 'push'\n    strategy:\n      matrix:\n        os: [windows-latest]\n    runs-on: ${{ matrix.os }}\n    steps: []\n");
+    expect(rules(detectFrequency(root, null))).toEqual(['frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
+  });
+
+  it.each([
+    ['a matrix os string', 'strategy:\n      matrix:\n        os: windows-latest\n    runs-on: ${{ matrix.os }}', true],
+    ['matrix include entries', 'strategy:\n      matrix:\n        include:\n          - os: ubuntu-latest\n          - os: macos-14\n    runs-on: ${{ matrix.os }}', true],
+    ['a runs-on string', 'runs-on: windows-2022', false],
+    ['a runs-on array', 'runs-on: [macos-latest]', false],
+    ['a runs-on object with labels', 'runs-on:\n      group: big\n      labels: windows-latest', false],
+    ['a runs-on object with a label list', 'runs-on:\n      labels: [macos-latest]', false],
+  ])('finds expensive runners in %s', (_label, jobBody, isMatrix) => {
+    const root = workflow(`on:\n  pull_request:\njobs:\n  t:\n    ${jobBody}\n    steps: []\n`);
+    expect(rules(detectFrequency(root, null))).toEqual(isMatrix ? ['frequency.ci-on-pull-request', 'frequency.ci-os-matrix-on-push'] : ['frequency.ci-on-pull-request']);
+  });
+
+  it('ignores self-hosted runners', () => {
+    const labelled = workflow('on:\n  pull_request:\njobs:\n  t:\n    runs-on: [self-hosted, macos]\n    steps: []\n');
+    expect(detectFrequency(labelled, null)).toEqual([]);
+    const withMatrix = workflow('on:\n  pull_request:\njobs:\n  t:\n    strategy:\n      matrix:\n        os: [macos-latest]\n    runs-on: [self-hosted, "${{ matrix.os }}"]\n    steps: []\n');
+    expect(detectFrequency(withMatrix, null)).toEqual([]);
+    const object = workflow('on:\n  pull_request:\njobs:\n  t:\n    runs-on:\n      labels: [self-hosted, windows]\n    steps: []\n');
+    expect(detectFrequency(object, null)).toEqual([]);
+  });
+
+  it('does not let a path filter excuse Windows or macOS on pull_request', () => {
+    const windows = workflow("on:\n  pull_request:\n    paths: ['src/**']\njobs:\n  t:\n    runs-on: windows-latest\n    steps: []\n");
+    const found = detectFrequency(windows, null);
+    expect(rules(found)).toEqual(['frequency.ci-on-pull-request']);
+    expect(found.find(finding => finding.rule === 'frequency.ci-on-pull-request')?.message).not.toContain('no path filter');
+    const linux = workflow("on:\n  pull_request:\n    paths-ignore: ['docs/**']\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps: []\n");
+    expect(detectFrequency(linux, null)).toEqual([]);
+  });
+
+  it('reports Windows or macOS on a path-filtered push, and the matrix rule only for a real matrix', () => {
+    const literal = workflow("on:\n  push:\n    paths: ['src/**']\njobs:\n  t:\n    runs-on: macos-latest\n    steps: []\n");
+    expect(rules(detectFrequency(literal, null))).toEqual(['frequency.ci-on-push']);
+    const matrix = workflow("on:\n  push:\n    paths: ['src/**']\njobs:\n  t:\n    strategy:\n      matrix:\n        os: [macos-latest]\n    runs-on: ${{ matrix.os }}\n    steps: []\n");
+    expect(rules(detectFrequency(matrix, null))).toEqual(['frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
+    const linux = workflow("on:\n  push:\n    paths: ['src/**']\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps: []\n");
+    expect(detectFrequency(linux, null)).toEqual([]);
+  });
+
+  it('reports each matrix finding once when push and pull_request both fire', () => {
+    const root = workflow('on:\n  push:\n    branches: [dev]\n  pull_request:\njobs:\n  t:\n    strategy:\n      matrix:\n        os: [windows-latest]\n    runs-on: ${{ matrix.os }}\n    steps: []\n');
+    expect(rules(detectFrequency(root, null))).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
+  });
+
+  it('describes a push restricted to the default branch as a post-merge run', () => {
+    const root = workflow('on:\n  push:\n    branches: [main]\n  pull_request:\njobs: {}\n');
+    const message = detectFrequency(root, null)[0]?.message ?? '';
+    expect(message).toContain('post-merge');
+    expect(message).toContain('already ran on the same tree');
+    const master = workflow('on:\n  push:\n    branches: [master]\njobs: {}\n');
+    expect(detectFrequency(master, null)[0]?.message).toContain('post-merge');
+    const other = workflow('on:\n  push:\n    branches: [main, dev]\njobs: {}\n');
+    expect(detectFrequency(other, null)[0]?.message).toContain('every push to a branch');
+    const bare = workflow('on: push\njobs: {}\n');
+    expect(detectFrequency(bare, null)[0]?.message).toContain('every push to a branch');
+  });
+
+  it('does not treat tags with branches-ignore as tag-only', () => {
+    const root = workflow("on:\n  push:\n    tags: ['v*']\n    branches-ignore: [wip]\njobs: {}\n");
+    expect(rules(detectFrequency(root, null))).toEqual(['frequency.ci-on-push']);
+  });
+
+  it('gives the whole dev-phase recommendation', () => {
+    const message = detectFrequency(workflow('on: push\njobs: {}\n'), defaultRiskMap())[0]?.message ?? '';
+    for (const part of ['non-blocking Linux job', 'path-filtered', 'drafts skipped', 'newer runs cancelled', 'workflow_dispatch', 'weekly schedule', 'release tags']) {
+      expect(message).toContain(part);
+    }
+  });
+});
+
+describe('detectFrequency hooks', () => {
+  const hookRules = (files: Record<string, string>): string[] => detectFrequency(makeTree(files), null).map(finding => `${finding.rule}@${finding.file}`);
+
+  it('ignores trailing comments and lines that only echo', () => {
+    expect(hookRules({ '.husky/pre-commit': '#!/usr/bin/env sh\necho "skipping npm test"\nnpx prettier --check . # npm test\nprintf "vitest\\n"\n' })).toEqual([]);
+    expect(hookRules({ '.husky/pre-commit': 'echo start && npm test\n' })).toEqual(['frequency.hook-full-suite@.husky/pre-commit']);
+  });
+
+  it.each([
+    'npx vitest run $FILES',
+    'npx vitest run "$@"',
+    'npx jest --findRelatedTests {staged_files}',
+    'npx vitest run {push_files}',
+    'pnpm test --filter=...[HEAD^]',
+  ])('treats %s as scoped', command => {
+    expect(hookRules({ '.husky/pre-commit': `${command}\n` })).toEqual([]);
+  });
+
+  it('reads only the run values of a lefthook file', () => {
+    const scoped = 'pre-commit:\n  commands:\n    jest:\n      run: npx jest --findRelatedTests {staged_files}\n    vitest:\n      glob: "*.ts"\n      run: npx vitest related --run {staged_files}\n';
+    expect(hookRules({ 'lefthook.yml': scoped })).toEqual([]);
+    const full = 'pre-commit:\n  commands:\n    unit:\n      run: npm test\n';
+    const found = detectFrequency(makeTree({ 'lefthook.yml': full }), null);
+    expect(found.map(finding => `${finding.rule}@${finding.file}:${finding.line}`)).toEqual(['frequency.hook-full-suite@lefthook.yml:4']);
+    const block = 'pre-push:\n  jobs:\n    - name: t\n      run: |\n        echo hi\n        npm test\n';
+    expect(detectFrequency(makeTree({ 'lefthook.yml': block }), null).map(finding => finding.line)).toEqual([6]);
+  });
+
+  it.each(['lefthook.yaml', '.lefthook.yml', '.config/lefthook.yml'])('scans %s', file => {
+    expect(hookRules({ [file]: 'pre-commit:\n  commands:\n    t:\n      run: npm test\n' })).toEqual([`frequency.hook-full-suite@${file}`]);
+  });
+
+  it('scans .husky/pre-merge-commit', () => {
+    expect(hookRules({ '.husky/pre-merge-commit': 'npm test\n' })).toEqual(['frequency.hook-full-suite@.husky/pre-merge-commit']);
+  });
+
+  it('scans simple-git-hooks values in package.json', () => {
+    const flagged = JSON.stringify({ 'simple-git-hooks': { 'pre-commit': 'npm test' } });
+    expect(hookRules({ 'package.json': flagged })).toEqual(['frequency.hook-full-suite@package.json']);
+    const scoped = JSON.stringify({ 'simple-git-hooks': { 'pre-commit': 'npx vitest related --run', 'pre-push': 5 } });
+    expect(hookRules({ 'package.json': scoped })).toEqual([]);
+  });
+
+  it.each(['npm t', 'pnpm -r test', 'pnpm --filter x test', 'npm run -s test', 'yarn test', 'bun run test'])('recognises %s as a suite run', command => {
+    expect(hookRules({ '.husky/pre-commit': `${command}\n` })).toEqual(['frequency.hook-full-suite@.husky/pre-commit']);
+  });
+
+  it('does not take npm tsc or npm run lint for a suite run', () => {
+    expect(hookRules({ '.husky/pre-commit': 'npm run lint\nnpm tsc\n' })).toEqual([]);
+  });
+});
+
+describe('detectFrequency watch mode', () => {
+  it.each([
+    'vitest',
+    'npx vitest',
+    'pnpm vitest',
+    'pnpm exec vitest',
+    'yarn vitest',
+    'cross-env NODE_ENV=test vitest',
+    'vitest --coverage',
+    'vitest --watch',
+    'vitest --watch=true',
+    'vitest dev',
+    'jest --watch',
+    'jest --watchAll',
+    'npm run lint && vitest',
+  ])('flags %s', script => {
+    expect(watchRules(script)).toEqual(['frequency.watch-default']);
+  });
+
+  it.each([
+    'vitest run',
+    'vitest --run',
+    'vitest --watch=false',
+    'vitest --watch false',
+    'jest --watchAll=false',
+    'jest --watch=false',
+    'vitest --no-watch',
+    'vitest list',
+    'vitest typecheck',
+    'vitest bench',
+    'vitest related src/a.ts',
+    'CI=1 vitest',
+    'cross-env CI=1 vitest',
+    'jest',
+    'npm run build',
+    'tsc --noEmit && vitest run',
+  ])('does not flag %s', script => {
+    expect(watchRules(script)).toEqual([]);
+  });
+
+  it('words the finding without over-claiming', () => {
+    const message = detectFrequency(scriptsTree({ test: 'vitest' }), null)[0]?.message ?? '';
+    expect(message).toContain('stdin is a terminal');
+    expect(message).toContain('CI is unset');
+    expect(message).toContain('vitest run');
+  });
+});
+
+describe('detectFrequency fixtures', () => {
+  const fixture = (name: string): string => fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url));
+
+  it('finds each planted problem in the bloated fixture exactly once', () => {
+    const found = detectFrequency(fixture('bloated'), null).map(finding => `${finding.rule}@${finding.file}`);
+    expect(found.sort()).toEqual(
+      [
+        'frequency.agent-run-all@AGENTS.md',
+        'frequency.ci-on-pull-request@.github/workflows/ci.yml',
+        'frequency.ci-on-push@.github/workflows/ci.yml',
+        'frequency.ci-os-matrix-on-push@.github/workflows/ci.yml',
+        'frequency.hook-full-suite@.husky/pre-commit',
+        'frequency.hook-full-suite@package.json',
+        'frequency.watch-default@package.json',
+      ].sort(),
+    );
+  });
+
+  it('finds nothing in the clean fixture', () => {
+    expect(detectFrequency(fixture('clean'), null)).toEqual([]);
+  });
+});
+
+describe('detectFrequency job if-gates', () => {
+  const RECOMMENDED = `on:
+  pull_request:
+    paths: ['src/**', 'package.json']
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+  push:
+    tags: ['v*']
+concurrency:
+  group: ci-\${{ github.workflow }}-\${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    steps: []
+  os-matrix:
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: \${{ matrix.os }}
+    steps: []
+`;
+
+  const macJob = (condition: string | null): string => {
+    const gate = condition === null ? '' : `    if: ${condition}\n`;
+    return `on:\n  pull_request:\njobs:\n  t:\n${gate}    runs-on: macos-latest\n    steps: []\n`;
+  };
+
+  it('accepts the recommended workflow without findings', () => {
+    expect(detectFrequency(workflow(RECOMMENDED), null)).toEqual([]);
+    expect(detectFrequency(workflow(RECOMMENDED), defaultRiskMap())).toEqual([]);
+  });
+
+  it.each([
+    "github.event_name != 'pull_request'",
+    'github.event_name != "pull_request"',
+    "github.event_name!='pull_request'",
+    "${{ github.event_name != 'pull_request' }}",
+    "github.event_name == 'push'",
+    "github.event_name == 'schedule'",
+    'github.event_name == "workflow_dispatch"',
+    "github.event_name == 'push' || github.event_name == 'schedule'",
+  ])('treats a macOS job gated by %s as off the pull-request path', condition => {
+    expect(detectFrequency(workflow(macJob(condition)), null)).toEqual([]);
+  });
+
+  it.each([
+    ['no if at all', null],
+    ['a positive pull_request check', "github.event_name == 'pull_request'"],
+    ['a condition that ignores the event name', "github.ref == 'refs/heads/main'"],
+    ['a draft clause beside a negation', "github.event_name != 'pull_request' || !github.event.pull_request.draft"],
+  ])('treats a macOS job with %s as running on pull requests', (_label, condition) => {
+    expect(rules(detectFrequency(workflow(macJob(condition)), null))).toEqual(['frequency.ci-on-pull-request']);
+  });
+});
+
+describe('detectFrequency matrix rule', () => {
+  it('fires only for a real matrix, never for a literal runs-on', () => {
+    const literal = workflow('on:\n  push:\n    branches: [dev]\njobs:\n  t:\n    runs-on: macos-latest\n    steps: []\n');
+    expect(rules(detectFrequency(literal, null))).toEqual(['frequency.ci-on-push']);
+    const matrix = workflow('on:\n  push:\n    branches: [dev]\njobs:\n  t:\n    strategy:\n      matrix:\n        os: [ubuntu-latest, macos-latest]\n    runs-on: ${{ matrix.os }}\n    steps: []\n');
+    expect(rules(detectFrequency(matrix, null))).toEqual(['frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
+  });
+});
+
+describe('detectFrequency tag-gated and dispatch-gated jobs', () => {
+  const macJob = (condition: string): string => `on:\n  pull_request:\njobs:\n  t:\n    if: ${condition}\n    runs-on: macos-latest\n    steps: []\n`;
+
+  it.each([
+    "startsWith(github.ref, 'refs/tags/')",
+    'startsWith(github.ref, "refs/tags/v")',
+    "github.ref_type == 'tag'",
+    "github.event_name == 'release'",
+    "github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')",
+    "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'",
+    "inputs.full == 'true'",
+    "github.event.inputs.os == 'mac'",
+    "github.event_name == 'workflow_dispatch' || inputs.full",
+    "${{ startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' }}",
+  ])('treats a macOS job gated by %s as off the pull-request path', condition => {
+    expect(detectFrequency(workflow(macJob(condition)), null)).toEqual([]);
+  });
+
+  it.each([
+    "startsWith(github.ref, 'refs/heads/')",
+    "github.ref == 'refs/heads/main'",
+    "github.ref_type != 'tag'",
+    "${{ !startsWith(github.ref, 'refs/tags/') }}",
+    "github.event_name == 'release' || github.ref == 'refs/heads/main'",
+  ])('still flags a macOS job gated by %s', condition => {
+    expect(rules(detectFrequency(workflow(macJob(condition)), null))).toEqual(['frequency.ci-on-pull-request']);
+  });
+
+  it('keeps the draft-skip Linux job on the pull-request path without findings', () => {
+    const root = workflow("on:\n  pull_request:\njobs:\n  linux:\n    if: github.event_name != 'pull_request' || !github.event.pull_request.draft\n    runs-on: ubuntu-latest\n    steps: []\n");
+    expect(detectFrequency(root, null)).toEqual([]);
+  });
+});
+
+describe('detectFrequency test tools at command position', () => {
+  const hookRules = (hook: string): string[] => detectFrequency(makeTree({ '.husky/pre-commit': `${hook}\n` }), null).map(finding => finding.rule);
+
+  it.each(['node scripts/vitest.config.js', 'cat jest.config.js', 'npx eslint --plugin jest src', 'node scripts/run-jest-helper.js', 'git diff -- vitest.config.ts', 'grep -r pytest docs'])(
+    'does not count %s as running the suite',
+    command => {
+      expect(hookRules(command)).toEqual([]);
+    },
+  );
+
+  it.each([
+    'npm test',
+    'npm run test',
+    'pnpm test',
+    'vitest run',
+    'jest',
+    'pytest',
+    'npx vitest run',
+    'npx --no-install jest',
+    'pnpm exec vitest run',
+    'yarn jest',
+    'bunx vitest run',
+    'CI=1 jest',
+    'cross-env NODE_ENV=test jest',
+    'cross-env NODE_ENV=test npm test',
+    'echo start && jest',
+    'npm run lint; pytest',
+    'python -m pytest',
+    './node_modules/.bin/vitest run',
+  ])('counts %s as running the suite', command => {
+    expect(hookRules(command)).toEqual(['frequency.hook-full-suite']);
+  });
+
+  it('does not count vitest.config as a tool even at command position', () => {
+    expect(hookRules('vitest.config.js')).toEqual([]);
+  });
+});
+
+describe('detectFrequency hook line continuations', () => {
+  it('joins a backslash continuation so a scope flag on the next line counts', () => {
+    expect(detectFrequency(makeTree({ '.husky/pre-commit': 'npx vitest run \\\n  --changed origin/main\n' }), null)).toEqual([]);
+  });
+
+  it('reports the first physical line of a continued unscoped command', () => {
+    const found = detectFrequency(makeTree({ '.husky/pre-push': 'echo hi\nnpx vitest run \\\n  --reporter dot\n' }), null);
+    expect(found.map(finding => `${finding.rule}:${finding.line}`)).toEqual(['frequency.hook-full-suite:2']);
+  });
+
+  it('joins continuations inside a lefthook block scalar too', () => {
+    const text = 'pre-push:\n  jobs:\n    - run: |\n        npx jest \\\n          --findRelatedTests {push_files}\n';
+    expect(detectFrequency(makeTree({ 'lefthook.yml': text }), null)).toEqual([]);
+  });
+});
+````
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -3170,24 +4498,46 @@ Expected: FAIL. Cannot import `../../src/detectors/frequency.ts`.
 
 Create `src/detectors/frequency.ts`:
 
-```ts
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+````ts
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import type { Finding, RiskMap } from '../schema.ts';
 
-const RUNS_TESTS = /\b(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|npx\s+(?:vitest|jest)|vitest|jest|pytest)\b/;
-const SCOPED = /--changed|--related|\brelated\b|--findRelatedTests|--onlyChanged|--affected|\baffected\b/;
-const HOOK_FILES = ['.husky/pre-commit', '.husky/pre-push', '.githooks/pre-commit', '.githooks/pre-push', 'lefthook.yml'];
+const PM_TEST = /^(?:npm|pnpm|yarn|bun)\s+(?:(?:run|-r|--recursive|-s|--silent|--if-present|--filter(?:=|\s+)\S+|-F\s+\S+)\s+)*(?:test|t)\b/;
+const TEST_TOOLS = new Set(['vitest', 'jest', 'pytest']);
+const TOOL_WRAPPERS = new Set(['cross-env', 'env', 'npx', 'pnpm', 'exec', 'yarn', 'bunx', 'bun', 'npm', 'run', 'dlx', 'x', 'uv', 'poetry', 'pipenv', 'then', 'do', 'else', 'time', 'nohup']);
+const ENV_ASSIGNMENT = /^[A-Za-z_]\w*=/;
+const SCOPED = /--changed|--related|\brelated\b|--findRelatedTests|--onlyChanged|--affected|\baffected\b|\{staged_files\}|\{push_files\}|\$\{?FILES\b|\$@|\[HEAD/;
+const HOOK_FILES = ['.husky/pre-commit', '.husky/pre-push', '.husky/pre-merge-commit', '.githooks/pre-commit', '.githooks/pre-push'];
+const LEFTHOOK_FILES = ['lefthook.yml', 'lefthook.yaml', '.lefthook.yml', '.config/lefthook.yml'];
 const HOOK_SCRIPTS = ['pretest', 'precommit', 'pre-commit', 'prepush', 'pre-push'];
-const AGENT_RUN_ALL = /\b(?:run|execute)\s+(?:all|the\s+(?:full|entire|whole)|every)\s+tests?(?:\s+suite)?\b|\balways\s+run\s+(?:the\s+)?tests?\b/i;
+const AGENT_DOCS = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.github/copilot-instructions.md', '.cursorrules'];
+const AGENT_RUN_ALL =
+  /\b(?:run|execute)\s+(?:all|every|the\s+(?:full|entire|whole))\s+(?:test\s+suites?|tests?|suites?)\b|\balways\s+run\s+(?:the\s+)?tests?\b(?!\s+(?:that|related|affected|covering|for)\b)/gi;
+const AGENT_NEGATION = /\bnot\b|n['’]t\b|\bnever\b|\bavoid\b|\bonly\b/i;
+const AGENT_MERGE_GATE = /^(?:\s+\w+){0,2}\s*,?\s*(?:before|prior\s+to)\s+(?:you\s+)?(?:opening|open|creating|create|raising|submitting|merg\w*|push\w*|a\s+pr\b|the\s+pr\b|a\s+pull|releas\w*|shipping)/i;
 const EXPENSIVE_OS = /^(?:macos|windows)/i;
+const NOT_WATCH_COMMANDS = new Set(['run', 'related', 'bench', 'list', 'typecheck', 'init']);
+const LAUNCHERS = new Set(['cross-env', 'env', 'npx', 'pnpm', 'exec', 'yarn', 'bunx', 'bun', 'npm', 'run', 'dlx', 'x']);
 
-const readText = (path: string): string | null => (existsSync(path) ? readFileSync(path, 'utf8') : null);
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+const asStrings = (value: unknown): string[] => (Array.isArray(value) ? value : [value]).filter((entry): entry is string => typeof entry === 'string');
+
+/** The text of a regular file, or null when it is missing, a directory, unreadable or otherwise odd. */
+function readText(path: string): string | null {
+  try {
+    return statSync(path).isFile() ? readFileSync(path, 'utf8') : null;
+  } catch {
+    return null;
+  }
+}
 
 function phaseAdvice(map: RiskMap | null): string {
   if (!map) return '';
-  if (map.phase === 'dev') return ' In the dev phase, prefer one non-blocking Linux job on pull_request, plus workflow_dispatch and a scheduled run for the OS matrix.';
+  if (map.phase === 'dev') {
+    return ' In the dev phase, prefer one non-blocking Linux job on pull_request (path-filtered, drafts skipped, newer runs cancelled), and workflow_dispatch, a weekly schedule and release tags for the OS matrix.';
+  }
   return '';
 }
 
@@ -3195,132 +4545,321 @@ function triggersOf(workflow: Record<string, unknown>): Record<string, unknown> 
   const on = workflow.on ?? workflow['true'];
   if (typeof on === 'string') return { [on]: null };
   if (Array.isArray(on)) return Object.fromEntries(on.map(name => [String(name), null]));
-  if (on && typeof on === 'object') return on as Record<string, unknown>;
+  if (isRecord(on)) return on;
   return {};
+}
+
+/** True when one command starts a test run: a package-manager test script, or a test tool at command position. */
+function runsTestTool(part: string): boolean {
+  const tokens = part.split(/\s+/).filter(Boolean);
+  let position = 0;
+  while (position < tokens.length && (ENV_ASSIGNMENT.test(tokens[position] ?? '') || tokens[position] === 'cross-env' || tokens[position] === 'env')) position++;
+  if (PM_TEST.test(tokens.slice(position).join(' '))) return true;
+  while (position < tokens.length) {
+    const token = tokens[position] ?? '';
+    if (!TOOL_WRAPPERS.has(token) && !token.startsWith('-') && !ENV_ASSIGNMENT.test(token)) break;
+    position++;
+  }
+  const name = (value: string | undefined): string => (value ?? '').replace(/^.*[\\/]/, '').replace(/\.cmd$/, '');
+  const command = name(tokens[position]);
+  return TEST_TOOLS.has(/^(?:python3?|py)$/.test(command) && tokens[position + 1] === '-m' ? name(tokens[position + 2]) : command);
+}
+
+/** True when a hook command runs the whole suite: any `&&`, `||` or `;` part that runs tests, is not scoped and is not an echo. */
+function runsWholeSuite(raw: string): boolean {
+  const line = raw.replace(/(^|\s)#.*$/, '$1');
+  return line.split(/&&|\|\||;/).some(part => {
+    const command = part.trim();
+    return command !== '' && !/^(?:echo|printf)\b/.test(command) && runsTestTool(command) && !SCOPED.test(command);
+  });
+}
+
+/** Join lines that end in a backslash with the next one; each result keeps the number of its first physical line. */
+function joinContinuations(entries: Array<{ line: number; command: string }>): Array<{ line: number; command: string }> {
+  const joined: Array<{ line: number; command: string }> = [];
+  let carry: { line: number; command: string; last: number } | null = null;
+  for (const entry of entries) {
+    if (carry && entry.line !== carry.last + 1) {
+      joined.push({ line: carry.line, command: carry.command });
+      carry = null;
+    }
+    const merged: { line: number; command: string; last: number } = carry
+      ? { line: carry.line, command: `${carry.command} ${entry.command.trim()}`, last: entry.line }
+      : { line: entry.line, command: entry.command, last: entry.line };
+    if (/\\\s*$/.test(merged.command)) {
+      carry = { ...merged, command: merged.command.replace(/\\\s*$/, '') };
+    } else {
+      joined.push({ line: merged.line, command: merged.command });
+      carry = null;
+    }
+  }
+  if (carry) joined.push({ line: carry.line, command: carry.command });
+  return joined;
+}
+
+/** The `run:` values of a lefthook file, with their line numbers; a block scalar yields one entry per line. */
+function lefthookCommands(text: string): Array<{ line: number; command: string }> {
+  const lines = text.split(/\r?\n/);
+  const found: Array<{ line: number; command: string }> = [];
+  for (let index = 0; index < lines.length; index++) {
+    const match = /^(\s*)(?:-\s+)?run:\s*(.*)$/.exec(lines[index] ?? '');
+    if (!match) continue;
+    const indent = (match[1] ?? '').length;
+    const value = (match[2] ?? '').trim();
+    if (/^[|>][+-]?\s*(?:#.*)?$/.test(value)) {
+      for (let next = index + 1; next < lines.length; next++) {
+        const body = lines[next] ?? '';
+        if (body.trim() !== '' && (/^\s*/.exec(body)?.[0].length ?? 0) <= indent) break;
+        found.push({ line: next + 1, command: body });
+        index = next;
+      }
+    } else {
+      found.push({ line: index + 1, command: /^(["'])(.*)\1\s*(?:#.*)?$/.exec(value)?.[2] ?? value });
+    }
+  }
+  return found;
+}
+
+/** True when one command of a test script starts the runner in watch mode when nothing says otherwise. */
+function startsWatchMode(segment: string): boolean {
+  const tokens = segment.split(/\s+/).filter(Boolean);
+  let watchOn = false;
+  let watchOff = false;
+  tokens.forEach((token, index) => {
+    const flag = /^--(?:watch|watchAll)(?:=(.*))?$/.exec(token);
+    if (flag) {
+      const next = tokens[index + 1];
+      const value = flag[1] ?? (next === 'true' || next === 'false' ? next : 'true');
+      if (value === 'false') watchOff = true;
+      else watchOn = true;
+    } else if (token === '--no-watch') {
+      watchOff = true;
+    }
+  });
+  if (watchOn) return true;
+  if (watchOff) return false;
+
+  let position = 0;
+  let ciSet = false;
+  for (; position < tokens.length; position++) {
+    const token = tokens[position] ?? '';
+    const assignment = /^([A-Za-z_]\w*)=(.*)$/.exec(token);
+    if (assignment) {
+      if (assignment[1] === 'CI' && assignment[2] !== 'false') ciSet = true;
+    } else if (!LAUNCHERS.has(token) && !token.startsWith('-')) {
+      break;
+    }
+  }
+  const command = (tokens[position] ?? '').replace(/^.*[\\/]/, '').replace(/\.cmd$/, '');
+  if (command !== 'vitest' || ciSet) return false;
+  return !tokens.slice(position + 1).some(token => NOT_WATCH_COMMANDS.has(token) || /^--run(?:=true)?$/.test(token));
+}
+
+/**
+ * Windows or macOS runners a job uses: `all` covers a literal `runs-on`, `matrix.os` and `matrix.include`;
+ * `matrix` is the part that comes from a real matrix. Self-hosted jobs are ignored.
+ */
+function expensiveRunnersOf(job: Record<string, unknown>): { all: string[]; matrix: string[] } {
+  const runsOn = job['runs-on'];
+  const labels = isRecord(runsOn) ? asStrings(runsOn.labels) : asStrings(runsOn);
+  if (labels.some(label => /^self-hosted$/i.test(label))) return { all: [], matrix: [] };
+  const strategy = isRecord(job.strategy) ? job.strategy : {};
+  const matrix = isRecord(strategy.matrix) ? strategy.matrix : {};
+  const include = Array.isArray(matrix.include) ? matrix.include.flatMap(entry => (isRecord(entry) ? asStrings(entry.os) : [])) : [];
+  const expensive = (entries: string[]): string[] => [...new Set(entries.filter(entry => EXPENSIVE_OS.test(entry)))];
+  return { all: expensive([...asStrings(matrix.os), ...include, ...labels]), matrix: expensive([...asStrings(matrix.os), ...include]) };
+}
+
+/** Condition fragments that cannot hold on a pull request: another event, a tag ref, or a dispatch input. */
+const NOT_PULL_REQUEST = [
+  /github\.event_name\s*(?:!=\s*['"]pull_request['"]|==\s*['"](?:push|schedule|workflow_dispatch|release)['"])/,
+  /(?<!!\s*)startsWith\(\s*github\.ref\s*,\s*['"]refs\/tags\//,
+  /github\.ref_type\s*==\s*['"]tag['"]/,
+  /\binputs\./,
+];
+
+/**
+ * False when a job's `if:` keeps it off pull requests: it has no positive `github.event_name == 'pull_request'` and
+ * every `||` clause of it holds only for another event, a tag ref or a dispatch input. A clause that says
+ * nothing of those (a draft check, a branch ref) can still hold on a pull request.
+ */
+function runsOnPullRequest(job: Record<string, unknown>): boolean {
+  const condition = job.if;
+  if (typeof condition !== 'string') return true;
+  if (/github\.event_name\s*==\s*['"]pull_request['"]/.test(condition)) return true;
+  return condition.split('||').some(clause => !NOT_PULL_REQUEST.some(marker => marker.test(clause)));
 }
 
 /** Where and how often the suite runs: hooks, watch mode, CI triggers and OS matrices, and agent instructions. */
 export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
   const findings: Finding[] = [];
 
-  const scanHookText = (file: string, text: string): void => {
-    text.split(/\r?\n/).forEach((line, index) => {
-      if (RUNS_TESTS.test(line) && !SCOPED.test(line) && !line.trim().startsWith('#')) {
-        findings.push({
-          category: 'frequency',
-          rule: 'frequency.hook-full-suite',
-          file,
-          line: index + 1,
-          message: 'A git hook runs the whole suite on every commit or push. Run only affected tests, or move the full run to a slower lane.',
-          evidence: line.trim().slice(0, 160),
-        });
-      }
+  const addHookFinding = (file: string, line: number | undefined, evidence: string): void => {
+    findings.push({
+      category: 'frequency',
+      rule: 'frequency.hook-full-suite',
+      file,
+      ...(line === undefined ? {} : { line }),
+      message: 'A git hook runs the whole suite on every commit or push. Run only affected tests, or move the full run to a slower lane.',
+      evidence: evidence.trim().slice(0, 160),
     });
   };
+
   for (const hook of HOOK_FILES) {
     const text = readText(join(root, hook));
-    if (text !== null) scanHookText(hook, text);
+    if (text === null) continue;
+    for (const { line, command } of joinContinuations(text.split(/\r?\n/).map((command, index) => ({ line: index + 1, command })))) {
+      if (runsWholeSuite(command)) addHookFinding(hook, line, command);
+    }
+  }
+  for (const hook of LEFTHOOK_FILES) {
+    const text = readText(join(root, hook));
+    if (text === null) continue;
+    for (const { line, command } of joinContinuations(lefthookCommands(text))) {
+      if (runsWholeSuite(command)) addHookFinding(hook, line, command);
+    }
   }
 
   const pkgText = readText(join(root, 'package.json'));
   if (pkgText !== null) {
-    let scripts: Record<string, string> = {};
+    let pkg: Record<string, unknown> = {};
     try {
-      scripts = (JSON.parse(pkgText) as { scripts?: Record<string, string> }).scripts ?? {};
+      const parsed: unknown = JSON.parse(pkgText);
+      if (isRecord(parsed)) pkg = parsed;
     } catch {
       // Unreadable package.json: nothing to report here.
     }
+    const scripts = isRecord(pkg.scripts) ? pkg.scripts : {};
     for (const name of HOOK_SCRIPTS) {
-      if (scripts[name] && RUNS_TESTS.test(scripts[name]) && !SCOPED.test(scripts[name])) {
+      const script = scripts[name];
+      if (typeof script === 'string' && runsWholeSuite(script)) {
         findings.push({
           category: 'frequency',
           rule: 'frequency.hook-full-suite',
           file: 'package.json',
           message: `The ${name} script runs the whole suite automatically.`,
-          evidence: `${name}: ${scripts[name]}`,
+          evidence: `${name}: ${script}`.slice(0, 160),
         });
       }
     }
-    for (const segment of (scripts.test ?? '').split('&&').map(part => part.trim())) {
-      const bareVitest = /^vitest(?:\s|$)/.test(segment) && !/(?:^|\s)(?:run|related|bench)(?:\s|$)|--run\b/.test(segment);
-      if (bareVitest || /--watch(?:All)?\b/.test(segment)) {
-        findings.push({
-          category: 'frequency',
-          rule: 'frequency.watch-default',
-          file: 'package.json',
-          message: 'The test script can start watch mode, which blocks an agent running in an interactive terminal. Make it a single run (vitest run, jest without --watch).',
-          evidence: `test: ${scripts.test}`,
-        });
-        break;
-      }
+    const simpleGitHooks = isRecord(pkg['simple-git-hooks']) ? pkg['simple-git-hooks'] : {};
+    for (const [name, command] of Object.entries(simpleGitHooks)) {
+      if (typeof command === 'string' && runsWholeSuite(command)) addHookFinding('package.json', undefined, `${name}: ${command}`);
+    }
+    const testScript = scripts.test;
+    if (typeof testScript === 'string' && testScript.split(/&&|\|\||;/).some(segment => startsWatchMode(segment.trim()))) {
+      findings.push({
+        category: 'frequency',
+        rule: 'frequency.watch-default',
+        file: 'package.json',
+        message:
+          'The test script starts watch mode when stdin is a terminal and CI is unset, so an interactive session can wait on it. Make it a single run: `vitest run` (jest without --watch).',
+        evidence: `test: ${testScript}`.slice(0, 160),
+      });
     }
   }
 
   const workflowDir = join(root, '.github', 'workflows');
-  if (existsSync(workflowDir)) {
-    for (const name of readdirSync(workflowDir).filter(entry => /\.ya?ml$/.test(entry)).sort()) {
-      const file = `.github/workflows/${name}`;
-      let workflow: Record<string, unknown>;
-      try {
-        workflow = (parse(readFileSync(join(workflowDir, name), 'utf8')) ?? {}) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
-      const triggers = triggersOf(workflow);
-      const jobs = (workflow.jobs ?? {}) as Record<string, { 'runs-on'?: unknown; strategy?: { matrix?: { os?: unknown } } }>;
-      const expensiveRunners = [
-        ...new Set(
-          Object.values(jobs).flatMap(job => {
-            const os = job?.strategy?.matrix?.os;
-            const runsOn = job?.['runs-on'];
-            return [...(Array.isArray(os) ? os : []), ...(typeof runsOn === 'string' ? [runsOn] : [])].map(String).filter(entry => EXPENSIVE_OS.test(entry));
-          }),
-        ),
-      ];
-      const automatic: string[] = [];
-      for (const trigger of ['push', 'pull_request'].filter(name => name in triggers)) {
-        const config = triggers[trigger];
-        const has = (key: string): boolean => !!config && typeof config === 'object' && key in config;
-        // A tag-only push trigger is a release-lane run, not a run on every push.
-        const filtered = has('paths') || has('paths-ignore') || (trigger === 'push' && has('tags') && !has('branches'));
-        if (filtered) continue;
-        // One Linux job per pull-request update is the recommended non-blocking check; only Windows or macOS makes it costly.
-        if (trigger === 'pull_request' && expensiveRunners.length === 0) continue;
-        automatic.push(trigger);
+  let workflowNames: string[] = [];
+  try {
+    workflowNames = readdirSync(workflowDir).filter(entry => /\.ya?ml$/.test(entry)).sort();
+  } catch {
+    // No workflows directory, or not a directory: nothing to report here.
+  }
+  for (const name of workflowNames) {
+    const file = `.github/workflows/${name}`;
+    const text = readText(join(workflowDir, name));
+    if (text === null) continue;
+    let workflow: unknown;
+    try {
+      workflow = parse(text);
+    } catch {
+      continue;
+    }
+    if (!isRecord(workflow)) continue;
+    const triggers = triggersOf(workflow);
+    const jobs = (isRecord(workflow.jobs) ? Object.values(workflow.jobs) : []).filter(isRecord).map(job => ({ ...expensiveRunnersOf(job), onPullRequest: runsOnPullRequest(job) }));
+    const reportedMatrix = new Set<number>();
+    const reportMatrix = (applies: (job: { onPullRequest: boolean }) => boolean): void => {
+      jobs.forEach((job, index) => {
+        if (job.matrix.length === 0 || reportedMatrix.has(index) || !applies(job)) return;
+        reportedMatrix.add(index);
         findings.push({
           category: 'frequency',
-          rule: trigger === 'push' ? 'frequency.ci-on-push' : 'frequency.ci-on-pull-request',
+          rule: 'frequency.ci-os-matrix-on-push',
           file,
-          message:
-            trigger === 'push'
-              ? `CI runs on every push to a branch with no path filter. A pull_request trigger fires once per pull-request update instead.${phaseAdvice(map)}`
-              : `A pull_request workflow runs on ${expensiveRunners.join(', ')}, which bills at a higher rate than Linux. Keep the OS matrix off the pull-request path.${phaseAdvice(map)}`,
-          evidence: `on: ${trigger}`,
+          message: 'An automatic workflow fans out to Windows or macOS runners, which bill at a higher rate than Linux.',
+          evidence: `matrix.os: ${job.matrix.join(', ')}`,
         });
-      }
-      if (automatic.length > 0) {
-        for (const job of Object.values(jobs)) {
-          const os = job?.strategy?.matrix?.os;
-          const expensive = Array.isArray(os) ? os.map(String).filter(entry => EXPENSIVE_OS.test(entry)) : [];
-          if (expensive.length > 0) {
+      });
+    };
+
+    if ('push' in triggers) {
+      const config = triggers.push;
+      const has = (key: string): boolean => isRecord(config) && key in config;
+      // A tag-only push trigger is a release-lane run, not a run on every push.
+      const tagOnly = has('tags') && !has('branches') && !has('branches-ignore');
+      if (!tagOnly) {
+        const pushRunners = [...new Set(jobs.flatMap(job => job.all))];
+        if (has('paths') || has('paths-ignore')) {
+          // A path filter excuses Linux but not Windows or macOS.
+          if (pushRunners.length > 0) {
             findings.push({
               category: 'frequency',
-              rule: 'frequency.ci-os-matrix-on-push',
+              rule: 'frequency.ci-on-push',
               file,
-              message: 'An automatic workflow fans out to Windows or macOS runners, which bill at a higher rate than Linux.',
-              evidence: `matrix.os: ${expensive.join(', ')}`,
+              message: `A push-triggered workflow runs on ${pushRunners.join(', ')}, which bills at a higher rate than Linux, and a path filter does not change that. Keep Windows and macOS off the push path.${phaseAdvice(map)}`,
+              evidence: 'on: push',
             });
           }
+        } else {
+          const branches = isRecord(config) ? asStrings(config.branches) : [];
+          const defaultBranchOnly = branches.length > 0 && !has('branches-ignore') && branches.every(branch => /^(?:main|master)$/.test(branch));
+          findings.push({
+            category: 'frequency',
+            rule: 'frequency.ci-on-push',
+            file,
+            message: defaultBranchOnly
+              ? `CI runs on every push to the default branch, a post-merge run. ${'pull_request' in triggers ? 'The pull-request job already ran on the same tree. ' : 'A pull_request trigger tests the change before it lands. '}Drop it, or keep it as the single post-merge check.${phaseAdvice(map)}`
+              : `CI runs on every push to a branch with no path filter. A pull_request trigger fires once per pull-request update instead.${phaseAdvice(map)}`,
+            evidence: 'on: push',
+          });
         }
+        reportMatrix(() => true);
+      }
+    }
+    if ('pull_request' in triggers) {
+      // One Linux job per pull-request update is the recommended non-blocking check; a path filter does not excuse Windows or macOS.
+      const runners = [...new Set(jobs.filter(job => job.onPullRequest).flatMap(job => job.all))];
+      if (runners.length > 0) {
+        findings.push({
+          category: 'frequency',
+          rule: 'frequency.ci-on-pull-request',
+          file,
+          message: `A pull_request workflow runs on ${runners.join(', ')}, which bills at a higher rate than Linux, and a path filter does not change that. Keep Windows and macOS off the pull-request path.${phaseAdvice(map)}`,
+          evidence: 'on: pull_request',
+        });
+        reportMatrix(job => job.onPullRequest);
       }
     }
   }
 
-  for (const doc of ['AGENTS.md', 'CLAUDE.md']) {
+  for (const doc of AGENT_DOCS) {
     const text = readText(join(root, doc));
     if (text === null) continue;
+    let fenced = false;
     text.split(/\r?\n/).forEach((line, index) => {
-      if (AGENT_RUN_ALL.test(line)) {
+      if (/^\s*(?:```|~~~)/.test(line)) {
+        fenced = !fenced;
+        return;
+      }
+      if (fenced) return;
+      const flagged = [...line.matchAll(AGENT_RUN_ALL)].some(match => {
+        const before = line.slice(0, match.index);
+        const after = line.slice(match.index + match[0].length);
+        return !AGENT_NEGATION.test(before) && !AGENT_MERGE_GATE.test(after);
+      });
+      if (flagged) {
         findings.push({
           category: 'frequency',
           rule: 'frequency.agent-run-all',
@@ -3334,13 +4873,13 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
   }
   return findings;
 }
-```
+````
 
 - [ ] **Step 4: Run the test and the typecheck**
 
 Run: `npx vitest run tests/detectors/frequency.test.ts`
 
-Expected: PASS, 11 tests.
+Expected: PASS, 174 tests.
 
 Run: `npm run typecheck`
 
@@ -3367,8 +4906,12 @@ git commit -m "feat: detect over-frequent test runs in hooks, scripts, CI and ag
 Create `tests/riskdraft.test.ts`:
 
 ```ts
+import { symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { candidateDirs, draftRiskMap } from '../src/riskdraft.ts';
+import { loadRiskMap, serializeRiskMap, tierFor } from '../src/riskmap.ts';
 import { RiskMap } from '../src/schema.ts';
 import { makeTree } from './helpers/tree.ts';
 
@@ -3416,6 +4959,212 @@ describe('draftRiskMap', () => {
     expect(map.areas.every(area => area.why && area.why.length > 0)).toBe(true);
   });
 });
+
+/** Draft a map from `src/<name>/a.ts` for every name and return the tier by directory name. */
+function tiersByName(names: string[]): Record<string, string> {
+  const files = Object.fromEntries(names.map(name => [`src/${name}/a.ts`, '']));
+  const map = draftRiskMap(makeTree(files));
+  return Object.fromEntries(map.areas.map(area => [area.path.replace(/^src\//, '').replace(/\/\*\*$/, ''), area.tier]));
+}
+
+const expectAll = (names: string[], tier: string): void => {
+  const tiers = tiersByName(names);
+  expect(Object.fromEntries(names.map(name => [name, tiers[name]]))).toEqual(Object.fromEntries(names.map(name => [name, tier])));
+};
+
+describe('candidateDirs on unreadable roots', () => {
+  it('returns nothing for a missing root', () => {
+    expect(candidateDirs(join(tmpdir(), 'agent-tests-no-such-directory-xyz'))).toEqual([]);
+  });
+
+  it('returns nothing when the root is a file', () => {
+    const root = makeTree({ 'a.txt': 'x' });
+    expect(candidateDirs(join(root, 'a.txt'))).toEqual([]);
+    expect(draftRiskMap(join(root, 'a.txt')).areas).toEqual([]);
+  });
+});
+
+describe('name-token classification', () => {
+  it('marks every security or money keyword critical', () => {
+    expectAll(
+      [
+        'auth', 'authn', 'authz', 'oauth', 'oauth2', 'authentication', 'authorization', 'login', 'logout', 'session', 'sessions', 'user-session',
+        'token', 'tokens', 'credentials', 'password', 'secret', 'secrets', 'security', 'crypto', 'encryption', 'jwt', 'rbac', 'acl', 'permissions',
+        'payments', 'billing', 'invoice', 'checkout', 'wallet', 'ledger', 'money', 'transactions', 'account', 'accountSettings', 'DBUtils', 'db', 'database',
+        'datastore', 'persistence', 'storage', 'migrations', 'schema',
+      ],
+      'critical',
+    );
+  });
+
+  it('does not match keywords inside other words', () => {
+    expectAll(
+      ['author', 'authors', 'restore', 'stored', 'storefront', 'bookstore', 'dbus', 'mydb', 'subsession', 'accounting', 'guide', 'store', 'data_store', 'parser', 'orders', 'ui-kit', 'design'],
+      'standard',
+    );
+  });
+
+  it('marks presentation names low only when every token is presentation', () => {
+    expectAll(['ui', 'views', 'components', 'styles', 'theme', 'examples', 'demo', 'playground', 'storybook', 'stories', 'assets', 'icons', 'images', 'fonts', 'public', 'static'], 'low');
+  });
+
+  it('writes a plain-language reason', () => {
+    const map = draftRiskMap(makeTree({ 'src/auth/a.ts': '', 'src/db/a.ts': '', 'src/ui/a.ts': '', 'src/parser/a.ts': '' }));
+    expect(Object.fromEntries(map.areas.map(area => [area.path, area.why]))).toEqual({
+      'src/auth/**': 'name suggests authentication; confirm',
+      'src/db/**': 'name suggests data persistence; confirm',
+      'src/parser/**': 'no risk keyword in the name; confirm',
+      'src/ui/**': 'presentation or example code; confirm',
+    });
+  });
+
+  it('lets a critical token win over a presentation token', () => {
+    expectAll(['ui-auth'], 'critical');
+  });
+});
+
+describe('loose files directly under the source directory', () => {
+  it('emits a critical area per risky file before the catch-all', () => {
+    const map = draftRiskMap(makeTree({ 'src/core/a.ts': '', 'src/auth.ts': '', 'src/db.ts': '', 'src/util.ts': '' }));
+    expect(map.areas.map(area => `${area.path}:${area.tier}`)).toEqual(['src/core/**:standard', 'src/auth.ts:critical', 'src/db.ts:critical', 'src/**:standard']);
+    expect(map.areas.find(area => area.path === 'src/auth.ts')?.why).toBe('file name suggests authentication; confirm');
+  });
+
+  it('classifies a file by its stem and skips test files', () => {
+    const map = draftRiskMap(makeTree({ 'src/auth.service.ts': '', 'src/auth.test.ts': '', 'src/author.ts': '' }));
+    expect(map.areas.map(area => area.path)).toEqual(['src/auth.service.ts', 'src/**']);
+  });
+
+  it('resolves a risky file to its own area and other files to the catch-all after a round trip', () => {
+    const map = draftRiskMap(makeTree({ 'src/core/a.ts': '', 'src/auth.ts': '', 'src/other.ts': '' }));
+    const loaded = loadRiskMap(makeTree({ '.testing/risk.yml': serializeRiskMap(map) }));
+    expect(loaded).toEqual(map);
+    expect(tierFor(map, 'src/auth.ts')).toEqual({ tier: 'critical', area: 'src/auth.ts' });
+    expect(tierFor(map, 'src/other.ts')).toEqual({ tier: 'standard', area: 'src/**' });
+    expect(tierFor(map, 'src/core/a.ts')).toEqual({ tier: 'standard', area: 'src/core/**' });
+  });
+});
+
+describe('container directories', () => {
+  it('descends through generic containers up to three levels', () => {
+    const map = draftRiskMap(makeTree({ 'src/app/features/auth/a.ts': '', 'src/app/features/billing/b.ts': '', 'src/core/c.ts': '' }));
+    expect(map.areas.map(area => `${area.path}:${area.tier}`)).toEqual(['src/app/features/auth/**:critical', 'src/app/features/billing/**:critical', 'src/core/**:standard']);
+  });
+
+  it('lists a container that has no subdirectories, and stops descending at the third level', () => {
+    expect(candidateDirs(makeTree({ 'src/modules/x.ts': '' }))).toEqual(['src/modules']);
+    expect(candidateDirs(makeTree({ 'src/modules/modules/modules/modules/a.ts': '' }))).toEqual(['src/modules/modules/modules']);
+  });
+
+  it('covers loose code inside a container with the catch-all', () => {
+    const map = draftRiskMap(makeTree({ 'src/app/page.ts': '', 'src/app/features/auth/a.ts': '' }));
+    expect(map.areas.map(area => area.path)).toEqual(['src/app/features/auth/**', 'src/**']);
+  });
+
+  it('stays at the package level under packages', () => {
+    expect(candidateDirs(makeTree({ 'packages/core/src/auth/a.ts': '', 'packages/web/src/b.ts': '' }))).toEqual(['packages/core', 'packages/web']);
+  });
+});
+
+describe('skipped names', () => {
+  it('skips test support, mocks and tool directories under src', () => {
+    const root = makeTree({
+      'src/__mocks__/a.ts': '', 'src/mocks/a.ts': '', 'src/testing/a.ts': '', 'src/test-utils/a.ts': '', 'src/e2e/a.ts': '', 'src/spec/a.ts': '', 'src/specs/a.ts': '',
+      'src/bench/a.ts': '', 'src/benchmarks/a.ts': '', 'src/helpers/a.ts': '', 'src/fixtures/a.ts': '', 'src/docs/a.ts': '', 'src/doc/a.ts': '', 'src/scripts/a.ts': '',
+      'src/build/a.ts': '', 'src/real/a.ts': '',
+    });
+    expect(candidateDirs(root)).toEqual(['src/real']);
+  });
+
+  it('skips language tool directories at the root only when there is no source directory', () => {
+    expect(candidateDirs(makeTree({ 'venv/x.py': '', 'env/x.py': '', 'target/x': '', '__pycache__/x': '', 'core/a.ts': '' }))).toEqual(['core']);
+    expect(candidateDirs(makeTree({ 'src/target/a.ts': '' }))).toEqual(['src/target']);
+  });
+});
+
+describe('real directory names', () => {
+  it('keeps the casing of the source directory', () => {
+    const root = makeTree({ 'Src/auth/a.ts': '', 'Src/loose.ts': '' });
+    expect(candidateDirs(root)).toEqual(['Src/auth']);
+    expect(draftRiskMap(root).areas.map(area => area.path)).toEqual(['Src/auth/**', 'Src/**']);
+  });
+
+  it('does not follow a symlinked source directory', () => {
+    const root = makeTree({ 'real/auth/a.ts': '' });
+    symlinkSync(join(root, 'real'), join(root, 'src'), 'junction');
+    expect(candidateDirs(root)).toEqual(['real']);
+  });
+});
+
+describe('route groups and decorated names', () => {
+  it('classifies framework route groups by the word inside the brackets', () => {
+    const map = draftRiskMap(makeTree({ 'app/(auth)/login/page.tsx': '', 'app/(marketing)/home/page.tsx': '', 'app/[slug]/page.tsx': '' }));
+    expect(map.areas.map(area => `${area.path}:${area.tier}`)).toEqual(['app/(auth)/**:critical', 'app/(marketing)/**:standard', 'app/[slug]/**:standard']);
+  });
+
+  it('ignores brackets and other punctuation around a keyword', () => {
+    expectAll(['[auth]', '@auth', '_auth', '(billing)', '$session'], 'critical');
+  });
+});
+
+describe('critical files inside a descended container', () => {
+  it('gives a risky file in a container its own area before the catch-all', () => {
+    const map = draftRiskMap(makeTree({ 'src/app/auth.service.ts': '', 'src/app/user.service.ts': '', 'src/app/features/billing/a.ts': '' }));
+    expect(map.areas.map(area => `${area.path}:${area.tier}`)).toEqual(['src/app/features/billing/**:critical', 'src/app/auth.service.ts:critical', 'src/**:standard']);
+    expect(map.areas.find(area => area.path === 'src/app/auth.service.ts')?.why).toBe('file name suggests authentication; confirm');
+  });
+
+  it('only adds to the catch-all for a file that is not risky or is a test', () => {
+    const map = draftRiskMap(makeTree({ 'src/app/user.service.ts': '', 'src/app/auth.test.ts': '', 'src/app/features/ok/a.ts': '' }));
+    expect(map.areas.map(area => area.path)).toEqual(['src/app/features/ok/**', 'src/**']);
+  });
+
+  it('keeps risky container files in a tier order that resolves them first', () => {
+    const map = draftRiskMap(makeTree({ 'src/app/auth.service.ts': '', 'src/app/features/ok/a.ts': '' }));
+    expect(tierFor(map, 'src/app/auth.service.ts')).toEqual({ tier: 'critical', area: 'src/app/auth.service.ts' });
+    expect(tierFor(map, 'src/app/other.ts')).toEqual({ tier: 'standard', area: 'src/**' });
+  });
+});
+
+describe('grouping directories that hide critical children', () => {
+  it('descends through api, routes, services, controllers and server directories', () => {
+    const map = draftRiskMap(
+      makeTree({ 'src/api/auth/a.ts': '', 'src/routes/auth/a.ts': '', 'src/services/payments/a.ts': '', 'src/server/auth/a.ts': '', 'src/controllers/billing/a.ts': '', 'src/handlers/misc/a.ts': '' }),
+    );
+    expect(map.areas.map(area => `${area.path}:${area.tier}`)).toEqual([
+      'src/api/auth/**:critical',
+      'src/controllers/billing/**:critical',
+      'src/handlers/misc/**:standard',
+      'src/routes/auth/**:critical',
+      'src/server/auth/**:critical',
+      'src/services/payments/**:critical',
+    ]);
+    expect(candidateDirs(makeTree({ 'app/api/auth/a.ts': '' }))).toEqual(['app/api/auth']);
+    expect(candidateDirs(makeTree({ 'src/backend/db/a.ts': '', 'src/domain/ledger/a.ts': '' }))).toEqual(['src/backend/db', 'src/domain/ledger']);
+  });
+
+  it('lists a grouping directory as itself when it has no usable subdirectory', () => {
+    expect(candidateDirs(makeTree({ 'src/api/x.ts': '' }))).toEqual(['src/api']);
+    expect(candidateDirs(makeTree({ 'src/api/tests/a.ts': '', 'src/core/b.ts': '' }))).toEqual(['src/api', 'src/core']);
+  });
+
+  it('classifies the children of core and covers its loose files with the catch-all', () => {
+    const map = draftRiskMap(makeTree({ 'src/core/auth/a.ts': '', 'src/core/util.ts': '' }));
+    expect(map.areas.map(area => `${area.path}:${area.tier}`)).toEqual(['src/core/auth/**:critical', 'src/**:standard']);
+  });
+});
+
+describe('more security vocabulary', () => {
+  it('marks identity, web security, secrets and payment provider names critical', () => {
+    expectAll(['iam', 'identity', 'identities', 'sso', 'mfa', 'otp', 'vault', 'csrf', 'cookie', 'cookies', 'stripe', 'webhook', 'webhooks', 'authorisation'], 'critical');
+  });
+
+  it('leaves order names standard and says tokens may be design tokens', () => {
+    expectAll(['order', 'orders'], 'standard');
+    const map = draftRiskMap(makeTree({ 'src/tokens/a.ts': '' }));
+    expect(map.areas[0]?.why).toBe('name suggests tokens (auth or design); confirm');
+  });
+});
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -3429,55 +5178,163 @@ Expected: FAIL. Cannot import `../src/riskdraft.ts`.
 Create `src/riskdraft.ts`:
 
 ```ts
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { type Dirent, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { IGNORED_DIRS } from './discover.ts';
+import { IGNORED_DIRS, isTestPath, readEntries } from './discover.ts';
 import { defaultRiskMap } from './riskmap.ts';
 import type { RiskMap, Tier } from './schema.ts';
 
-const BASES = ['src', 'lib', 'app', 'packages', 'apps'];
-const SKIPPED = /^(?:tests?|__tests__|docs?|scripts|fixtures?)$/i;
-const CRITICAL = /(auth|security|crypto|secret|payment|billing|money|ledger|persist|storage|store|database|db|migrat|schema|session|permission|account)/i;
-const LOW = /^(?:ui|views?|components?|styles?|themes?|examples?|demo|playground|storybook|stories|assets)$/i;
+const BASES = new Set(['src', 'lib', 'app', 'packages', 'apps']);
+const SOURCE_BASES = new Set(['src', 'lib', 'app']);
+/** Directories that only group other directories. The draft looks through them instead of listing them. */
+const CONTAINERS = new Set(['app', 'apps', 'packages', 'internal', 'pkg', 'features', 'modules', 'domain', 'domains', 'api', 'routes', 'services', 'controllers', 'handlers', 'server', 'backend', 'core']);
+const MAX_DEPTH = 3;
+
+/**
+ * Directory names that are never areas, at any depth and in any case. IGNORED_DIRS contributes `build`, `out`, `vendor` and the like,
+ * so a real `src/build` module needs a hand-written area. Dot directories are skipped as well.
+ */
+const SKIPPED = new Set(['tests', 'test', '__tests__', '__mocks__', 'mocks', 'spec', 'specs', 'e2e', 'bench', 'benchmarks', 'testing', 'test-utils', 'helpers', 'fixture', 'fixtures', 'docs', 'doc', 'scripts']);
+/** Tool output that sits at the root of a project with no conventional source directory. */
+const ROOT_SKIPPED = new Set(['venv', 'env', 'target', '__pycache__']);
 
 const isDir = (path: string): boolean => existsSync(path) && statSync(path).isDirectory();
 
-/** Directories the risk map should classify: the children of src/lib/app/packages/apps, or of the root when none exist. */
-export function candidateDirs(root: string): string[] {
-  const bases = BASES.filter(base => isDir(join(root, base)));
-  const parents = bases.length > 0 ? bases : ['.'];
-  const found: string[] = [];
-  for (const base of parents) {
-    for (const entry of readdirSync(join(root, base), { withFileTypes: true })) {
-      if (!entry.isDirectory() || IGNORED_DIRS.has(entry.name) || entry.name.startsWith('.') || SKIPPED.test(entry.name)) continue;
-      found.push(base === '.' ? entry.name : `${base}/${entry.name}`);
-    }
-  }
-  return found.sort();
-}
-
-function classify(dir: string): { tier: Tier; why: string } {
-  const name = dir.split('/').pop() ?? dir;
-  const critical = name.match(CRITICAL);
-  if (critical) return { tier: 'critical', why: `name suggests ${critical[1].toLowerCase()}; confirm` };
-  if (LOW.test(name)) return { tier: 'low', why: 'presentation or example code; confirm' };
-  return { tier: 'standard', why: 'default; confirm' };
+function isSkipped(name: string, atRoot: boolean): boolean {
+  const lower = name.toLowerCase();
+  return name.startsWith('.') || IGNORED_DIRS.has(name) || SKIPPED.has(lower) || (atRoot && ROOT_SKIPPED.has(lower));
 }
 
 const CODE = /\.[cm]?[jt]sx?$/;
-const SOURCE_BASES = ['src', 'lib', 'app'];
+const isCode = (entry: Dirent): boolean => entry.isFile() && CODE.test(entry.name);
 
-const hasLooseCode = (root: string, base: string): boolean => readdirSync(join(root, base), { withFileTypes: true }).some(entry => entry.isFile() && CODE.test(entry.name));
+interface Draft {
+  dirs: string[];
+  /** Per source directory: its real name and the repo-relative code files sitting directly in it or in a container below it. */
+  sources: { base: string; files: string[] }[];
+}
+
+/**
+ * Walk the candidate directories. Symbolic links and junctions are not followed, as in discover.ts, and that includes a
+ * symlinked `src`. Areas stop three levels below a base (`src/app/features/auth`); anything deeper, such as
+ * `packages/core/src/auth`, must be added to the risk map by hand. Unreadable directories are skipped.
+ * The code files of every container that was looked through are added to `files`, because no listed directory covers them.
+ */
+function collect(root: string, prefix: string, entries: Dirent[], level: number, atRoot: boolean, workspaces: boolean, out: string[], files: string[]): void {
+  for (const entry of entries) {
+    if (!entry.isDirectory() || isSkipped(entry.name, atRoot)) continue;
+    const path = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+    if (CONTAINERS.has(entry.name.toLowerCase()) && level < MAX_DEPTH && !(workspaces && level === 1)) {
+      const children = readEntries(join(root, path));
+      const before = out.length;
+      const nestedFiles: string[] = [];
+      collect(root, path, children, level + 1, atRoot, workspaces, out, nestedFiles);
+      if (out.length > before) {
+        files.push(...nestedFiles, ...children.filter(isCode).map(child => `${path}/${child.name}`));
+        continue;
+      }
+    }
+    out.push(path);
+  }
+}
+
+function draft(root: string): Draft {
+  const result: Draft = { dirs: [], sources: [] };
+  if (!isDir(root)) return result;
+  const rootEntries = readEntries(root);
+  // Sorted, so the order of the areas does not depend on the order the filesystem lists the root.
+  const bases = rootEntries
+    .filter(entry => entry.isDirectory() && BASES.has(entry.name.toLowerCase()))
+    .map(entry => entry.name)
+    .sort();
+  if (bases.length === 0) {
+    collect(root, '', rootEntries, 1, true, false, result.dirs, []);
+  }
+  for (const base of bases) {
+    const entries = readEntries(join(root, base));
+    const files = entries.filter(isCode).map(entry => `${base}/${entry.name}`);
+    collect(root, base, entries, 1, false, !SOURCE_BASES.has(base.toLowerCase()), result.dirs, files);
+    // Only src, lib and app get per-file areas and a catch-all. The children of packages and apps are workspaces, so they are
+    // listed whole and never looked through, and loose code directly in packages or apps is covered by no area: add one by hand.
+    if (SOURCE_BASES.has(base.toLowerCase())) result.sources.push({ base, files: files.sort() });
+  }
+  result.dirs.sort();
+  return result;
+}
+
+/** Directories the risk map should classify: the children of src/lib/app/packages/apps, or of the root when none exist. */
+export function candidateDirs(root: string): string[] {
+  return draft(root).dirs;
+}
+
+/** Keyword groups with the plain-language label used in `why`. A token matches a keyword exactly, or starts with a stem. */
+const CRITICAL: { label: string; words: string[]; stems: string[] }[] = [
+  { label: 'authentication', words: ['auth', 'authn', 'oauth', 'login', 'logout'], stems: ['authent'] },
+  { label: 'authorization', words: ['authz', 'rbac', 'acl'], stems: ['authoriz', 'authoris', 'permission'] },
+  { label: 'identity and access', words: ['iam', 'identity', 'sso', 'mfa', 'otp'], stems: [] },
+  { label: 'sessions', words: ['session'], stems: [] },
+  { label: 'tokens (auth or design)', words: ['token', 'jwt'], stems: [] },
+  { label: 'credentials or secrets', words: ['password', 'secret', 'vault'], stems: ['credential'] },
+  { label: 'web security', words: ['csrf', 'cookie'], stems: [] },
+  { label: 'security', words: ['security'], stems: [] },
+  { label: 'cryptography', words: [], stems: ['crypt', 'encrypt', 'decrypt'] },
+  { label: 'payments or money', words: ['billing', 'invoice', 'checkout', 'wallet', 'ledger', 'money', 'transaction', 'stripe'], stems: ['payment'] },
+  { label: 'webhooks', words: ['webhook'], stems: [] },
+  { label: 'accounts', words: ['account'], stems: [] },
+  { label: 'data persistence', words: ['db', 'database', 'datastore', 'storage', 'schema'], stems: ['persist', 'migrat'] },
+];
+const LOW = new Set(['ui', 'view', 'component', 'style', 'theme', 'example', 'demo', 'playground', 'storybook', 'story', 'asset', 'icon', 'image', 'font', 'public', 'static']);
+
+/**
+ * Lowercase tokens of a name: split on camelCase boundaries and on anything that is not a letter or digit (so `(auth)`,
+ * `[auth]`, `@auth` and `_auth` all give `auth`), drop trailing digits and a plural s.
+ */
+function tokens(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[^a-zA-Z0-9]+/)
+    .map(token => token.toLowerCase().replace(/(?<=[a-z])\d+$/, ''))
+    .filter(token => token.length > 0)
+    .map(token => (token.endsWith('s') && !token.endsWith('ss') ? token.slice(0, -1) : token));
+}
+
+/** A token as written (`cookie`), and with `ie` read as `y` (`stories` loses its s to `storie`, which is `story`). */
+const forms = (token: string): string[] => (token.endsWith('ie') ? [token, `${token.slice(0, -2)}y`] : [token]);
+
+/** The first token that names something risky, as the label for `why`. */
+function criticalLabel(parts: string[]): string | undefined {
+  for (const token of parts) {
+    for (const group of CRITICAL) {
+      if (forms(token).some(form => group.words.includes(form) || group.stems.some(stem => form.startsWith(stem)))) return group.label;
+    }
+  }
+  return undefined;
+}
+
+function classify(dir: string): { tier: Tier; why: string } {
+  const parts = tokens(dir.split('/').pop() ?? dir);
+  const label = criticalLabel(parts);
+  if (label) return { tier: 'critical', why: `name suggests ${label}; confirm` };
+  if (parts.length > 0 && parts.every(token => forms(token).some(form => LOW.has(form)))) return { tier: 'low', why: 'presentation or example code; confirm' };
+  return { tier: 'standard', why: 'no risk keyword in the name; confirm' };
+}
 
 /** A first guess from directory names. The owner confirms it once; later scans flag drift. */
 export function draftRiskMap(root: string): RiskMap {
+  const { dirs, sources } = draft(root);
   const map = defaultRiskMap();
-  map.areas = candidateDirs(root).map(dir => ({ path: `${dir}/**`, ...classify(dir) }));
-  // Code that sits directly in the source directory belongs to no subdirectory. First match wins, so this catch-all goes last.
-  for (const base of SOURCE_BASES) {
-    if (isDir(join(root, base)) && hasLooseCode(root, base)) {
-      map.areas.push({ path: `${base}/**`, tier: 'standard', why: 'files directly under the source directory; confirm' });
+  map.areas = dirs.map(dir => ({ path: `${dir}/**`, ...classify(dir) }));
+  for (const { base, files } of sources) {
+    // A risky file name gets its own area. Test files are not subjects, so they never do.
+    for (const file of files) {
+      const name = file.split('/').pop() ?? file;
+      const label = isTestPath(name) ? undefined : criticalLabel(tokens(name.replace(CODE, '')));
+      if (label) map.areas.push({ path: file, tier: 'critical', why: `file name suggests ${label}; confirm` });
     }
+    // Code outside every listed directory (directly in the source directory, or in a container that was looked through)
+    // belongs to no area. First match wins, so this catch-all goes last.
+    if (files.length > 0) map.areas.push({ path: `${base}/**`, tier: 'standard', why: 'files directly under the source directory; confirm' });
   }
   return map;
 }
@@ -3487,7 +5344,7 @@ export function draftRiskMap(root: string): RiskMap {
 
 Run: `npx vitest run tests/riskdraft.test.ts`
 
-Expected: PASS, 6 tests.
+Expected: PASS, 34 tests.
 
 Run: `npm run typecheck`
 
@@ -3504,7 +5361,7 @@ git commit -m "feat: draft a risk map from directory names"
 
 ## Task 12: Git churn
 
-Churn counts commits that edited a test without touching the code it covers: the signature of a brittle test rewritten for its own sake. It needs git history; outside a repository it reports `null`.
+Churn counts commits that rewrote a test without touching the code it covers: the signature of a brittle test rewritten for its own sake. Creating, renaming or deleting a test is not an edit. It needs history that exists for the project: outside a repository, in a repository with no commits, and in a shallow clone (the default CI checkout) it reports `null`. The log window counts commits that touched the project directory.
 
 **Files:**
 - Create: `tests/churn.test.ts`, `src/churn.ts`
@@ -3517,23 +5374,51 @@ Create `tests/churn.test.ts`:
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { pathToFileURL } from 'node:url';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { churnOf, commitFileSets } from '../src/churn.ts';
 import { makeTree } from './helpers/tree.ts';
 
+/** The environment with every GIT_* variable removed, so a hook or wrapper cannot redirect git at another repository. */
+const isGitVariable = (name: string): boolean => name.toUpperCase().startsWith('GIT_');
+const cleanEnv = (): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(process.env).filter(([name]) => !isGitVariable(name)));
+
+// commitFileSets runs git with the inherited environment, so scrub it for the whole file and restore it afterwards.
+const saved: Array<[string, string]> = [];
+beforeAll(() => {
+  for (const [name, value] of Object.entries(process.env)) {
+    if (isGitVariable(name) && value !== undefined) saved.push([name, value]);
+  }
+  for (const [name] of saved) delete process.env[name];
+});
+afterAll(() => {
+  for (const [name, value] of saved) process.env[name] = value;
+});
+
 const git = (root: string, ...args: string[]): void => {
-  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: root, stdio: 'ignore', windowsHide: true });
+  execFileSync(
+    'git',
+    ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=', '-c', 'init.defaultBranch=main', ...args],
+    { cwd: root, env: cleanEnv(), stdio: 'ignore', windowsHide: true },
+  );
 };
 
+const write = (root: string, rel: string, text: string): void => {
+  writeFileSync(join(root, rel), text);
+};
+
+const entries = (set: Map<string, string> | undefined): Array<[string, string]> => [...(set ?? [])].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
+/** Commit one creates both files, commit two edits only the test, commit three edits the test and the code. */
 function repoWithHistory(): string {
   const root = makeTree({ 'src/a.ts': 'v1', 'tests/a.test.ts': 'v1' });
   git(root, 'init', '-q');
   git(root, 'add', '.');
   git(root, 'commit', '-q', '-m', 'one');
-  writeFileSync(join(root, 'tests/a.test.ts'), 'v2');
+  write(root, 'tests/a.test.ts', 'v2');
   git(root, 'commit', '-q', '-am', 'two: test only');
-  writeFileSync(join(root, 'tests/a.test.ts'), 'v3');
-  writeFileSync(join(root, 'src/a.ts'), 'v2');
+  write(root, 'tests/a.test.ts', 'v3');
+  write(root, 'src/a.ts', 'v2');
   git(root, 'commit', '-q', '-am', 'three: both');
   return root;
 }
@@ -3543,30 +5428,147 @@ describe('commitFileSets', () => {
     expect(commitFileSets(makeTree({ 'a.txt': '' }), 10)).toBeNull();
   });
 
-  it('lists the files each commit touched, newest first', () => {
+  it('returns null for a repository with no commits', () => {
+    const root = makeTree({ 'a.txt': '' });
+    git(root, 'init', '-q');
+    expect(commitFileSets(root, 10)).toBeNull();
+  });
+
+  it('returns null for a shallow clone, whose grafted commit lists every file', () => {
+    const source = repoWithHistory();
+    const parent = makeTree();
+    const clone = join(parent, 'clone');
+    git(parent, 'clone', '-q', '--depth', '1', pathToFileURL(source).href, clone);
+    expect(commitFileSets(clone, 10)).toBeNull();
+  });
+
+  it('maps each commit to the files it touched and their status, newest first', () => {
     const sets = commitFileSets(repoWithHistory(), 10);
-    expect(sets?.map(set => [...set].sort())).toEqual([
-      ['src/a.ts', 'tests/a.test.ts'],
-      ['tests/a.test.ts'],
-      ['src/a.ts', 'tests/a.test.ts'],
+    expect(sets?.map(entries)).toEqual([
+      [
+        ['src/a.ts', 'M'],
+        ['tests/a.test.ts', 'M'],
+      ],
+      [['tests/a.test.ts', 'M']],
+      [
+        ['src/a.ts', 'A'],
+        ['tests/a.test.ts', 'A'],
+      ],
     ]);
   });
 
-  it('honours the commit limit', () => {
-    expect(commitFileSets(repoWithHistory(), 2)).toHaveLength(2);
+  it('honours the commit limit and keeps the newest commits', () => {
+    const sets = commitFileSets(repoWithHistory(), 2);
+    expect(sets?.map(entries)).toEqual([
+      [
+        ['src/a.ts', 'M'],
+        ['tests/a.test.ts', 'M'],
+      ],
+      [['tests/a.test.ts', 'M']],
+    ]);
+  });
+
+  it('counts the limit in commits that touched this root, with paths relative to it', () => {
+    const root = makeTree({ 'pkg/a.ts': 'v1', 'pkg/a.test.ts': 'v1', 'other/x.txt': 'v1' });
+    git(root, 'init', '-q');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'one');
+    write(root, 'pkg/a.ts', 'v2');
+    git(root, 'commit', '-q', '-am', 'two: pkg code');
+    write(root, 'pkg/a.test.ts', 'v2');
+    git(root, 'commit', '-q', '-am', 'three: pkg test');
+    for (const n of [2, 3, 4, 5]) {
+      write(root, 'other/x.txt', `v${n}`);
+      git(root, 'commit', '-q', '-am', `outside ${n}`);
+    }
+    const sets = commitFileSets(join(root, 'pkg'), 3);
+    expect(sets?.map(entries)).toEqual([
+      [['a.test.ts', 'M']],
+      [['a.ts', 'M']],
+      [
+        ['a.test.ts', 'A'],
+        ['a.ts', 'A'],
+      ],
+    ]);
+  });
+
+  it('round-trips a path with spaces and non-ASCII characters', () => {
+    const root = makeTree({ 'sub dir/ü é.test.ts': 'v1' });
+    git(root, 'init', '-q');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'one');
+    expect(commitFileSets(root, 10)?.map(entries)).toEqual([[['sub dir/ü é.test.ts', 'A']]]);
+  });
+
+  it('records a rename under its new path with the status R', () => {
+    const root = makeTree({ 'tests/a.test.ts': 'a body long enough to be recognised as the same file\n' });
+    git(root, 'init', '-q');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'one');
+    git(root, 'mv', 'tests/a.test.ts', 'tests/b.test.ts');
+    git(root, 'commit', '-q', '-m', 'two: rename');
+    expect(commitFileSets(root, 10)?.map(entries)).toEqual([[['tests/b.test.ts', 'R']], [['tests/a.test.ts', 'A']]]);
   });
 });
 
 describe('churnOf', () => {
-  it('counts edits to the test that never touched the code it covers', () => {
+  it('counts edits to the test and those that never touched the code it covers, not its creation', () => {
     const sets = commitFileSets(repoWithHistory(), 10);
-    expect(churnOf('tests/a.test.ts', ['src/a.ts'], sets)).toEqual({ churn: 1, edits: 3 });
+    // Commit one creates the test (not an edit), commit two edits it alone (churn), commit three edits it with its code.
+    expect(churnOf('tests/a.test.ts', ['src/a.ts'], sets)).toEqual({ churn: 1, edits: 2 });
   });
 
   it('reports unknown churn without subjects or without history', () => {
     const sets = commitFileSets(repoWithHistory(), 10);
-    expect(churnOf('tests/a.test.ts', [], sets)).toEqual({ churn: null, edits: 3 });
+    expect(churnOf('tests/a.test.ts', [], sets)).toEqual({ churn: null, edits: 2 });
     expect(churnOf('tests/a.test.ts', ['src/a.ts'], null)).toEqual({ churn: null, edits: null });
+  });
+
+  it('does not count an edit as churn when any one of several subjects changed with it', () => {
+    const root = makeTree({ 'src/a.ts': 'v1', 'src/b.ts': 'v1', 'tests/a.test.ts': 'v1' });
+    git(root, 'init', '-q');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'one');
+    write(root, 'tests/a.test.ts', 'v2');
+    write(root, 'src/b.ts', 'v2');
+    git(root, 'commit', '-q', '-am', 'two: test and the second subject');
+    write(root, 'tests/a.test.ts', 'v3');
+    git(root, 'commit', '-q', '-am', 'three: test alone');
+    write(root, 'tests/a.test.ts', 'v4');
+    write(root, 'src/a.ts', 'v2');
+    git(root, 'commit', '-q', '-am', 'four: test and the first subject');
+    const sets = commitFileSets(root, 10);
+    expect(churnOf('tests/a.test.ts', ['src/a.ts', 'src/b.ts'], sets)).toEqual({ churn: 1, edits: 3 });
+  });
+
+  it('does not count a rename as an edit', () => {
+    const root = makeTree({ 'src/a.ts': 'v1', 'tests/a.test.ts': 'a body long enough to be recognised as the same file\n' });
+    git(root, 'init', '-q');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'one');
+    git(root, 'mv', 'tests/a.test.ts', 'tests/b.test.ts');
+    git(root, 'commit', '-q', '-m', 'two: rename');
+    write(root, 'tests/b.test.ts', 'a different body\n');
+    git(root, 'commit', '-q', '-am', 'three: edit');
+    const sets = commitFileSets(root, 10);
+    expect(churnOf('tests/b.test.ts', ['src/a.ts'], sets)).toEqual({ churn: 1, edits: 1 });
+  });
+
+  it('counts only modifications as edits', () => {
+    const sets = [
+      new Map([['tests/a.test.ts', 'T']]),
+      new Map([['tests/a.test.ts', 'D']]),
+      new Map([['tests/a.test.ts', 'C']]),
+      new Map([['tests/a.test.ts', 'R']]),
+      new Map([['tests/a.test.ts', 'A']]),
+      new Map([['tests/a.test.ts', 'M']]),
+    ];
+    expect(churnOf('tests/a.test.ts', ['src/a.ts'], sets)).toEqual({ churn: 2, edits: 2 });
+  });
+
+  it('treats a subject touched with any status as touched', () => {
+    const sets = [new Map([['tests/a.test.ts', 'M'], ['src/a.ts', 'D']])];
+    expect(churnOf('tests/a.test.ts', ['src/a.ts'], sets)).toEqual({ churn: 0, edits: 1 });
   });
 });
 ```
@@ -3584,36 +5586,57 @@ Create `src/churn.ts`:
 ```ts
 import { execFileSync } from 'node:child_process';
 
-/** Files touched by each of the last `limit` commits, newest first, relative to `root`. Null when `root` has no usable git history. */
-export function commitFileSets(root: string, limit: number): Array<Set<string>> | null {
+const git = (root: string, args: string[], maxBuffer?: number): string =>
+  execFileSync('git', ['-c', 'core.quotepath=off', ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    windowsHide: true,
+    ...(maxBuffer === undefined ? {} : { maxBuffer }),
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+
+/**
+ * The files touched by each of the last `limit` commits that touched `root`, newest first. Each set maps a path relative
+ * to `root` to its status letter (A added, M modified, T type change, D deleted; a rename or copy is recorded under its
+ * new path as R or C). Null when `root` has no usable history: not a repository, no commits yet, or a shallow clone,
+ * whose oldest commit would list every file it holds as added.
+ */
+export function commitFileSets(root: string, limit: number): Array<Map<string, string>> | null {
   let log: string;
   try {
-    log = execFileSync('git', ['-c', 'core.quotepath=off', 'log', '--relative', '--name-only', '--pretty=format:%x00', '-n', String(limit)], {
-      cwd: root,
-      encoding: 'utf8',
-      windowsHide: true,
-      maxBuffer: 256 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    if (git(root, ['rev-parse', '--is-shallow-repository']).trim() === 'true') return null;
+    log = git(root, ['log', '-M', '--relative', '--name-status', '--pretty=format:%x00', '-n', String(limit), '--', '.'], 256 * 1024 * 1024);
   } catch {
     return null;
   }
   return log
     .split('\0')
     .slice(1)
-    .map(chunk => new Set(chunk.split(/\r?\n/).filter(Boolean)));
+    .map(chunk => {
+      const files = new Map<string, string>();
+      for (const line of chunk.split(/\r?\n/)) {
+        if (line === '') continue;
+        const [status = '', first = '', second] = line.split('\t');
+        const moved = status.startsWith('R') || status.startsWith('C');
+        files.set(moved ? (second ?? first) : first, status.charAt(0));
+      }
+      return files;
+    });
 }
 
 /**
- * edits: commits that touched the test. churn: those that touched it without touching any code it covers,
- * which is the signature of a brittle test being rewritten for its own sake. Churn is unknown without subjects.
+ * edits: commits that modified the test (status M or T); creating, renaming, copying or deleting it is not an edit.
+ * churn: those edits that touched none of the code it covers (any status counts as touching), which is the signature
+ * of a brittle test being rewritten for its own sake. Both are null without history. Without subjects churn is null
+ * but edits is still counted.
  */
-export function churnOf(testRel: string, subjects: string[], sets: Array<Set<string>> | null): { churn: number | null; edits: number | null } {
+export function churnOf(testRel: string, subjects: string[], sets: Array<Map<string, string>> | null): { churn: number | null; edits: number | null } {
   if (sets === null) return { churn: null, edits: null };
   let edits = 0;
   let churn = 0;
   for (const set of sets) {
-    if (!set.has(testRel)) continue;
+    const status = set.get(testRel);
+    if (status !== 'M' && status !== 'T') continue;
     edits++;
     if (subjects.length > 0 && !subjects.some(subject => set.has(subject))) churn++;
   }
@@ -3625,7 +5648,7 @@ export function churnOf(testRel: string, subjects: string[], sets: Array<Set<str
 
 Run: `npx vitest run tests/churn.test.ts`
 
-Expected: PASS, 5 tests. The test creates throwaway git repositories under your temp directory.
+Expected: PASS, 14 tests. The test creates throwaway git repositories under your temp directory.
 
 Run: `npm run typecheck`
 
@@ -3690,6 +5713,121 @@ describe('detectWiring', () => {
       'wiring.untiered@tests/misc.test.ts',
     ]);
   });
+
+  it('returns only the no-map finding when there is no map, whatever else is passed', () => {
+    const findings = detectWiring(
+      null,
+      [{ rel: 'tests/a.test.ts', tier: null, tags: { lane: 'edit' }, subjects: [] }],
+      ['src/billing'],
+    );
+    expect(findings.map(finding => finding.rule)).toEqual(['wiring.no-risk-map']);
+  });
+
+  it('does not flag a test with no @lane tag', () => {
+    const findings = detectWiring(map, [{ rel: 'tests/ui.test.ts', tier: 'low', tags: {}, subjects: ['src/ui/button.ts'] }], []);
+    expect(rules(findings.filter(finding => finding.file === 'tests/ui.test.ts'))).toEqual([]);
+  });
+
+  it('allows a standard test in the scheduled lane', () => {
+    const findings = detectWiring(map, [{ rel: 'tests/u.test.ts', tier: 'standard', tags: { lane: 'scheduled' }, subjects: ['src/ui/button.ts'] }], []);
+    expect(rules(findings.filter(finding => finding.file === 'tests/u.test.ts'))).toEqual([]);
+  });
+
+  it('covers and uncovers a critical area that is a single file', () => {
+    const single: RiskMap = { ...defaultRiskMap(), areas: [{ path: 'src/auth.ts', tier: 'critical' }] };
+    const covered = detectWiring(single, [{ rel: 'tests/a.test.ts', tier: 'critical', tags: {}, subjects: ['src/auth.ts'] }], []);
+    expect(rules(covered)).toEqual([]);
+    const uncovered = detectWiring(single, [{ rel: 'tests/a.test.ts', tier: 'critical', tags: {}, subjects: ['src/other.ts'] }], []);
+    expect(uncovered.map(finding => `${finding.rule}@${finding.file}`)).toEqual(['wiring.uncovered-critical@src/auth.ts']);
+  });
+
+  it('counts a test whose own path is inside a critical area as covering it', () => {
+    const colocated = detectWiring(map, [{ rel: 'src/auth/login.test.ts', tier: 'critical', tags: {}, subjects: [] }], ['src/auth']);
+    expect(colocated.map(finding => `${finding.rule}@${finding.file}`)).toEqual(['wiring.uncovered-critical@src/db/**']);
+  });
+
+  it('explains an uncovered critical area and how to cover it without an import', () => {
+    const [finding] = detectWiring(map, [], []).filter(item => item.file === 'src/auth/**');
+    expect(finding.message).toBe('Critical area with no test file exercising it. A test reaching it only through a subprocess needs `@subject <path>`.');
+    expect(finding.evidence.startsWith('0 test files import this area')).toBe(true);
+  });
+
+  describe('untiered', () => {
+    const only = (file: Parameters<typeof detectWiring>[1][number]) => detectWiring(map, [file], []).filter(finding => finding.rule === 'wiring.untiered');
+
+    it('says a test with no subjects has no code subject and how to fix it', () => {
+      const [finding] = only({ rel: 'tests/e2e.test.ts', tier: null, tags: {}, subjects: [] });
+      expect(finding.message).toBe('This test has no code subject, so it has no tier. Add `@risk <critical|standard|low>` or `@subject <path>` at the top of the file.');
+      expect(finding.evidence).toBe('no code subjects');
+    });
+
+    it('says code with no matching area and keeps the subjects as evidence', () => {
+      const [finding] = only({ rel: 'tests/m.test.ts', tier: null, tags: {}, subjects: ['src/misc/x.ts', 'src/misc/y.ts'] });
+      expect(finding.message).toContain('matches no risk-map area');
+      expect(finding.message).toContain('`@risk <critical|standard|low>`');
+      expect(finding.message).toContain('`@subject <path>`');
+      expect(finding.evidence).toBe('src/misc/x.ts, src/misc/y.ts');
+    });
+
+    it('caps long subject evidence at 160 characters on a comma boundary', () => {
+      const subjects = Array.from({ length: 30 }, (_, index) => `src/module${index}/file.ts`);
+      const [finding] = only({ rel: 'tests/m.test.ts', tier: null, tags: {}, subjects });
+      expect(finding.evidence.length).toBeLessThanOrEqual(160);
+      expect(finding.evidence.endsWith('...')).toBe(true);
+      const kept = finding.evidence.slice(0, -3).split(', ');
+      expect(kept).toEqual(subjects.slice(0, kept.length));
+    });
+
+    it('does not truncate evidence that fits', () => {
+      const subjects = Array.from({ length: 5 }, (_, index) => `src/m${index}/f.ts`);
+      const [finding] = only({ rel: 'tests/m.test.ts', tier: null, tags: {}, subjects });
+      expect(finding.evidence).toBe(subjects.join(', '));
+    });
+
+    it('names a @risk value that is not a tier', () => {
+      const [finding] = only({ rel: 'tests/m.test.ts', tier: null, tags: { risk: 'hgh' }, subjects: [] });
+      expect(finding.message).toContain('`@risk` must be critical, standard or low');
+      expect(finding.evidence).toContain('hgh');
+    });
+  });
+
+  describe('drift and catch-all areas', () => {
+    const withCatchAll: RiskMap = {
+      ...defaultRiskMap(),
+      areas: [
+        { path: 'src/auth/**', tier: 'critical' },
+        { path: 'src/**', tier: 'standard' },
+      ],
+    };
+    const drift = (areaMap: RiskMap, dirs: string[]) =>
+      detectWiring(areaMap, [], dirs)
+        .filter(finding => finding.rule === 'wiring.drift')
+        .map(finding => finding.file);
+
+    it('ignores a src/** catch-all when probing directories', () => {
+      expect(drift(withCatchAll, ['src/auth', 'src/billing'])).toEqual(['src/billing']);
+    });
+
+    it('ignores lib/** and app/** catch-alls too', () => {
+      const map2: RiskMap = { ...defaultRiskMap(), areas: [{ path: 'lib/**', tier: 'standard' }, { path: 'app/**', tier: 'standard' }] };
+      expect(drift(map2, ['lib/a', 'app/b'])).toEqual(['lib/a', 'app/b']);
+    });
+
+    it('still lets a catch-all assign a tier to files outside the drift probe', () => {
+      expect(detectWiring(withCatchAll, [], ['src/auth']).filter(finding => finding.rule === 'wiring.drift')).toEqual([]);
+    });
+
+    it('does not treat src/app/** as a catch-all', () => {
+      const appOnly: RiskMap = { ...defaultRiskMap(), areas: [{ path: 'src/app/**', tier: 'standard' }] };
+      expect(drift(appOnly, ['src/app'])).toEqual([]);
+    });
+
+    it('does not treat a wildcard-segment glob as a catch-all', () => {
+      const wild: RiskMap = { ...defaultRiskMap(), areas: [{ path: 'src/*/foo/**', tier: 'standard' }] };
+      expect(drift(wild, ['src/x/foo'])).toEqual([]);
+      expect(drift(wild, ['src/x/bar'])).toEqual(['src/x/bar']);
+    });
+  });
 });
 ```
 
@@ -3708,6 +5846,7 @@ import { globToRegExp } from '../paths.ts';
 import { RISK_MAP_PATH, tierFor } from '../riskmap.ts';
 import type { Finding, LaneName, RiskMap, Tier } from '../schema.ts';
 
+/** `rel` and every entry of `subjects` must be repo-relative with forward slashes, as `relPosix` produces. */
 export interface WiringFile {
   rel: string;
   tier: Tier | null;
@@ -3721,6 +5860,40 @@ export const ALLOWED_LANES: Record<Tier, LaneName[]> = {
   standard: ['edit', 'merge', 'scheduled'],
   low: ['scheduled', 'release'],
 };
+
+const TAG_HELP = 'Add `@risk <critical|standard|low>` or `@subject <path>` at the top of the file.';
+const TIERS: readonly string[] = ['critical', 'standard', 'low'];
+const EVIDENCE_LIMIT = 160;
+/** An area whose glob is one literal segment followed by `/**` (`src/**`): it assigns a tier to everything, so it hides drift. */
+const CATCH_ALL = /^[^/*?]+\/\*\*$/;
+
+/** The subjects joined by ', ', cut at a comma boundary with '...' when they would exceed the limit. */
+function subjectEvidence(subjects: string[]): string {
+  const joined = subjects.join(', ');
+  if (joined.length <= EVIDENCE_LIMIT) return joined;
+  let kept = '';
+  for (const subject of subjects) {
+    const next = kept ? `${kept}, ${subject}` : subject;
+    if (next.length + 3 > EVIDENCE_LIMIT) break;
+    kept = next;
+  }
+  return `${kept || subjects[0].slice(0, EVIDENCE_LIMIT - 3)}...`;
+}
+
+function untieredFinding(file: WiringFile): Finding {
+  const badRisk = file.tags.risk !== undefined && !TIERS.includes(file.tags.risk);
+  const base =
+    file.subjects.length === 0
+      ? `This test has no code subject, so it has no tier. ${TAG_HELP}`
+      : `Test exercises code that matches no risk-map area, so it has no tier. Add an area for it, or: ${TAG_HELP}`;
+  return {
+    category: 'wiring',
+    rule: 'wiring.untiered',
+    file: file.rel,
+    message: badRisk ? `${base} \`@risk\` must be critical, standard or low.` : base,
+    evidence: badRisk ? `@risk ${file.tags.risk}` : file.subjects.length === 0 ? 'no code subjects' : subjectEvidence(file.subjects),
+  };
+}
 
 /** Tests not tied to a risk tier or lane, lane/tier mismatches, critical areas nobody tests, and directories the map has never seen. */
 export function detectWiring(map: RiskMap | null, files: WiringFile[], candidateDirs: string[]): Finding[] {
@@ -3738,13 +5911,7 @@ export function detectWiring(map: RiskMap | null, files: WiringFile[], candidate
   const findings: Finding[] = [];
   for (const file of files) {
     if (!file.tier) {
-      findings.push({
-        category: 'wiring',
-        rule: 'wiring.untiered',
-        file: file.rel,
-        message: 'Test exercises code that matches no risk-map area, so it has no tier.',
-        evidence: file.subjects.join(', '),
-      });
+      findings.push(untieredFinding(file));
     } else if (file.tags.lane && !ALLOWED_LANES[file.tier].includes(file.tags.lane)) {
       findings.push({
         category: 'wiring',
@@ -3758,18 +5925,20 @@ export function detectWiring(map: RiskMap | null, files: WiringFile[], candidate
   for (const area of map.areas) {
     if (area.tier !== 'critical') continue;
     const pattern = globToRegExp(area.path);
-    if (!files.some(file => file.subjects.some(subject => pattern.test(subject)))) {
+    if (!files.some(file => pattern.test(file.rel) || file.subjects.some(subject => pattern.test(subject)))) {
       findings.push({
         category: 'wiring',
         rule: 'wiring.uncovered-critical',
         file: area.path,
-        message: 'Critical area with no test file exercising it.',
-        evidence: area.why ?? '',
+        message: 'Critical area with no test file exercising it. A test reaching it only through a subprocess needs `@subject <path>`.',
+        evidence: '0 test files import this area',
       });
     }
   }
+  // A catch-all such as src/** would make every directory look classified, so drift probes the map without them.
+  const probeMap: RiskMap = { ...map, areas: map.areas.filter(area => !CATCH_ALL.test(area.path)) };
   for (const dir of candidateDirs) {
-    if (!tierFor(map, `${dir}/__probe__.ts`)) {
+    if (!tierFor(probeMap, `${dir}/__probe__.ts`)) {
       findings.push({
         category: 'wiring',
         rule: 'wiring.drift',
@@ -3787,7 +5956,7 @@ export function detectWiring(map: RiskMap | null, files: WiringFile[], candidate
 
 Run: `npx vitest run tests/detectors/wiring.test.ts`
 
-Expected: PASS, 2 tests.
+Expected: PASS, 18 tests.
 
 Run: `npm run typecheck`
 
@@ -3901,6 +6070,7 @@ describe('scan edge cases', () => {
   it('throws E_RISKMAP for an invalid risk map', () => {
     const root = makeTree({ '.testing/risk.yml': 'phase: nope\n' });
     expect(() => scan(root)).toThrow(CliError);
+    expect(() => scan(root)).toThrow(expect.objectContaining({ code: 'E_RISKMAP' }));
   });
 
   it('counts a declared @subject, so a subprocess test still covers its code', () => {
@@ -3928,6 +6098,97 @@ describe('scan edge cases', () => {
     expect(report.files).toEqual([]);
   });
 });
+
+describe('scan of declared subjects', () => {
+  it('drops an @subject that points outside the root, at a directory or at a test file', () => {
+    const root = makeTree({
+      'src/cli.ts': '',
+      'tests/other.test.ts': 'it("x", () => { expect(1).toBe(1); });',
+      'tests/cli.test.ts': '/**\n * @subject ./src/cli.ts\n * @subject ../../x\n * @subject src\n * @subject tests/other.test.ts\n * @subject src\cli.ts\n */\nit("runs", () => { expect(1).toBe(2); });',
+    });
+    expect(scan(root).files.find(file => file.file === 'tests/cli.test.ts')?.subjects).toEqual(['src/cli.ts']);
+  });
+});
+
+describe('scan with a file that cannot be parsed', () => {
+  const deep = (): string => "it('deep', () => {\n  const nested = " + '['.repeat(6000) + ']'.repeat(6000) + ';\n  expect(nested).toBeTruthy();\n});';
+
+  it('marks only that file as unparsed and reports the others normally', () => {
+    const root = makeTree({
+      'src/a.ts': '',
+      'src/z.ts': '',
+      'tests/a.test.ts': "import '../src/a.ts';\nit('a', () => { expect(1).toBe(2); });",
+      'tests/m-bad.test.ts': deep(),
+      'tests/z.test.ts': "import '../src/z.ts';\nit('z', () => { expect(1).toBe(2); });",
+    });
+    const report = scan(root);
+    expect(EvidenceReport.safeParse(report).success).toBe(true);
+    const byFile = Object.fromEntries(report.files.map(file => [file.file, file]));
+    expect(byFile['tests/m-bad.test.ts']?.flags).toEqual(['unparsed']);
+    expect(byFile['tests/m-bad.test.ts']?.tests).toBe(0);
+    expect(byFile['tests/m-bad.test.ts']?.assertions).toBe(0);
+    expect(byFile['tests/a.test.ts']).toMatchObject({ tests: 1, assertions: 1, flags: [], subjects: ['src/a.ts'] });
+    expect(byFile['tests/z.test.ts']).toMatchObject({ tests: 1, assertions: 1, flags: [], subjects: ['src/z.ts'] });
+    expect(scan(root).files.map(file => file.flags)).toEqual(report.files.map(file => file.flags));
+  });
+
+  it('still runs the line-based detectors on an unparsed file', () => {
+    const root = makeTree({ 'tests/bad.test.ts': deep() + "\nconst root = '/Users/me/work';\n" });
+    const report = scan(root);
+    expect(report.files[0]?.flags).toEqual(['unparsed']);
+    expect(report.files[0]?.findings.map(finding => finding.rule)).toContain('worktree.absolute-path');
+    expect(report.files[0]?.cost.agent).toBe(Math.ceil(Buffer.byteLength(readFileSync(join(root, 'tests/bad.test.ts'), 'utf8')) / 4));
+  });
+});
+
+describe('scan details', () => {
+  const critical = (): string => serializeRiskMap({ ...defaultRiskMap(), areas: [{ path: 'src/**', tier: 'critical' }] });
+
+  it('names the declared consumers in the shim note', () => {
+    const root = makeTree({
+      '.testing/risk.yml': serializeRiskMap({ ...defaultRiskMap(), consumers: ['mobile app', 'cli'] }),
+      'src/legacy/x.ts': '',
+      'tests/legacy.test.ts': "import '../src/legacy/x.ts';\ndescribe('legacy', () => {});",
+    });
+    const shim = scan(root).files[0]?.findings.find(finding => finding.category === 'shim');
+    expect(shim?.note).toBe('Consumers declared in the risk map: mobile app, cli. Check whether any still needs this path.');
+  });
+
+  it('puts a hub-subject finding on the shared helper, at project level', () => {
+    const files: Record<string, string> = { '.testing/risk.yml': critical(), 'src/shared.ts': '' };
+    for (let index = 0; index < 11; index++) {
+      files['src/m' + index + '.ts'] = '';
+      files['tests/m' + index + '.test.ts'] = "import '../src/shared.ts';\nimport '../src/m" + index + ".ts';\nit('m" + index + "', () => { expect(1).toBe(2); });";
+    }
+    const report = scan(makeTree(files));
+    const hub = report.projectFindings.filter(finding => finding.rule === 'redundancy.hub-subject');
+    expect(hub.map(finding => finding.file)).toEqual(['src/shared.ts']);
+    expect(report.files.flatMap(file => file.findings).map(finding => finding.rule)).not.toContain('redundancy.hub-subject');
+  });
+
+  it('estimates agent cost as a quarter of the byte length', () => {
+    const text = "it('x', () => { expect('héllo').toBe('héllo!'); });";
+    const report = scan(makeTree({ 'tests/x.test.ts': text }));
+    expect(report.files[0]?.cost.agent).toBe(Math.ceil(Buffer.byteLength(text) / 4));
+    expect(report.files[0]?.cost.wait).toBeNull();
+    expect(report.files[0]?.cost.ci).toBeNull();
+  });
+
+  it('leaves churn and edits null for a tree outside git', () => {
+    const report = scan(makeTree({ 'tests/x.test.ts': "it('x', () => { expect(1).toBe(2); });" }));
+    expect(report.files[0]?.cost.churn).toBeNull();
+    expect(report.files[0]?.cost.edits).toBeNull();
+  });
+
+  it('lets @risk low override a critical subject area but keeps the area', () => {
+    const root = makeTree({
+      '.testing/risk.yml': critical(),
+      'src/a.ts': '',
+      'tests/a.test.ts': "/** @risk low */\nimport '../src/a.ts';\nit('a', () => { expect(1).toBe(2); });",
+    });
+    expect(scan(root).files[0]).toMatchObject({ tier: 'low', area: 'src/**' });
+  });
+});
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -3941,7 +6202,7 @@ Expected: FAIL. Cannot import `../src/scan.ts`.
 Create `src/scan.ts`:
 
 ```ts
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { churnOf, commitFileSets } from './churn.ts';
 import { detectFrequency } from './detectors/frequency.ts';
@@ -3950,7 +6211,7 @@ import { detectShims } from './detectors/shims.ts';
 import { detectWiring } from './detectors/wiring.ts';
 import { detectWorktreeHazards } from './detectors/worktree.ts';
 import { detectRunner, discoverTests } from './discover.ts';
-import { openParseSession, resolveSubjects, type ParsedFile } from './parse.ts';
+import { declaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile } from './parse.ts';
 import { candidateDirs } from './riskdraft.ts';
 import { loadRiskMap, tierFor } from './riskmap.ts';
 import { EVIDENCE_SCHEMA, Tier, type EvidenceReport, type FileFlag, type Finding, type RiskMap, type TestFileRecord } from './schema.ts';
@@ -3961,6 +6222,11 @@ export interface ScanOptions {
 
 const RANK: Record<Tier, number> = { critical: 3, standard: 2, low: 1 };
 
+/**
+ * The tier of a test file. Its subjects decide it (the highest tier among them); the file's own path is used only when it has
+ * no subjects. A valid `@risk` tag overrides the tier, but `area` still names the subjects' area. An invalid `@risk` is
+ * ignored when the subjects give a tier.
+ */
 function tierOfFile(map: RiskMap | null, rel: string, subjects: string[], risk: string | undefined): { tier: Tier | null; area: string | null } {
   if (!map) return { tier: null, area: null };
   const override = Tier.safeParse(risk);
@@ -3979,6 +6245,55 @@ function flagsOf(parsed: ParsedFile): FileFlag[] {
   return flags;
 }
 
+interface LoadedFile {
+  rel: string;
+  text: string;
+  lines: string[];
+  parsed: ParsedFile;
+  subjects: string[];
+  /** The file could not be read as a parsed test, so its parse facts are empty. */
+  unparsed: boolean;
+}
+
+const emptyParsed = (): ParsedFile => ({
+  imports: [],
+  tests: [],
+  titles: [],
+  assertions: 0,
+  snapshotAssertions: 0,
+  mockAssertions: 0,
+  mockCalls: 0,
+  tautologies: 0,
+  tags: {},
+});
+
+/**
+ * Read and parse every test file. One file that cannot be read or parsed (a parser stack overflow on absurd nesting, say)
+ * must not stop the scan or hide the others: it keeps empty parse facts and is flagged `unparsed`. Its leading-comment tags
+ * and line-based detectors still work when its text was read.
+ */
+function loadTests(root: string): LoadedFile[] {
+  const session = openParseSession();
+  try {
+    return discoverTests(root).map(rel => {
+      let text = '';
+      let parsed = emptyParsed();
+      let unparsed = false;
+      try {
+        text = readFileSync(join(root, rel), 'utf8');
+        parsed = session.parse(rel, text);
+      } catch {
+        unparsed = true;
+        parsed = { ...emptyParsed(), tags: parseTags(text) };
+      }
+      const subjects = [...new Set([...resolveSubjects(root, rel, parsed.imports), ...declaredSubjects(root, parsed.tags.subjects ?? [])])].sort();
+      return { rel, text, lines: text.split(/\r?\n/), parsed, subjects, unparsed };
+    });
+  } finally {
+    session.close();
+  }
+}
+
 const byLocation = (a: Finding, b: Finding): number => (a.line ?? 0) - (b.line ?? 0) || (a.rule < b.rule ? -1 : a.rule > b.rule ? 1 : 0);
 
 /** Gather evidence about a project's tests. Never executes them and never judges: verdicts belong to the audit skill. */
@@ -3986,20 +6301,7 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
   const root = resolve(rootInput);
   const map = loadRiskMap(root);
   const sets = commitFileSets(root, options.commitLimit ?? 500);
-
-  const session = openParseSession();
-  let loaded;
-  try {
-    loaded = discoverTests(root).map(rel => {
-      const text = readFileSync(join(root, rel), 'utf8');
-      const parsed = session.parse(rel, text);
-      const declared = (parsed.tags.subjects ?? []).filter(path => existsSync(join(root, path)));
-      const subjects = [...new Set([...resolveSubjects(root, rel, parsed.imports), ...declared])].sort();
-      return { rel, text, lines: text.split(/\r?\n/), parsed, subjects };
-    });
-  } finally {
-    session.close();
-  }
+  const loaded = loadTests(root);
 
   const records = new Map<string, TestFileRecord>();
   for (const file of loaded) {
@@ -4009,11 +6311,12 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
       file: file.rel,
       tests: file.parsed.tests.length,
       assertions: file.parsed.assertions,
-      flags: flagsOf(file.parsed),
+      flags: file.unparsed ? ['unparsed'] : flagsOf(file.parsed),
       subjects: file.subjects,
       tags: file.parsed.tags,
       tier,
       area,
+      // `wait` and `ci` stay null in this version because it never runs tests; a later `time` command fills them.
       cost: { wait: null, agent: Math.ceil(Buffer.byteLength(file.text) / 4), ci: null, churn, edits },
       findings: [],
     });
@@ -4024,9 +6327,13 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
     for (const finding of findings) (records.get(finding.file)?.findings ?? projectFindings).push(finding);
   };
 
+  const shimNote = !map
+    ? 'No risk map, so consumers are unknown.'
+    : map.consumers.length === 0
+      ? 'No consumers declared in the risk map.'
+      : `Consumers declared in the risk map: ${map.consumers.join(', ')}. Check whether any still needs this path.`;
   for (const file of loaded) {
-    const shimNote = map ? (map.consumers.length === 0 ? 'No consumers declared in the risk map.' : undefined) : 'No risk map, so consumers are unknown.';
-    attach(detectShims(file.rel, file.parsed).map(finding => (shimNote ? { ...finding, note: shimNote } : finding)));
+    attach(detectShims(file.rel, file.parsed).map(finding => ({ ...finding, note: shimNote })));
     attach(detectWorktreeHazards(file.rel, file.lines));
   }
   const redundancy = detectRedundancy(loaded);
@@ -4060,7 +6367,7 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
 
 Run: `npx vitest run tests/scan.test.ts`
 
-Expected: PASS, 14 tests. If "reports exactly the planted smells, each once" fails, the diff names the exact `rule@file` that is missing, extra or duplicated; fix the fixture file or code block you mis-typed, never `expected.json`.
+Expected: PASS, 22 tests. If "reports exactly the planted smells, each once" fails, the diff names the exact `rule@file` that is missing, extra or duplicated; fix the fixture file or code block you mis-typed, never `expected.json`.
 
 Run: `npm run typecheck`
 
@@ -4090,36 +6397,384 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { renderMarkdown } from '../src/report.ts';
 import { scan } from '../src/scan.ts';
+import { EVIDENCE_SCHEMA, type EvidenceReport, type Finding, type TestFileRecord } from '../src/schema.ts';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
-describe('renderMarkdown', () => {
-  it('summarizes the bloated fixture with findings grouped by category', () => {
-    const markdown = renderMarkdown(scan(join(FIXTURES, 'bloated'), { commitLimit: 1 }));
-    expect(markdown).toContain('# Test audit evidence');
-    expect(markdown).toContain('- Phase: dev');
-    expect(markdown).toContain('| shim | 3 |');
-    expect(markdown).toContain('### worktree');
-    expect(markdown).toContain('`tests/net/server.test.ts:');
-    expect(markdown).toContain('**frequency.watch-default**');
-    expect(markdown).toContain('## Files sharing a subject');
+function finding(overrides: Partial<Finding> & Pick<Finding, 'rule' | 'file'>): Finding {
+  return { category: 'worktree', message: 'A message.', evidence: '', ...overrides };
+}
+
+function record(file: string, overrides: Partial<TestFileRecord> = {}): TestFileRecord {
+  return {
+    file,
+    tests: 2,
+    assertions: 3,
+    flags: [],
+    subjects: [],
+    tags: {},
+    tier: 'standard',
+    area: null,
+    cost: { wait: null, agent: 100, ci: null, churn: 0, edits: 0 },
+    findings: [],
+    ...overrides,
+  };
+}
+
+function report(overrides: Partial<EvidenceReport> = {}): EvidenceReport {
+  return {
+    schema: EVIDENCE_SCHEMA,
+    root: '/x',
+    runner: 'vitest',
+    phase: 'dev',
+    riskMapPresent: true,
+    files: [],
+    clusters: [],
+    projectFindings: [],
+    ...overrides,
+  };
+}
+
+/** The text of one `##` section, from its heading to the next `##` heading. */
+function section(markdown: string, heading: string): string {
+  const start = markdown.indexOf(`## ${heading}`);
+  expect(start, `section "${heading}" is missing`).toBeGreaterThanOrEqual(0);
+  const rest = markdown.slice(start + 3);
+  const end = rest.indexOf('\n## ');
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+const tableRows = (markdown: string): string[] => section(markdown, 'Test files').split('\n').filter(line => line.startsWith('| ') && !line.startsWith('| File ') && !line.startsWith('|---'));
+
+describe('renderMarkdown on the fixtures', () => {
+  const bloated = renderMarkdown(scan(join(FIXTURES, 'bloated'), { commitLimit: 1 }));
+
+  it('opens with the header bullets and the reading guide', () => {
+    expect(bloated.startsWith('# Test audit evidence\n')).toBe(true);
+    expect(bloated).toContain('- Runner: vitest');
+    expect(bloated).toContain('- Phase: dev');
+    expect(bloated).toContain('- Risk map: present');
+    expect(bloated).toContain('How to read this');
+    expect(bloated.indexOf('How to read this')).toBeLessThan(bloated.indexOf('## Findings by category'));
+    expect(bloated).toContain('| shim | 3 |');
   });
 
-  it('lists files with the most findings first', () => {
-    const markdown = renderMarkdown(scan(join(FIXTURES, 'bloated'), { commitLimit: 1 }));
-    const table = markdown.split('## Test files')[1]?.split('\n').filter(line => line.startsWith('| tests/')) ?? [];
-    expect(table[0]).toContain('tests/net/server.test.ts');
+  it('ranks the file with the most distinct rules first and shows its rules', () => {
+    const rows = tableRows(bloated);
+    expect(rows[0]).toContain('tests/net/server.test.ts');
+    expect(rows[0]).toContain('worktree.fixed-port');
+    expect(rows[0]).toContain('worktree.absolute-path, worktree.dot-git-dir, worktree.fixed-db-file, worktree.fixed-port, +2 more');
+    expect(section(bloated, 'Test files')).toContain('(top 10 of 10, most evidence first)');
   });
 
-  it('says None when there are no findings', () => {
-    const markdown = renderMarkdown(scan(join(FIXTURES, 'clean'), { commitLimit: 1 }));
-    expect(markdown).toContain('## Findings\n\nNone.');
+  it('groups per-file findings by rule and keeps project findings apart', () => {
+    const perFile = section(bloated, 'Per-file findings');
+    expect(perFile).toContain('### worktree.fixed-port');
+    expect(perFile).toContain('`tests/net/server.test.ts:8`');
+    expect(perFile).not.toContain('frequency.');
+    expect(perFile).not.toContain('src/auth/**');
+    expect(section(bloated, 'Files sharing a subject')).toContain('tests/persistence/store.unit.test.ts');
   });
 
+  it('lists project findings with uncovered-critical before the frequency rules', () => {
+    const project = section(bloated, 'Project findings');
+    expect(project).toContain('src/auth/**');
+    expect(project.indexOf('wiring.uncovered-critical')).toBeGreaterThan(-1);
+    expect(project.indexOf('wiring.uncovered-critical')).toBeLessThan(project.indexOf('wiring.drift'));
+    expect(project.indexOf('wiring.drift')).toBeLessThan(project.indexOf('frequency.'));
+    expect(project).toContain('**frequency.watch-default**');
+  });
+
+  it('says None. under both findings sections for the clean fixture', () => {
+    const clean = renderMarkdown(scan(join(FIXTURES, 'clean'), { commitLimit: 1 }));
+    expect(clean).toContain('## Project findings (0)\n\nNone.');
+    expect(clean).toContain('## Per-file findings\n\nNone.');
+    expect(clean).not.toContain('## Files sharing a subject');
+  });
+});
+
+describe('renderMarkdown ranking', () => {
+  it('puts an unparsed file first even with no findings, and lists it in the header', () => {
+    const md = renderMarkdown(
+      report({
+        files: [
+          record('tests/a.test.ts', { findings: [finding({ rule: 'worktree.fixed-port', file: 'tests/a.test.ts', line: 1 })] }),
+          record('tests/z.test.ts', { flags: ['unparsed'], tests: 0, assertions: 0 }),
+        ],
+      }),
+    );
+    expect(tableRows(md)[0]).toContain('tests/z.test.ts');
+    expect(md).toContain('- Unparsed files: 1. The tool could not read their structure, so read them directly: `tests/z.test.ts`');
+    expect(tableRows(md)[0]).toContain('| ? | ? |');
+  });
+
+  it('caps the unparsed list at 10 paths', () => {
+    const files = Array.from({ length: 13 }, (_, i) => record(`tests/u${String(i).padStart(2, '0')}.test.ts`, { flags: ['unparsed'] }));
+    const md = renderMarkdown(report({ files }));
+    expect(md).toContain('- Unparsed files: 13.');
+    expect(md).toContain('`tests/u09.test.ts`');
+    expect(md).not.toContain('`tests/u10.test.ts`');
+    expect(md).toContain('+3 more');
+  });
+
+  it('omits the unparsed bullet when every file parsed', () => {
+    expect(renderMarkdown(report({ files: [record('tests/a.test.ts')] }))).not.toContain('Unparsed files');
+  });
+
+  it('ranks distinct rules above raw finding counts', () => {
+    const a = record('tests/a.test.ts', {
+      findings: Array.from({ length: 5 }, (_, i) => finding({ rule: 'worktree.fixed-port', file: 'tests/a.test.ts', line: i + 1 })),
+    });
+    const b = record('tests/b.test.ts', {
+      findings: ['worktree.fixed-port', 'worktree.shared-tmp', 'worktree.home-dir'].map((rule, i) => finding({ rule, file: 'tests/b.test.ts', line: i + 1 })),
+    });
+    const rows = tableRows(renderMarkdown(report({ files: [a, b] })));
+    expect(rows[0]).toContain('tests/b.test.ts');
+    expect(rows[1]).toContain('tests/a.test.ts');
+  });
+
+  it('breaks ties by finding count, then agent tokens, then path', () => {
+    const one = (file: string, agent: number, count = 1): TestFileRecord =>
+      record(file, {
+        cost: { wait: null, agent, ci: null, churn: 0, edits: 0 },
+        findings: Array.from({ length: count }, (_, i) => finding({ rule: 'worktree.fixed-port', file, line: i + 1 })),
+      });
+    const md = renderMarkdown(report({ files: [one('tests/d.test.ts', 10), one('tests/c.test.ts', 50), one('tests/b.test.ts', 50), one('tests/e.test.ts', 1, 3)] }));
+    expect(tableRows(md).map(row => row.split('|')[1]!.trim())).toEqual(['tests/e.test.ts', 'tests/b.test.ts', 'tests/c.test.ts', 'tests/d.test.ts']);
+  });
+
+  it('prints distinct rules with counts, most frequent first, at most four', () => {
+    const f = 'tests/a.test.ts';
+    const rules = ['worktree.fixed-port', 'worktree.fixed-port', 'redundancy.shared-subject', 'worktree.home-dir', 'shim.path-marker', 'shim.title-marker', 'worktree.shared-tmp'];
+    const md = renderMarkdown(report({ files: [record(f, { findings: rules.map((rule, i) => finding({ rule, file: f, line: i + 1 })) })] }));
+    expect(tableRows(md)[0]).toContain('| worktree.fixed-port x2, redundancy.shared-subject, shim.path-marker, shim.title-marker, +2 more |');
+  });
+});
+
+describe('renderMarkdown caps', () => {
+  const five = (): EvidenceReport =>
+    report({
+      files: ['a', 'b', 'c', 'd', 'e'].map((name, i) => {
+        const file = `tests/${name}.test.ts`;
+        return record(file, {
+          cost: { wait: null, agent: 100 - i, ci: null, churn: 0, edits: 0 },
+          findings: i < 3 ? Array.from({ length: 3 - i }, (_, n) => finding({ rule: 'worktree.fixed-port', file, line: n + 1 })) : [],
+        });
+      }),
+    });
+
+  it('limits the table to maxFiles and counts what was omitted', () => {
+    const md = renderMarkdown(five(), { maxFiles: 2 });
+    expect(tableRows(md)).toHaveLength(2);
+    expect(section(md, 'Test files')).toContain('(top 2 of 5, most evidence first)');
+    // Omitted: c (1 finding), d and e (none).
+    expect(md).toContain('3 more files omitted (1 findings, 2 with none); the full data is in the JSON from the scan command.');
+  });
+
+  it('shows every file and no omission line when under the cap', () => {
+    const md = renderMarkdown(five());
+    expect(tableRows(md)).toHaveLength(5);
+    expect(md).not.toContain('omitted');
+  });
+
+  it('truncates a rule with more than maxPerRule findings', () => {
+    const f = 'tests/a.test.ts';
+    const findings = Array.from({ length: 5 }, (_, i) => finding({ rule: 'worktree.fixed-port', file: f, line: i + 1 }));
+    const md = renderMarkdown(report({ files: [record(f, { findings })] }), { maxPerRule: 2 });
+    const perFile = section(md, 'Per-file findings');
+    expect(perFile).toContain('`tests/a.test.ts:1`');
+    expect(perFile).toContain('`tests/a.test.ts:2`');
+    expect(perFile).not.toContain('`tests/a.test.ts:3`');
+    expect(perFile).toContain('- +3 more (see the scan JSON)');
+  });
+
+  it('defaults to 40 files and 30 findings per rule', () => {
+    const files = Array.from({ length: 45 }, (_, i) => record(`tests/f${String(i).padStart(2, '0')}.test.ts`));
+    expect(tableRows(renderMarkdown(report({ files })))).toHaveLength(40);
+    const f = 'tests/a.test.ts';
+    const findings = Array.from({ length: 33 }, (_, i) => finding({ rule: 'worktree.fixed-port', file: f, line: i + 1 }));
+    expect(renderMarkdown(report({ files: [record(f, { findings })] }))).toContain('- +3 more (see the scan JSON)');
+  });
+});
+
+describe('renderMarkdown ordering and grouping', () => {
+  it('orders lines numerically, with line-less findings first', () => {
+    const f = 'tests/a.test.ts';
+    const findings = [100, 10, 2, 9, 1].map(line => finding({ rule: 'worktree.fixed-port', file: f, line }));
+    findings.push(finding({ rule: 'worktree.fixed-port', file: f }));
+    const perFile = section(renderMarkdown(report({ files: [record(f, { findings })] })), 'Per-file findings');
+    const positions = ['`tests/a.test.ts`', '`tests/a.test.ts:1`', '`tests/a.test.ts:2`', '`tests/a.test.ts:9`', '`tests/a.test.ts:10`', '`tests/a.test.ts:100`'].map(token => perFile.indexOf(token));
+    expect(positions.every(position => position > -1)).toBe(true);
+    expect([...positions].sort((x, y) => x - y)).toEqual(positions);
+  });
+
+  it('orders project findings numerically by line within a file', () => {
+    const findings = [10, 9, 2].map(line => finding({ category: 'frequency', rule: 'frequency.hook-full-suite', file: 'package.json', line }));
+    const project = section(renderMarkdown(report({ projectFindings: findings })), 'Project findings (3)');
+    expect(project.indexOf('package.json:2`')).toBeLessThan(project.indexOf('package.json:9`'));
+    expect(project.indexOf('package.json:9`')).toBeLessThan(project.indexOf('package.json:10`'));
+  });
+
+  it('orders project findings: wiring first in its own rule order, then schema category order', () => {
+    const make = (category: Finding['category'], rule: string, file = 'x'): Finding => finding({ category, rule, file });
+    const md = renderMarkdown(
+      report({
+        projectFindings: [
+          make('frequency', 'frequency.watch-default', 'package.json'),
+          make('wiring', 'wiring.no-risk-map'),
+          make('redundancy', 'redundancy.hub-subject', 'src/hub.ts'),
+          make('wiring', 'wiring.drift'),
+          make('wiring', 'wiring.uncovered-critical'),
+          make('shim', 'shim.path-marker', 'src/old'),
+        ],
+      }),
+    );
+    const order = ['wiring.uncovered-critical', 'wiring.drift', 'wiring.no-risk-map', 'redundancy.hub-subject', 'shim.path-marker', 'frequency.watch-default'].map(rule => md.indexOf(`**${rule}**`));
+    expect(order.every(position => position > -1)).toBe(true);
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
+  });
+
+  it('groups per-file findings by category order then rule, with the message once per rule', () => {
+    const f = 'tests/a.test.ts';
+    const findings = [
+      finding({ category: 'worktree', rule: 'worktree.shared-tmp', file: f, line: 3, message: 'Tmp message.' }),
+      finding({ category: 'redundancy', rule: 'redundancy.duplicate-title', file: f, line: 5, message: 'Dup message.' }),
+      finding({ category: 'worktree', rule: 'worktree.fixed-port', file: f, line: 7, message: 'Port message.', evidence: 'listen(3000)', note: 'check it' }),
+      finding({ category: 'worktree', rule: 'worktree.fixed-port', file: f, line: 8, message: 'Port message.' }),
+    ];
+    const perFile = section(renderMarkdown(report({ files: [record(f, { findings })] })), 'Per-file findings');
+    expect(perFile.indexOf('### redundancy.duplicate-title')).toBeLessThan(perFile.indexOf('### worktree.fixed-port'));
+    expect(perFile.indexOf('### worktree.fixed-port')).toBeLessThan(perFile.indexOf('### worktree.shared-tmp'));
+    expect(perFile.split('Port message.')).toHaveLength(2);
+    expect(perFile).toContain('- `tests/a.test.ts:7` `listen(3000)` (check it)');
+    expect(perFile).toContain('- `tests/a.test.ts:8`\n');
+  });
+
+  it('prints clusters only when there are some', () => {
+    const md = renderMarkdown(report({ clusters: [{ subject: 'src/store.ts', files: ['tests/a.test.ts', 'tests/b.test.ts'], layers: ['unit', 'integration'] }] }));
+    expect(section(md, 'Files sharing a subject')).toContain('- `src/store.ts` (unit, integration): `tests/a.test.ts`, `tests/b.test.ts`');
+    expect(renderMarkdown(report())).not.toContain('Files sharing a subject');
+  });
+
+  it('counts project and per-file findings together in the category table', () => {
+    const md = renderMarkdown(
+      report({
+        files: [record('tests/a.test.ts', { findings: [finding({ rule: 'worktree.fixed-port', file: 'tests/a.test.ts', line: 1 })] })],
+        projectFindings: [finding({ category: 'worktree', rule: 'worktree.home-dir', file: 'x' })],
+      }),
+    );
+    expect(md).toContain('| worktree | 2 |');
+  });
+});
+
+describe('renderMarkdown escaping', () => {
   it('escapes pipes in table cells', () => {
-    const report = scan(join(FIXTURES, 'clean'), { commitLimit: 1 });
-    report.files[0]!.file = 'a|b.test.ts';
-    expect(renderMarkdown(report)).toContain('a\\|b.test.ts');
+    const md = renderMarkdown(report({ files: [record('a|b.test.ts')] }));
+    expect(tableRows(md)[0]).toContain('| a\\|b.test.ts |');
+  });
+
+  it('does not let a backtick in a path break a code span', () => {
+    const f = 'tests/we`ird.test.ts';
+    const md = renderMarkdown(report({ files: [record(f, { findings: [finding({ rule: 'worktree.fixed-port', file: f, line: 4 })] })] }));
+    expect(md).toContain('- ``tests/we`ird.test.ts:4``');
+  });
+
+  it('pads a span whose text begins or ends with a backtick', () => {
+    const md = renderMarkdown(report({ projectFindings: [finding({ rule: 'frequency.watch-default', category: 'frequency', file: 'package.json', evidence: '`x`' })] }));
+    expect(md).toContain('`` `x` ``');
+  });
+
+  it('collapses newlines and CRLF in messages, evidence, notes and paths', () => {
+    const md = renderMarkdown(
+      report({
+        files: [record('tests/a\r\nb.test.ts', { findings: [finding({ rule: 'worktree.fixed-port', file: 'tests/a\r\nb.test.ts', line: 1, message: 'Line one.\r\nLine two.', evidence: 'a\r\n\tb\n  c', note: 'n1\nn2' })] })],
+        projectFindings: [finding({ category: 'frequency', rule: 'frequency.watch-default', file: 'package.json', message: 'm1\r\nm2', evidence: 'e1\ne2', note: 'x\r\ny' })],
+      }),
+    );
+    expect(md).not.toContain('\r');
+    expect(md).toContain('Line one. Line two.');
+    expect(md).toContain('`a b c`');
+    expect(md).toContain('(n1 n2)');
+    expect(md).toContain('`tests/a b.test.ts:1`');
+    expect(md).toContain('**frequency.watch-default**: m1 m2 Evidence: `e1 e2`. Note: x y');
+  });
+
+  it('caps long evidence at 160 characters with an ellipsis', () => {
+    const f = 'tests/a.test.ts';
+    const md = renderMarkdown(report({ files: [record(f, { findings: [finding({ rule: 'worktree.fixed-port', file: f, line: 1, evidence: 'x'.repeat(500) })] })] }));
+    const span = /`tests\/a\.test\.ts:1` `(x+…)`/.exec(md);
+    expect(span).not.toBeNull();
+    expect(span![1]!.length).toBe(160);
+    expect(md).not.toContain('x'.repeat(161));
+  });
+
+  it('keeps evidence of exactly 160 characters intact', () => {
+    const f = 'tests/a.test.ts';
+    const md = renderMarkdown(report({ files: [record(f, { findings: [finding({ rule: 'worktree.fixed-port', file: f, line: 1, evidence: 'y'.repeat(160) })] })] }));
+    expect(md).toContain(`\`${'y'.repeat(160)}\``);
+  });
+});
+
+describe('renderMarkdown cells and labels', () => {
+  it('labels a missing tier untiered with a risk map and no map without one', () => {
+    const withMap = renderMarkdown(report({ files: [record('tests/a.test.ts', { tier: null })] }));
+    expect(tableRows(withMap)[0]).toContain('| untiered |');
+    const without = renderMarkdown(report({ phase: null, riskMapPresent: false, files: [record('tests/a.test.ts', { tier: null })] }));
+    expect(tableRows(without)[0]).toContain('| no map |');
+    expect(without).toContain('- Phase: unknown (no risk map)');
+    expect(without).toContain('- Risk map: missing');
+  });
+
+  it('prints churn over edits, or n/a without history or subjects', () => {
+    const md = renderMarkdown(
+      report({
+        files: [
+          record('tests/a.test.ts', { cost: { wait: null, agent: 3, ci: null, churn: 1, edits: 3 } }),
+          record('tests/b.test.ts', { cost: { wait: null, agent: 2, ci: null, churn: null, edits: null } }),
+          record('tests/c.test.ts', { cost: { wait: null, agent: 1, ci: null, churn: null, edits: 4 } }),
+        ],
+      }),
+    );
+    const rows = tableRows(md);
+    expect(rows[0]).toContain('| 3 | 1/3 |');
+    expect(rows[1]).toContain('| 2 | n/a |');
+    expect(rows[2]).toContain('| 1 | n/a |');
+  });
+
+  it('prints the lane, flags and dashes for empty cells', () => {
+    const md = renderMarkdown(
+      report({ files: [record('tests/a.test.ts', { tags: { lane: 'edit' }, flags: ['tautological', 'mock-only'] }), record('tests/b.test.ts')] }),
+    );
+    const rows = tableRows(md);
+    expect(rows[0]).toContain('| standard | edit | 2 | 3 | tautological, mock-only | 100 | 0/0 | - |');
+    expect(rows[1]).toContain('| standard | - | 2 | 3 | - | 100 | 0/0 | - |');
+  });
+});
+
+describe('renderMarkdown shape', () => {
+  it('renders an empty report', () => {
+    const md = renderMarkdown(report());
+    expect(md).toContain('- Test files: 0');
+    expect(md).toContain('## Project findings (0)\n\nNone.');
+    expect(md).toContain('## Per-file findings\n\nNone.');
+    expect(md).toContain('| redundancy | 0 |');
+  });
+
+  it('renders a report with no phase', () => {
+    expect(renderMarkdown(report({ phase: null }))).toContain('- Phase: unknown (no risk map)');
+  });
+
+  it('ends with exactly one newline and never uses carriage returns', () => {
+    for (const md of [renderMarkdown(report()), renderMarkdown(scan(join(FIXTURES, 'bloated'), { commitLimit: 1 }))]) {
+      expect(md.endsWith('\n')).toBe(true);
+      expect(md.endsWith('\n\n')).toBe(false);
+      expect(md).not.toContain('\r');
+    }
+  });
+
+  it('is deterministic', () => {
+    const scanned = scan(join(FIXTURES, 'bloated'), { commitLimit: 1 });
+    expect(renderMarkdown(scanned)).toBe(renderMarkdown(scanned));
   });
 });
 ```
@@ -4135,14 +6790,113 @@ Expected: FAIL. Cannot import `../src/report.ts`.
 Create `src/report.ts`:
 
 ```ts
-import { Category, type EvidenceReport, type Finding } from './schema.ts';
+import { Category, type EvidenceReport, type Finding, type TestFileRecord } from './schema.ts';
 
-const cell = (text: string): string => text.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
-const where = (finding: Finding): string => `${finding.file}${finding.line ? `:${finding.line}` : ''}`;
+export interface ReportOptions {
+  /** How many test files the table lists. */
+  maxFiles?: number;
+  /** How many findings one rule lists in the per-file section. */
+  maxPerRule?: number;
+}
 
-/** Markdown view of an evidence report for the audit skill to read and the owner to skim. */
-export function renderMarkdown(report: EvidenceReport): string {
-  const all = [...report.files.flatMap(file => file.findings), ...report.projectFindings];
+const DEFAULT_MAX_FILES = 40;
+const DEFAULT_MAX_PER_RULE = 30;
+const MAX_EVIDENCE = 160;
+const MAX_UNPARSED_LISTED = 10;
+const MAX_RULES_PER_ROW = 4;
+
+/** Wiring rules in the order the audit should read them; other wiring rules follow. */
+const WIRING_ORDER = ['wiring.uncovered-critical', 'wiring.drift', 'wiring.no-risk-map'];
+
+/** Any run of whitespace, newlines and carriage returns included, becomes one space, so a value stays on one line. */
+const flat = (text: string): string => text.replace(/\s+/g, ' ').trim();
+
+/** A table cell: flattened, with pipes escaped. */
+const cell = (text: string): string => flat(text).replace(/\|/g, '\\|');
+
+/** An inline code span whose fence is longer than any backtick run inside, so the text cannot break out of it. */
+function span(text: string): string {
+  const body = flat(text);
+  const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map(run => run.length));
+  const fence = '`'.repeat(longest + 1);
+  const pad = body.startsWith('`') || body.endsWith('`') ? ' ' : '';
+  return `${fence}${pad}${body}${pad}${fence}`;
+}
+
+function clip(text: string): string {
+  const chars = [...flat(text)];
+  return chars.length > MAX_EVIDENCE ? `${chars.slice(0, MAX_EVIDENCE - 1).join('')}…` : chars.join('');
+}
+
+const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+const where = (finding: Finding): string => `${flat(finding.file)}${finding.line ? `:${finding.line}` : ''}`;
+/** Findings without a line sort first (lines are positive); lines compare as numbers, never as text. */
+const byLocation = (a: Finding, b: Finding): number => compare(a.file, b.file) || (a.line ?? 0) - (b.line ?? 0) || compare(a.rule, b.rule);
+
+const categoryIndex = (category: Finding['category']): number => Category.options.indexOf(category);
+
+/** Project findings read wiring first (the risk map's own gaps), then the other categories in schema order. */
+function byProjectOrder(a: Finding, b: Finding): number {
+  const rank = (finding: Finding): number => (finding.category === 'wiring' ? 0 : 1 + categoryIndex(finding.category));
+  const ruleRank = (finding: Finding): number => (finding.category === 'wiring' ? (WIRING_ORDER.includes(finding.rule) ? WIRING_ORDER.indexOf(finding.rule) : WIRING_ORDER.length) : 0);
+  return rank(a) - rank(b) || ruleRank(a) - ruleRank(b) || byLocation(a, b);
+}
+
+/** The distinct rules of a file with their counts, most frequent first, then alphabetical. */
+function ruleCounts(file: TestFileRecord): Array<[string, number]> {
+  const counts = new Map<string, number>();
+  for (const finding of file.findings) counts.set(finding.rule, (counts.get(finding.rule) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || compare(a[0], b[0]));
+}
+
+const isUnparsed = (file: TestFileRecord): boolean => file.flags.includes('unparsed');
+
+function rulesCell(file: TestFileRecord): string {
+  const counts = ruleCounts(file);
+  if (counts.length === 0) return '-';
+  const shown = counts.slice(0, MAX_RULES_PER_ROW).map(([rule, count]) => (count > 1 ? `${rule} x${count}` : rule));
+  if (counts.length > MAX_RULES_PER_ROW) shown.push(`+${counts.length - MAX_RULES_PER_ROW} more`);
+  return cell(shown.join(', '));
+}
+
+/** Unparsed files first (their structure is unknown), then the breadth of evidence, its volume, the file's size, and the path. */
+function rankFiles(files: TestFileRecord[]): TestFileRecord[] {
+  return files
+    .map(file => ({ file, distinct: ruleCounts(file).length }))
+    .sort(
+      (a, b) =>
+        Number(isUnparsed(b.file)) - Number(isUnparsed(a.file)) ||
+        b.distinct - a.distinct ||
+        b.file.findings.length - a.file.findings.length ||
+        b.file.cost.agent - a.file.cost.agent ||
+        compare(a.file.file, b.file.file),
+    )
+    .map(entry => entry.file);
+}
+
+function projectLine(finding: Finding): string {
+  const evidence = finding.evidence ? ` Evidence: ${span(clip(finding.evidence))}.` : '';
+  const note = finding.note ? ` Note: ${flat(finding.note)}` : '';
+  return `- ${span(where(finding))} **${flat(finding.rule)}**: ${flat(finding.message)}${evidence}${note}`;
+}
+
+function fileLine(finding: Finding): string {
+  const evidence = finding.evidence ? ` ${span(clip(finding.evidence))}` : '';
+  const note = finding.note ? ` (${flat(finding.note)})` : '';
+  return `- ${span(where(finding))}${evidence}${note}`;
+}
+
+/**
+ * Markdown view of an evidence report for the audit skill to read and the owner to skim. It ranks, caps and de-duplicates
+ * so the evidence that matters comes first; the scan JSON holds everything. Pure and deterministic.
+ */
+export function renderMarkdown(report: EvidenceReport, options: ReportOptions = {}): string {
+  const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
+  const maxPerRule = options.maxPerRule ?? DEFAULT_MAX_PER_RULE;
+  const perFile = report.files.flatMap(file => file.findings);
+  const all = [...perFile, ...report.projectFindings];
+  const unparsed = report.files.filter(isUnparsed).map(file => file.file).sort(compare);
+
   const out: string[] = [
     '# Test audit evidence',
     '',
@@ -4150,7 +6904,19 @@ export function renderMarkdown(report: EvidenceReport): string {
     `- Phase: ${report.phase ?? 'unknown (no risk map)'}`,
     `- Risk map: ${report.riskMapPresent ? 'present' : 'missing'}`,
     `- Test files: ${report.files.length}`,
-    '- Cost columns: agent is the estimated tokens in the test file; churn counts commits that edited the test without touching the code it covers; wait and CI need a timed run and are not filled by this report.',
+  ];
+  if (unparsed.length > 0) {
+    const listed = unparsed.slice(0, MAX_UNPARSED_LISTED).map(span);
+    if (unparsed.length > MAX_UNPARSED_LISTED) listed.push(`+${unparsed.length - MAX_UNPARSED_LISTED} more`);
+    out.push(`- Unparsed files: ${unparsed.length}. The tool could not read their structure, so read them directly: ${listed.join(', ')}`);
+  }
+  out.push(
+    '',
+    '**How to read this.** Findings are evidence, not verdicts: judge each one against the risk map and the test itself.',
+    'Files are ranked with unparsed files first, then by distinct finding rules, then total findings, then agent tokens.',
+    'Agent is the estimated tokens in the file. Churn/edits counts edits that touched the test without the code it covers, over all edits that modified it; n/a means no git history or no resolvable subject.',
+    'Wait time and CI minutes need a timed run and are not in this report.',
+    'Flags: tautological, snapshot-only, mock-only, no-direct-assertions (possibly assertions in a helper), unparsed.',
     '',
     '## Findings by category',
     '',
@@ -4158,33 +6924,50 @@ export function renderMarkdown(report: EvidenceReport): string {
     '|---|---|',
     ...Category.options.map(category => `| ${category} | ${all.filter(finding => finding.category === category).length} |`),
     '',
-    '## Test files (most findings first)',
+    `## Project findings (${report.projectFindings.length})`,
     '',
-    '| File | Tier | Lane | Tests | Asserts | Flags | Agent tokens | Churn | Findings |',
-    '|---|---|---|---|---|---|---|---|---|',
-  ];
-  const ranked = [...report.files].sort((a, b) => b.findings.length - a.findings.length || b.cost.agent - a.cost.agent || (a.file < b.file ? -1 : 1));
-  for (const file of ranked) {
-    out.push(
-      `| ${cell(file.file)} | ${file.tier ?? '-'} | ${file.tags.lane ?? '-'} | ${file.tests} | ${file.assertions} | ${file.flags.join(', ') || '-'} | ${file.cost.agent} | ${file.cost.churn ?? '-'} | ${file.findings.length} |`,
-    );
+  );
+  if (report.projectFindings.length === 0) out.push('None.');
+  else for (const finding of [...report.projectFindings].sort(byProjectOrder)) out.push(projectLine(finding));
+
+  const ranked = rankFiles(report.files);
+  const shown = ranked.slice(0, maxFiles);
+  out.push('', `## Test files (top ${shown.length} of ${ranked.length}, most evidence first)`, '');
+  if (ranked.length === 0) out.push('None.');
+  else {
+    out.push('| File | Tier | Lane | Tests | Asserts | Flags | Agent tokens | Churn/edits | Rules |', '|---|---|---|---|---|---|---|---|---|');
+    for (const file of shown) {
+      const tier = file.tier ?? (report.riskMapPresent ? 'untiered' : 'no map');
+      const structure = isUnparsed(file) ? ['?', '?'] : [String(file.tests), String(file.assertions)];
+      const churn = file.cost.churn !== null && file.cost.edits !== null ? `${file.cost.churn}/${file.cost.edits}` : 'n/a';
+      out.push(
+        `| ${cell(file.file)} | ${tier} | ${file.tags.lane ?? '-'} | ${structure[0]} | ${structure[1]} | ${cell(file.flags.join(', ')) || '-'} | ${file.cost.agent} | ${churn} | ${rulesCell(file)} |`,
+      );
+    }
   }
+  const omitted = ranked.slice(shown.length);
+  if (omitted.length > 0) {
+    const findings = omitted.reduce((sum, file) => sum + file.findings.length, 0);
+    const none = omitted.filter(file => file.findings.length === 0).length;
+    out.push('', `${omitted.length} more files omitted (${findings} findings, ${none} with none); the full data is in the JSON from the scan command.`);
+  }
+
   if (report.clusters.length > 0) {
     out.push('', '## Files sharing a subject', '');
-    for (const cluster of report.clusters) out.push(`- \`${cluster.subject}\` (${cluster.layers.join(', ')}): ${cluster.files.map(file => `\`${file}\``).join(', ')}`);
+    for (const cluster of report.clusters) out.push(`- ${span(cluster.subject)} (${cluster.layers.map(flat).join(', ')}): ${cluster.files.map(span).join(', ')}`);
   }
-  out.push('', '## Findings', '');
-  if (all.length === 0) out.push('None.');
+
+  out.push('', '## Per-file findings', '');
+  if (perFile.length === 0) out.push('None.');
   for (const category of Category.options) {
-    const group = all.filter(finding => finding.category === category).sort((a, b) => (where(a) < where(b) ? -1 : where(a) > where(b) ? 1 : 0));
-    if (group.length === 0) continue;
-    out.push(`### ${category}`, '');
-    for (const finding of group) {
-      const evidence = finding.evidence ? ` Evidence: \`${finding.evidence.replace(/`/g, "'")}\`.` : '';
-      const note = finding.note ? ` Note: ${finding.note}` : '';
-      out.push(`- \`${where(finding)}\` **${finding.rule}**: ${finding.message}${evidence}${note}`);
+    const rules = [...new Set(perFile.filter(finding => finding.category === category).map(finding => finding.rule))].sort(compare);
+    for (const rule of rules) {
+      const group = perFile.filter(finding => finding.category === category && finding.rule === rule).sort(byLocation);
+      out.push(`### ${flat(rule)}`, '', flat(group[0]!.message), '');
+      for (const finding of group.slice(0, maxPerRule)) out.push(fileLine(finding));
+      if (group.length > maxPerRule) out.push(`- +${group.length - maxPerRule} more (see the scan JSON)`);
+      out.push('');
     }
-    out.push('');
   }
   return out.join('\n').trimEnd() + '\n';
 }
@@ -4194,7 +6977,7 @@ export function renderMarkdown(report: EvidenceReport): string {
 
 Run: `npx vitest run tests/report.test.ts`
 
-Expected: PASS, 4 tests.
+Expected: PASS, 34 tests.
 
 Run: `npm run typecheck`
 
@@ -4211,7 +6994,7 @@ git commit -m "feat: render the evidence report as Markdown"
 
 ## Task 16: CLI
 
-Four commands: `capabilities`, `risk-draft [--write]`, `scan`, `report`. Failures are one-line JSON on stderr with a stable code (`E_USAGE` exits 2; everything else exits 1).
+Four commands: `capabilities`, `risk-draft [--write]`, `scan`, `report [--max-files n] [--max-per-rule n]`. Failures are one-line JSON on stderr with a stable code and a hint (`E_USAGE` exits 2; everything else exits 1), including a broken runtime (`E_RUNTIME_BROKEN`) and a root that is not a directory. A broken pipe exits quietly. `risk-draft --write` publishes the file atomically and never overwrites.
 
 **Files:**
 - Create: `tests/cli.test.ts`, `src/cli.ts`, `scripts/tests.mjs`
@@ -4227,34 +7010,82 @@ Create `tests/cli.test.ts`:
  * @subject scripts/tests.mjs
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { failureFor, ignoreBrokenPipe, positiveInteger } from '../src/cli.ts';
+import { CliError } from '../src/errors.ts';
 import { makeTree } from './helpers/tree.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURES = join(ROOT, 'tests', 'fixtures');
 
-const tests = (...args: string[]) => spawnSync(process.execPath, [join(ROOT, 'scripts', 'tests.mjs'), ...args], { encoding: 'utf8', windowsHide: true });
+interface RunOptions {
+  cwd?: string;
+  env?: Record<string, string>;
+  launcher?: string;
+}
+
+const run = (options: RunOptions, ...args: string[]) =>
+  spawnSync(process.execPath, [options.launcher ?? join(ROOT, 'scripts', 'tests.mjs'), ...args], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 30_000,
+    maxBuffer: 16 * 1024 * 1024,
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    env: { ...process.env, AGENT_TESTS_DEBUG: '', ...options.env },
+  });
+const tests = (...args: string[]) => run({}, ...args);
+
+/** The parsed error object, after asserting stderr is exactly one JSON line. */
+function errorOf(stderr: string): { code: string; message: string; hint?: string; detail?: string } {
+  const lines = stderr.trimEnd().split('\n');
+  expect(lines).toHaveLength(1);
+  return JSON.parse(lines[0]!).error;
+}
+
+const scratch: string[] = [];
+afterEach(() => {
+  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+function scratchDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  scratch.push(dir);
+  return dir;
+}
+
+const canSymlink = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-tests-symlink-'));
+  try {
+    symlinkSync(join(dir, 'nowhere'), join(dir, 'link'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
 
 describe('tests CLI', () => {
-  it('prints capabilities as JSON', () => {
+  it('prints capabilities as JSON, with the package version', () => {
     const result = tests('capabilities');
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ name: 'agent-tests', commands: ['capabilities', 'risk-draft', 'scan', 'report'] });
+    const version = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: string }).version;
+    expect(JSON.parse(result.stdout)).toMatchObject({ name: 'agent-tests', version, commands: ['capabilities', 'risk-draft', 'scan', 'report'] });
   });
 
   it('rejects an unknown command with E_USAGE and exit 2', () => {
     const result = tests('frobnicate');
     expect(result.status).toBe(2);
-    expect(JSON.parse(result.stderr).error.code).toBe('E_USAGE');
+    expect(errorOf(result.stderr).code).toBe('E_USAGE');
   });
 
   it('rejects an unknown flag with E_USAGE', () => {
     const result = tests('scan', '--bogus');
     expect(result.status).toBe(2);
-    expect(JSON.parse(result.stderr).error.code).toBe('E_USAGE');
+    expect(errorOf(result.stderr).code).toBe('E_USAGE');
   });
 
   it('scan prints evidence JSON', () => {
@@ -4272,7 +7103,7 @@ describe('tests CLI', () => {
   it('reports an invalid risk map as E_RISKMAP', () => {
     const result = tests('scan', '--root', makeTree({ '.testing/risk.yml': 'phase: nope\n' }));
     expect(result.status).toBe(1);
-    expect(JSON.parse(result.stderr).error.code).toBe('E_RISKMAP');
+    expect(errorOf(result.stderr).code).toBe('E_RISKMAP');
   });
 
   it('risk-draft prints YAML, and --write creates the file once', () => {
@@ -4285,15 +7116,257 @@ describe('tests CLI', () => {
     const written = tests('risk-draft', '--root', root, '--write');
     expect(written.status).toBe(0);
     expect(existsSync(join(root, '.testing', 'risk.yml'))).toBe(true);
+    expect(readdirSync(join(root, '.testing'))).toEqual(['risk.yml']);
 
     const again = tests('risk-draft', '--root', root, '--write');
     expect(again.status).toBe(1);
-    expect(JSON.parse(again.stderr).error.code).toBe('E_EXISTS');
+    expect(errorOf(again.stderr).code).toBe('E_EXISTS');
   });
 
-  it('rejects a root that does not exist', () => {
-    const result = tests('scan', '--root', join(ROOT, 'no-such-directory'));
+  it('rejects a root that does not exist with E_USAGE', () => {
+    const missing = join(ROOT, 'no-such-directory');
+    const result = tests('scan', '--root', missing);
     expect(result.status).toBe(2);
+    const error = errorOf(result.stderr);
+    expect(error.code).toBe('E_USAGE');
+    expect(error.message).toBe(`Root does not exist: ${missing}`);
+  });
+
+  describe('roots', () => {
+    it('rejects a file root on scan, report and risk-draft', () => {
+      const file = join(makeTree({ 'a-file.txt': 'x' }), 'a-file.txt');
+      for (const command of ['scan', 'report', 'risk-draft']) {
+        const result = tests(command, '--root', file);
+        expect(result.status, command).toBe(2);
+        const error = errorOf(result.stderr);
+        expect(error.code).toBe('E_USAGE');
+        expect(error.message).toBe(`Root is not a directory: ${file}`);
+      }
+    });
+
+    it.each([[['--root=']], [['--root', '']]])('rejects an empty root (%j)', args => {
+      const result = tests('scan', ...args);
+      expect(result.status).toBe(2);
+      const error = errorOf(result.stderr);
+      expect(error.code).toBe('E_USAGE');
+      expect(error.message).toBe('--root needs a directory');
+    });
+
+    it('treats a root path that runs through a file as a missing root', () => {
+      const file = join(makeTree({ 'a-file.txt': 'x' }), 'a-file.txt');
+      const result = tests('scan', '--root', join(file, 'sub'));
+      expect(result.status).toBe(2);
+      expect(errorOf(result.stderr).code).toBe('E_USAGE');
+    });
+
+    it('accepts --root=<dir>', () => {
+      const result = tests('scan', `--root=${join(FIXTURES, 'clean')}`);
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).schema).toBe('agent-tests/evidence@1');
+    });
+
+    it('accepts a root whose path has spaces', () => {
+      const root = join(scratchDir('agent tests '), 'my project');
+      mkdirSync(root);
+      const result = tests('scan', '--root', root);
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).root).toBe(root);
+    });
+
+    it('resolves a relative root against the working directory', () => {
+      const result = run({ cwd: FIXTURES }, 'scan', '--root', 'clean');
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).root).toBe(join(FIXTURES, 'clean'));
+    });
+  });
+
+  describe('report caps', () => {
+    it('--max-files caps the test-file table and says how many were omitted', () => {
+      const result = tests('report', '--root', join(FIXTURES, 'bloated'), '--max-files', '1');
+      expect(result.status).toBe(0);
+      const section = result.stdout.split('\n## Test files')[1]!.split('\n## ')[0]!;
+      const rows = section.split('\n').filter(line => line.startsWith('| ') && !line.startsWith('| File ') && !line.startsWith('|---'));
+      expect(rows).toHaveLength(1);
+      expect(result.stdout).toMatch(/\d+ more files omitted/);
+    });
+
+    it('--max-per-rule is accepted', () => {
+      const result = tests('report', '--root', join(FIXTURES, 'bloated'), '--max-per-rule', '1');
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('# Test audit evidence');
+    });
+
+    it('rejects a bad --max-files end to end', () => {
+      const result = tests('report', '--root', join(FIXTURES, 'clean'), '--max-files', '0');
+      expect(result.status).toBe(2);
+      const error = errorOf(result.stderr);
+      expect(error.code).toBe('E_USAGE');
+      expect(error.message).toContain('--max-files must be a positive integer');
+    });
+
+    it('rejects a bad --max-per-rule end to end', () => {
+      const result = tests('report', '--root', join(FIXTURES, 'clean'), '--max-per-rule=abc');
+      expect(result.status).toBe(2);
+      const error = errorOf(result.stderr);
+      expect(error.code).toBe('E_USAGE');
+      expect(error.message).toContain('--max-per-rule must be a positive integer');
+    });
+
+    it('scan ignores --max-files: the output is the same with and without it', () => {
+      const root = join(FIXTURES, 'bloated');
+      const plain = tests('scan', '--root', root);
+      const flagged = tests('scan', '--root', root, '--max-files', '3');
+      expect(plain.status).toBe(0);
+      expect(flagged.status).toBe(0);
+      expect(JSON.parse(flagged.stdout)).toEqual(JSON.parse(plain.stdout));
+    });
+  });
+
+  describe('positiveInteger', () => {
+    it('returns undefined when the option is absent', () => {
+      expect(positiveInteger('max-files', undefined)).toBeUndefined();
+    });
+
+    it.each([
+      ['1', 1],
+      ['40', 40],
+      ['007', 7],
+    ])('accepts %s', (raw, value) => {
+      expect(positiveInteger('max-files', raw)).toBe(value);
+    });
+
+    it.each(['0', 'abc', '-1', '1.5', '', ' 3', '1e3', '99999999999999999999'])('rejects "%s" with E_USAGE naming the option', raw => {
+      const failure = (() => {
+        try {
+          positiveInteger('max-per-rule', raw);
+        } catch (error) {
+          return error;
+        }
+      })();
+      expect(failure).toBeInstanceOf(CliError);
+      expect((failure as CliError).code).toBe('E_USAGE');
+      expect((failure as CliError).message).toContain('--max-per-rule must be a positive integer');
+    });
+  });
+
+  describe('risk-draft --write', () => {
+    it('leaves an existing risk map untouched, byte for byte', () => {
+      const original = '# hand written\nphase: dev\r\n';
+      const root = makeTree({ '.testing/risk.yml': original, 'src/auth/a.ts': '' });
+      const result = tests('risk-draft', '--root', root, '--write');
+      expect(result.status).toBe(1);
+      expect(errorOf(result.stderr).code).toBe('E_EXISTS');
+      expect(readFileSync(join(root, '.testing', 'risk.yml'), 'utf8')).toBe(original);
+      expect(readdirSync(join(root, '.testing'))).toEqual(['risk.yml']);
+    });
+
+    it.skipIf(!canSymlink)('treats a dangling symlink at the target as existing and does not write through it', () => {
+      const root = makeTree({ 'src/auth/a.ts': '' });
+      mkdirSync(join(root, '.testing'));
+      const outside = join(root, 'elsewhere.yml');
+      symlinkSync(outside, join(root, '.testing', 'risk.yml'));
+      const result = tests('risk-draft', '--root', root, '--write');
+      expect(result.status).toBe(1);
+      expect(errorOf(result.stderr).code).toBe('E_EXISTS');
+      expect(existsSync(outside)).toBe(false);
+      expect(lstatSync(join(root, '.testing', 'risk.yml')).isSymbolicLink()).toBe(true);
+      expect(readdirSync(join(root, '.testing'))).toEqual(['risk.yml']);
+    });
+
+    it('reports E_EXISTS when .testing is a file', () => {
+      const root = makeTree({ '.testing': 'not a directory', 'src/auth/a.ts': '' });
+      const result = tests('risk-draft', '--root', root, '--write');
+      expect(result.status).toBe(1);
+      const error = errorOf(result.stderr);
+      expect(error.code).toBe('E_EXISTS');
+      expect(error.message).toBe('.testing exists and is not a directory');
+      expect(readFileSync(join(root, '.testing'), 'utf8')).toBe('not a directory');
+    });
+  });
+
+  describe('error contract', () => {
+    it('E_USAGE carries the usage string as its hint', () => {
+      const error = errorOf(tests('frobnicate').stderr);
+      expect(error.hint).toMatch(/^Usage: tests </);
+      expect(error.hint).toContain('--max-files <n>');
+      expect(error.hint).toContain('--max-per-rule <n>');
+    });
+
+    it('E_RISKMAP hints at fixing or deleting the risk map', () => {
+      const error = errorOf(tests('scan', '--root', makeTree({ '.testing/risk.yml': 'phase: nope\n' })).stderr);
+      expect(error.hint).toBe('Fix or delete .testing/risk.yml, then rerun');
+    });
+
+    it('E_EXISTS hints at deleting the file', () => {
+      const root = makeTree({ '.testing/risk.yml': 'phase: dev\n' });
+      const error = errorOf(tests('risk-draft', '--root', root, '--write').stderr);
+      expect(error.hint).toBe('Delete the file first if you want a fresh draft');
+    });
+
+    it('failureFor appends a Node error code to an internal error and keeps the detail out by default', () => {
+      const cause = Object.assign(new Error('boom'), { code: 'ENOTDIR' });
+      expect(failureFor(cause, {})).toEqual({ code: 'E_INTERNAL', message: 'boom [ENOTDIR]' });
+    });
+
+    it('failureFor leaves the message alone when there is no Node code, and handles non-Error throws', () => {
+      expect(failureFor(new Error('plain'), {}).message).toBe('plain');
+      expect(failureFor('text', {})).toMatchObject({ code: 'E_INTERNAL', message: 'text' });
+    });
+
+    it('failureFor adds the stack as detail only when AGENT_TESTS_DEBUG is set', () => {
+      const error = new Error('boom');
+      expect(failureFor(error, { AGENT_TESTS_DEBUG: '1' }).detail).toBe(error.stack);
+      expect(failureFor(error, { AGENT_TESTS_DEBUG: '' }).detail).toBeUndefined();
+    });
+
+    it('failureFor keeps a CliError as is, with the hint for its code', () => {
+      expect(failureFor(new CliError('E_EXISTS', 'there'), {})).toEqual({ code: 'E_EXISTS', message: 'there', hint: 'Delete the file first if you want a fresh draft' });
+      expect(failureFor(new CliError('E_X', 'own', 'my hint'), {})).toEqual({ code: 'E_X', message: 'own', hint: 'my hint' });
+      expect(failureFor(new CliError('E_X', 'no hint'), {})).toEqual({ code: 'E_X', message: 'no hint' });
+    });
+
+    it('adds the stack as one escaped detail string only in debug mode, still on one line', () => {
+      const root = makeTree({ '.testing/risk.yml/inner': 'the risk map path is a directory' });
+      const plain = tests('scan', '--root', root);
+      expect(plain.status).toBe(1);
+      expect(errorOf(plain.stderr).code).toBe('E_RISKMAP');
+      expect(errorOf(plain.stderr).detail).toBeUndefined();
+
+      const debug = run({ env: { AGENT_TESTS_DEBUG: '1' } }, 'scan', '--root', root);
+      expect(debug.status).toBe(1);
+      expect(errorOf(debug.stderr).detail).toBeTypeOf('string');
+    });
+  });
+
+  describe('broken pipes', () => {
+    it('ignoreBrokenPipe exits quietly with 0 on EPIPE', () => {
+      const exit = vi.fn();
+      ignoreBrokenPipe(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }), exit);
+      expect(exit).toHaveBeenCalledWith(0);
+    });
+
+    it('ignoreBrokenPipe rethrows any other error', () => {
+      const exit = vi.fn();
+      const other = Object.assign(new Error('disk on fire'), { code: 'EIO' });
+      expect(() => ignoreBrokenPipe(other, exit)).toThrow(other);
+      expect(exit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('launcher', () => {
+    it('reports a runtime that cannot load as one E_RUNTIME_BROKEN line', () => {
+      const copy = scratchDir('agent-tests-nodeps-');
+      for (const entry of ['scripts', 'src', 'package.json']) cpSync(join(ROOT, entry), join(copy, entry), { recursive: true });
+      expect(existsSync(join(copy, 'node_modules'))).toBe(false);
+      const result = run({ launcher: join(copy, 'scripts', 'tests.mjs') }, 'capabilities');
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      const error = errorOf(result.stderr);
+      expect(error.code).toBe('E_RUNTIME_BROKEN');
+      expect(error.message).not.toContain('\n');
+      expect(error.message.length).toBeGreaterThan(0);
+      expect(error.hint).toBe('Run the tests-setup skill to repair the managed runtime');
+    });
   });
 });
 ```
@@ -4309,8 +7382,8 @@ Expected: FAIL. Every case fails because `scripts/tests.mjs` does not exist.
 Create `src/cli.ts`:
 
 ```ts
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { type Stats, linkSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { CliError } from './errors.ts';
@@ -4321,19 +7394,113 @@ import { scan } from './scan.ts';
 
 const COMMANDS = ['capabilities', 'risk-draft', 'scan', 'report'] as const;
 
+const USAGE = `Usage: tests <${COMMANDS.join('|')}> [--root <dir>] [--write] [--max-files <n>] [--max-per-rule <n>]`;
+
+const HINTS: Record<string, string> = {
+  E_USAGE: USAGE,
+  E_RISKMAP: 'Fix or delete .testing/risk.yml, then rerun',
+  E_EXISTS: 'Delete the file first if you want a fresh draft',
+};
+
+export interface Failure {
+  code: string;
+  message: string;
+  hint?: string;
+  detail?: string;
+}
+
 function packageVersion(): string {
   const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
   return (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
 }
 
+const nodeCode = (error: unknown): string | undefined => {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' ? code : undefined;
+};
+
+/**
+ * The one-line JSON error the CLI prints for any failure. A CliError keeps its code and message; anything else is E_INTERNAL, with
+ * the Node error code (ENOENT, ENOTDIR) appended to the message. The stack goes in "detail" only when AGENT_TESTS_DEBUG is set.
+ */
+export function failureFor(error: unknown, env: Record<string, string | undefined> = process.env): Failure {
+  let failure: Failure;
+  if (error instanceof CliError) {
+    failure = { code: error.code, message: error.message };
+    const hint = error.hint ?? HINTS[error.code];
+    if (hint) failure.hint = hint;
+  } else {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = nodeCode(error);
+    failure = { code: 'E_INTERNAL', message: code ? `${message} [${code}]` : message };
+  }
+  if (env.AGENT_TESTS_DEBUG && error instanceof Error && error.stack) failure.detail = error.stack;
+  return failure;
+}
+
+/** A positive integer option value, or undefined when the option was not given. */
+export function positiveInteger(name: string, raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const value = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  if (!Number.isSafeInteger(value) || value < 1) throw new CliError('E_USAGE', `--${name} must be a positive integer (got "${raw}")`);
+  return value;
+}
+
+/** A reader that closes the pipe early (for example "| head") is not an error. */
+export function ignoreBrokenPipe(error: NodeJS.ErrnoException, exit: (code: number) => void = process.exit): void {
+  if (error.code === 'EPIPE') {
+    exit(0);
+    return;
+  }
+  throw error;
+}
+
+/**
+ * Create the file only if nothing is there, and never leave a partial file at the target: write a temp file beside it, then publish
+ * it with a hard link, which fails instead of overwriting. Filesystems without hard links fall back to an exclusive create.
+ */
+function writeNewFile(target: string, text: string): void {
+  const exists = () => new CliError('E_EXISTS', `${RISK_MAP_PATH} already exists. Edit it by hand or delete it first.`);
+  const directory = dirname(target);
+  const parent = statSync(directory, { throwIfNoEntry: false });
+  if (parent && !parent.isDirectory()) throw new CliError('E_EXISTS', `${basename(directory)} exists and is not a directory`);
+  // lstat, not stat: a dangling symlink at the target still counts as something being there.
+  if (lstatSync(target, { throwIfNoEntry: false })) throw exists();
+  mkdirSync(directory, { recursive: true });
+
+  const temp = join(directory, `${basename(target)}.${process.pid}.tmp`);
+  try {
+    writeFileSync(temp, text, { flag: 'wx' });
+    try {
+      linkSync(temp, target);
+    } catch (error) {
+      const code = nodeCode(error);
+      if (code === 'EEXIST') throw exists();
+      if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EOPNOTSUPP' && code !== 'ENOSYS') throw error;
+      try {
+        writeFileSync(target, text, { flag: 'wx' });
+      } catch (fallback) {
+        if (nodeCode(fallback) === 'EEXIST') throw exists();
+        throw fallback;
+      }
+    }
+  } finally {
+    rmSync(temp, { force: true });
+  }
+}
+
 function run(args: string[]): void {
   const [command, ...rest] = args;
   if (!command || !(COMMANDS as readonly string[]).includes(command)) {
-    throw new CliError('E_USAGE', `Usage: tests <${COMMANDS.join('|')}> [--root <dir>] [--write]`);
+    throw new CliError('E_USAGE', USAGE);
   }
-  let values: { root?: string; write?: boolean };
+  let values: { root?: string; write?: boolean; 'max-files'?: string; 'max-per-rule'?: string };
   try {
-    values = parseArgs({ args: rest, options: { root: { type: 'string' }, write: { type: 'boolean' } }, strict: true }).values;
+    values = parseArgs({
+      args: rest,
+      options: { root: { type: 'string' }, write: { type: 'boolean' }, 'max-files': { type: 'string' }, 'max-per-rule': { type: 'string' } },
+      strict: true,
+    }).values;
   } catch (error) {
     throw new CliError('E_USAGE', (error as Error).message);
   }
@@ -4341,8 +7508,17 @@ function run(args: string[]): void {
     process.stdout.write(`${JSON.stringify({ name: 'agent-tests', version: packageVersion(), commands: COMMANDS })}\n`);
     return;
   }
+  if (values.root === '') throw new CliError('E_USAGE', '--root needs a directory');
   const root = resolve(values.root ?? process.cwd());
-  if (!existsSync(root)) throw new CliError('E_USAGE', `Root does not exist: ${root}`);
+  let rootStat: Stats | undefined;
+  try {
+    rootStat = statSync(root, { throwIfNoEntry: false });
+  } catch (error) {
+    // A path through a file (a/file.txt/sub) is ENOTDIR on POSIX; to the caller it is just a root that does not exist.
+    if (nodeCode(error) !== 'ENOTDIR') throw error;
+  }
+  if (!rootStat) throw new CliError('E_USAGE', `Root does not exist: ${root}`);
+  if (!rootStat.isDirectory()) throw new CliError('E_USAGE', `Root is not a directory: ${root}`);
 
   if (command === 'risk-draft') {
     const text = serializeRiskMap(draftRiskMap(root));
@@ -4350,23 +7526,32 @@ function run(args: string[]): void {
       process.stdout.write(text);
       return;
     }
-    const target = join(root, RISK_MAP_PATH);
-    if (existsSync(target)) throw new CliError('E_EXISTS', `${RISK_MAP_PATH} already exists. Edit it by hand or delete it first.`);
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, text);
+    writeNewFile(join(root, RISK_MAP_PATH), text);
     process.stdout.write(`${JSON.stringify({ written: RISK_MAP_PATH })}\n`);
     return;
   }
-  const report = scan(root);
-  process.stdout.write(command === 'scan' ? `${JSON.stringify(report, null, 2)}\n` : renderMarkdown(report));
+  if (command === 'scan') {
+    // scan always prints the full JSON, so the report caps do not apply to it.
+    process.stdout.write(`${JSON.stringify(scan(root), null, 2)}\n`);
+    return;
+  }
+  const maxFiles = positiveInteger('max-files', values['max-files']);
+  const maxPerRule = positiveInteger('max-per-rule', values['max-per-rule']);
+  process.stdout.write(
+    renderMarkdown(scan(root), {
+      ...(maxFiles !== undefined ? { maxFiles } : {}),
+      ...(maxPerRule !== undefined ? { maxPerRule } : {}),
+    }),
+  );
 }
 
 export async function main(argv: string[]): Promise<void> {
+  process.stdout.on('error', error => ignoreBrokenPipe(error));
   try {
     run(argv.slice(2));
   } catch (error) {
-    const failure = error instanceof CliError ? error : new CliError('E_INTERNAL', (error as Error).message);
-    console.error(JSON.stringify({ error: { code: failure.code, message: failure.message, ...(failure.hint ? { hint: failure.hint } : {}) } }));
+    const failure = failureFor(error);
+    console.error(JSON.stringify({ error: failure }));
     process.exitCode = failure.code === 'E_USAGE' ? 2 : 1;
   }
 }
@@ -4376,15 +7561,32 @@ Create `scripts/tests.mjs`:
 
 ```js
 #!/usr/bin/env node
-import { main } from '../src/cli.ts';
-await main(process.argv);
+// The CLI loads lazily so a runtime that cannot start (old Node, missing node_modules, a broken source file) still ends in the
+// one-line JSON error contract instead of a raw stack.
+function broken(message, hint) {
+  console.error(JSON.stringify({ error: { code: 'E_RUNTIME_BROKEN', message, hint } }));
+  process.exitCode = 1;
+}
+
+const major = Number(process.versions.node.split('.')[0]);
+if (major < 24) {
+  broken(`agent-tests needs Node 24 or newer; this is Node ${process.versions.node}`, 'Install Node 24 or newer');
+} else {
+  let main;
+  try {
+    ({ main } = await import('../src/cli.ts'));
+  } catch (error) {
+    broken(String(error instanceof Error ? error.message : error).split('\n')[0], 'Run the tests-setup skill to repair the managed runtime');
+  }
+  if (main) await main(process.argv);
+}
 ```
 
 - [ ] **Step 4: Run the test and the typecheck**
 
 Run: `npx vitest run tests/cli.test.ts`
 
-Expected: PASS, 8 tests.
+Expected: PASS, 46 tests.
 
 Run: `npm run typecheck`
 
@@ -4550,9 +7752,15 @@ The CLI gathers evidence and never judges. You judge, using the rubric below. Do
      this code (`consumers`; an empty list means nobody). Apply their answers, then write it with `--write`.
      Never write the map before the owner has confirmed tiers, phase and consumers.
    - Present: read it. Treat `phase`, `consumers` and `areas` as the owner's decisions.
-3. **Evidence.** `node "<plugin-root>/scripts/run-managed.js" report --root <project>` for the Markdown view, or `scan` for JSON.
-   This version never runs the tests, so the wait and CI cost columns are empty. Agent cost is estimated tokens in the file.
-   Churn is commits that edited the test without touching the code it covers.
+3. **Evidence.** `node "<plugin-root>/scripts/run-managed.js" report --root <project>` prints a ranked Markdown view
+   (add `--max-files <n>` for a longer table); `scan` prints the full JSON.
+   - Project findings (CI, hooks, scripts, agent instructions, risk-map gaps) come first, then a table of test files.
+   - The table ranks unparsed files first (the tool could not read their structure, so read those directly), then files
+     with the most distinct finding rules. The Rules column shows which rules fired. Several `redundancy.shared-subject`
+     findings are weak evidence; one `worktree.*` or `shim.*` rule on a real hazard is strong.
+   - This version never runs the tests, so wait time and CI minutes are absent. Agent cost is estimated tokens in the
+     file. Churn/edits is edits that touched the test without the code it covers, over all edits that modified it;
+     `n/a` means no git history (a shallow clone has none) or no resolvable subject.
 4. **Read before judging.** Findings are evidence, not verdicts. Open the test files behind the highest-ranked findings
    and the files in each cluster. Pattern matches produce false positives: a test titled "falls back to the default" may
    guard real behavior. Read the code under test too: a test of a one-line pass-through, or a bound the code can never
@@ -4816,7 +8024,7 @@ Draft it with the tool, then replace the draft with the confirmed version below.
 
 Run: `node scripts/tests.mjs risk-draft --root .`
 
-Expected: YAML printed to the terminal with `src/detectors/**` and a `src/**` catch-all. Nothing is written.
+Expected: YAML printed to the terminal with `src/detectors/**`, a critical per-file area for `src/schema.ts` (its name suggests data persistence) and a `src/**` catch-all. Nothing is written.
 
 Create `.testing/risk.yml`:
 
@@ -4862,6 +8070,9 @@ areas:
   - path: src/riskmap.ts
     tier: critical
     why: reads and validates the owner's risk decisions
+  - path: src/detectors/**
+    tier: standard
+    why: detectors produce evidence for the audit; a wrong finding misleads but cannot damage a project
   - path: src/**
     tier: standard
     why: evidence gathering; wrong output misleads the audit but cannot damage a project
@@ -4926,7 +8137,10 @@ Skills run the CLI through the checked launcher, never from PATH:
 | `capabilities` | Name, version, commands |
 | `risk-draft [--write]` | A draft risk map; `--write` creates `.testing/risk.yml` if absent |
 | `scan` | Evidence report as JSON (`agent-tests/evidence@1`) |
-| `report` | The same evidence as Markdown |
+| `report [--max-files n] [--max-per-rule n]` | The same evidence as ranked, capped Markdown: project findings first, then a table of the most suspect test files with the rules that fired |
+
+Every failure is one JSON line on stderr (`{"error":{"code","message","hint"}}`) with exit code 2 for a usage error and 1
+otherwise. A broken runtime is reported the same way (`E_RUNTIME_BROKEN`), so an agent never has to read a stack trace.
 
 ## Status
 
@@ -4938,8 +8152,15 @@ remediation and CI templates (0.3), Codex packaging verified on both hosts (0.4)
 
 - Pattern detectors also match strings inside tests that are about those patterns, including this repository's own tests.
   Findings are evidence for the agent to read, not verdicts.
-- Subjects are found through relative imports only. Path aliases are not resolved yet.
-- Churn needs git history and is unknown for tests with no resolvable subject.
+- Subjects are found through relative imports, `require()` and dynamic `import()` of project files, plus any `@subject`
+  tags. Path aliases (`@/x`, tsconfig `paths`) are not resolved yet, so tests that import code only through an alias have
+  no subject and show as untiered.
+- Churn needs git history. It is `n/a` in a shallow clone (the usual CI checkout), outside a repository, and for tests with
+  no resolvable subject. A test's creation commit is not counted as an edit.
+- The parser reads files through TypeScript 7's JS API, which its authors label `unstable`; the dependency is pinned
+  exactly and only `src/parse.ts` uses it. A file it cannot parse is reported with the `unparsed` flag, not skipped.
+- Drift detection ignores a one-segment catch-all such as `src/**`, so a new directory under `src` is reported until it
+  has its own area; add areas by hand for anything nested deeper than the draft looks.
 
 ## Development
 
@@ -4961,8 +8182,8 @@ Run: `node scripts/tests.mjs report --root .`
 Expected:
 - `Phase: dev`, `Risk map: present`, 18 test files;
 - `wiring | 0` and `frequency | 0` in the findings table;
-- `shim | 5` and `worktree | 9`: false positives from `tests/detectors/shims.test.ts` (3), `tests/detectors/worktree.test.ts` (8), `tests/managed-runtime.test.ts` (1), `tests/scan.test.ts` (2), whose test data is made of those very patterns;
-- `redundancy | 7`, all `redundancy.shared-subject`: several tests import `src/riskmap.ts` or `src/schema.ts` to build fixtures, not to test them.
+- `shim | 7` and `worktree | 50`: false positives from `tests/detectors/shims.test.ts` (4), `tests/detectors/worktree.test.ts` (45), `tests/managed-runtime.test.ts` (1), `tests/report.test.ts` (2), `tests/riskdraft.test.ts` (1), `tests/scan.test.ts` (4), whose test data is made of those very patterns;
+- `redundancy | 15`, all `redundancy.shared-subject`: several tests import `src/riskmap.ts` or `src/schema.ts` to build fixtures, not to test them.
 
 Do not "fix" any of these. They are the evidence the audit skill would read and dismiss, and they are listed under Known limitations in the README. If your counts differ, a code block was mis-typed.
 
@@ -4983,7 +8204,7 @@ Invoke `h-superpowers:verification-before-completion` first: nothing below may b
 
 Run: `npm test`
 
-Expected: `Test Files  18 passed (18)` and `Tests  175 passed (175)`.
+Expected: `Test Files  18 passed (18)` and `Tests  539 passed (539)`.
 
 Run: `npm run typecheck`
 
@@ -5020,7 +8241,7 @@ Expected, in order:
 2. `setup.js --json` prints `"ok":true`, `"dependencies":true` and `"errors":[]`;
 3. `--check` prints `"ok":true` with `cliVersion` equal to `pluginVersion`;
 4. the second `capabilities` prints `{"name":"agent-tests","version":"0.1.0","commands":["capabilities","risk-draft","scan","report"]}`;
-5. `report` prints `# Test audit evidence` with `Test files: 4` and `None.` under Findings.
+5. `report` prints `# Test audit evidence` with `Test files: 4` and `None.` under both `Project findings (0)` and `Per-file findings`.
 
 This proves the real `npm ci`, the receipt, and Node 24 running the `.ts` CLI from the managed release on this OS.
 
