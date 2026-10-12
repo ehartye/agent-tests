@@ -39,6 +39,11 @@ describe('store', () => {
 `;
 
 describe('TypeScript path aliases as subjects', () => {
+  it('does not substitute a JS module for a missing explicit Svelte component', () => {
+    const root = makeTree({ 'src/Screen.svelte.js': '' });
+    expect(resolveSubjects(root, 'tests/screen.test.js', ['../src/Screen.svelte'])).toEqual([]);
+  });
+
   it('gives exact aliases and then the longest wildcard prefix precedence', () => {
     const root = makeTree({
       'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '@*': ['src/broad/*'], '@sim/*': ['src/sim/*'], '@sim/value': ['src/exact.ts'] } } }),

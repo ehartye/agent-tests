@@ -10,6 +10,11 @@ product architecture as part of the audit.
 Start with measured slow files or repeated setup. Without timings, label structural observations and hypotheses;
 do not rank a large file as slow from its length. Read scripts, test helpers and the source they exercise. Trace:
 
+Before comparing counts or costs, inventory execution scopes: root and nested package scripts, runner include/exclude
+patterns, environments, setup files and lifecycle hooks. A static discovery count is not a native run count. Vitest can
+load its test options from a Vite config, and component imports can require a compiler and DOM even when the test file
+is ordinary JavaScript. Confirm what each command actually includes before proposing a shared lane or an affected-only run.
+
 1. **Dependency fanout.** Which central modules make apparently unrelated changes affect many tests? A common import
    can be a legitimate public facade; it is not proof of duplication or a reason to split everything. Identify the
    smallest cohesive owner that could expose the behavior directly. Account for coupling introduced by the split.

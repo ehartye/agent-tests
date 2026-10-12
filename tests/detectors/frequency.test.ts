@@ -83,6 +83,60 @@ const workflow = (text: string): string => makeTree({ [WF]: text });
 const scriptsTree = (scripts: Record<string, unknown>): string => makeTree({ 'package.json': JSON.stringify({ scripts }) });
 const watchRules = (script: unknown): string[] => rules(detectFrequency(scriptsTree({ test: script }), null)).filter(rule => rule === 'frequency.watch-default');
 
+describe('detectFrequency build gates', () => {
+  const buildFindings = (scripts: Record<string, unknown>) => detectFrequency(scriptsTree(scripts), null).filter(finding => finding.rule === 'frequency.build-full-suite');
+
+  it('reports the APcademy build gate with its script chain', () => {
+    const found = buildFindings({ build: 'npm run validate:explanations && npm test && vite build', test: 'vitest run' });
+    expect(found).toHaveLength(1);
+    expect(found[0].file).toBe('package.json');
+    expect(found[0].evidence).toContain('build -> test');
+    expect(found[0].message).toContain('release');
+  });
+
+  it('follows local script delegation without executing it', () => {
+    const found = buildFindings({ build: 'npm run check && vite build', check: 'npm run test:unit', 'test:unit': 'vitest run' });
+    expect(found).toHaveLength(1);
+    expect(found[0].evidence).toContain('build -> check -> test:unit');
+  });
+
+  it.each(['pnpm exec vitest run', 'npx vitest run', 'bun test'])('reports a direct test tool in build: %s', command => {
+    expect(buildFindings({ build: `${command} && vite build` })).toHaveLength(1);
+  });
+
+  it.each(['prebuild', 'postbuild'])('reports a suite in the %s lifecycle gate', name => {
+    const found = buildFindings({ build: 'vite build', [name]: 'vitest run' });
+    expect(found).toHaveLength(1);
+    expect(found[0].evidence).toContain(name);
+  });
+
+  it.each([
+    { build: 'vite build', test: 'vitest run' },
+    { build: 'npm run check && vite build', check: 'vitest related --run src/app.test.js' },
+    { build: 'npm run test:smoke && vite build', 'test:smoke': 'vitest related --run src/app.test.js' },
+    { build: 'npm run check -- --changed && vite build', check: 'vitest run' },
+    { build: 'npm test -- src/foo.test.ts && vite build', test: 'vitest run' },
+    { build: 'vitest run src/foo.test.ts && vite build' },
+    { build: 'npm run check', check: 'npm run build' },
+    { build: 'echo "npm test" && vite build', test: 'vitest run' },
+    { build: 'npm --prefix server test && vite build', test: 'vitest run' },
+    { build: 'npm run test --prefix server && vite build', test: 'vitest run' },
+    { build: 'npm run test --workspace server && vite build', test: 'vitest run' },
+    { build: 'npm run t && vite build', t: 'echo smoke', test: 'vitest run' },
+    { build: 'echo "review; npm test" && vite build', test: 'vitest run' },
+    { build: 'echo "review && npm test" && vite build', test: 'vitest run' },
+    { build: 'vite build # disabled && npm test', test: 'vitest run' },
+    { build: 'vite build # disabled; npm test', test: 'vitest run' },
+    { build: 'vitest run Library && vite build' },
+    { build: 'vitest run ./integration && vite build' },
+    { build: 'vitest run --project unit && vite build' },
+    { build: 'vitest run $TEST_FILTER && vite build' },
+    { build: 'node scripts/build.mjs', test: 'vitest run' },
+  ])('does not infer an unscoped local suite from %j', scripts => {
+    expect(buildFindings(scripts)).toEqual([]);
+  });
+});
+
 describe('detectFrequency on odd input', () => {
   it.each([
     ['a directory named AGENTS.md', { 'AGENTS.md/x': '' }],

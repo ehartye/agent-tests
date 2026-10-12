@@ -30,7 +30,7 @@ dependencies. Node.js 24 or newer is required. Codex installation is documented 
 2. Compat, legacy and fallback tests, judged against who actually consumes the code.
 3. Tests that break beside a second worktree: fixed ports, fixed temp or database paths, absolute paths, reads of `.git`.
 4. Tests not tied to a risk tier or lane, and critical areas nobody tests.
-5. Tests that run too often: full suites in hooks, watch-mode test scripts, CI on every push, Windows and macOS matrices on the push path.
+5. Tests that run too often: full suites in hooks or builds, watch-mode test scripts, CI on every push, Windows and macOS matrices on the push path.
 
 The CLI gathers evidence and never judges. The skill's rubric turns evidence into verdicts: keep, demote, merge, rewrite,
 quarantine or delete.
@@ -84,6 +84,9 @@ an optional Node reporter, and explicitly invoked observational candidate eviden
 report never run tests. Candidate observation does not select lanes, suppress checks or authorize integration.
 CI charges and statistical flakiness are not measured; remediation and wider runner/language support remain separate work.
 
+Version 0.3.1 adds explicit Svelte component subjects and advisory evidence for full test suites chained into build scripts,
+based on the APcademy Government case study.
+
 ## Known limitations
 
 - Pattern detectors also match strings inside tests that are about those patterns, including this repository's own tests.
@@ -94,6 +97,10 @@ CI charges and statistical flakiness are not measured; remediation and wider run
 - Subjects are found through relative imports, `require()` and dynamic `import()` of project files, plus `@subject`
   tags and exact/single-wildcard `paths` in a direct JSON `tsconfig.json` (including `baseUrl`). Inherited configs,
   JSONC and bundler-only aliases remain unresolved, so those tests can still have no subject and show as untiered.
+  Explicit `.svelte` imports count as component subjects; component bodies are not parsed as tests.
+- Build-gate evidence follows literal local package scripts from `prebuild`, `build` and `postbuild`, stopping on cycles.
+  Cross-package selectors, forwarded script arguments, unknown runner options/filters and arbitrary shell/JS wrappers remain unresolved. A finding can
+  describe an intentional release gate: confirm its purpose and replacement protection before separating tests from builds.
 - Churn needs git history. It is `n/a` in a shallow clone (the usual CI checkout), outside a repository, and for tests with
   no resolvable subject. A test's creation commit is not counted as an edit.
 - The parser reads files through TypeScript 7's JS API, which its authors label `unstable`; the dependency is pinned
@@ -102,6 +109,9 @@ CI charges and statistical flakiness are not measured; remediation and wider run
   has its own area; add areas by hand for anything nested deeper than the draft looks.
 
 ## Development
+
+The [APcademy Government case study](docs/case-studies/apcademy-government.md) records the real inputs, audit changes,
+and remaining execution-scope limitations that motivated component subjects and build-gate evidence.
 
     npm ci
     npm test
