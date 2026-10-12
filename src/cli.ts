@@ -8,7 +8,7 @@ import { draftRiskMap } from './riskdraft.ts';
 import { RISK_MAP_PATH, serializeRiskMap } from './riskmap.ts';
 import { scan } from './scan.ts';
 
-const COMMANDS = ['capabilities', 'risk-draft', 'scan', 'report'] as const;
+export const COMMANDS = ['capabilities', 'risk-draft', 'scan', 'report'] as const;
 
 const USAGE = `Usage: tests <${COMMANDS.join('|')}> [--root <dir>] [--write] [--max-files <n>] [--max-per-rule <n>]`;
 

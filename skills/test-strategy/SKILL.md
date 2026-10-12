@@ -9,12 +9,16 @@ Efficiency means protection per unit of cost. The same test costs many times mor
 putting each test in the right lane usually saves more than deleting it, provided each lane still runs often enough
 to keep the set of suspect changes small.
 
+`<plugin-root>` is the directory that holds scripts/run-managed.js, the parent of the skills directory (two levels
+up from this skill's directory). In Codex, resolve it from the SKILL.md file you loaded, not from the current directory.
+Quote the project path (`"<project>"`) so a Windows path with spaces survives.
+
 ## 1. Know the phase
 
 | Phase | Goal | Tests that matter | Automatic CI | Compat tests |
 |---|---|---|---|---|
-| dev (pre-release) | Iteration speed | Core invariants, a few user journeys | One non-blocking Linux job per pull request. OS matrix on demand only. | None: no consumers |
-| test (stabilizing) | Release confidence | Journeys, public-surface contracts, critical-tier depth | The same, plus a scheduled OS matrix and release-tag runs | Only for declared consumers |
+| dev (pre-release) | Iteration speed | Core invariants, a few user journeys | One non-blocking Linux job per pull request. OS matrix on demand, weekly and on release tags. | None unless `consumers` names one |
+| test (stabilizing) | Release confidence | Journeys, public-surface contracts, critical-tier depth | The same, with the OS matrix nightly and release-tag runs gating the release | Only for declared consumers |
 | production | Do not break people | Regression and compat for declared consumers, post-deploy smoke | Required, path-filtered pull-request checks | Yes, for declared consumers |
 
 Ask the owner which phase the project is in. Moving to the next phase is an explicit step: fill in `consumers`,
@@ -22,10 +26,13 @@ change `phase`.
 
 ## 2. Write the risk map
 
-`node "<plugin-root>/scripts/run-managed.js" risk-draft --root <project>` drafts `.testing/risk.yml` from directory
-names. Show it to the owner, apply their corrections, then `--write` and commit it. Tiers: `critical` (data loss,
-auth, money, public contracts), `standard`, `low` (presentation, examples). First matching area wins, so list
-specific areas first. If the CLI is missing, load the tests-setup skill.
+`node "<plugin-root>/scripts/run-managed.js" risk-draft --root "<project>"` prints a draft of `.testing/risk.yml` from
+directory names and writes nothing. Show it to the owner and ask for the phase, the `consumers` and which areas are
+critical, standard or low. Never write the file before they have confirmed all three. Then run the same command with
+`--write` to create the file, edit `.testing/risk.yml` to apply their answers (phase, consumers, tiers), rerun
+`report --root "<project>"` to validate it (an `E_RISKMAP` error names the bad field) and commit it. Tiers: `critical`
+(data loss, auth, money, public contracts), `standard`, `low` (presentation, examples). First matching area wins, so
+list specific areas first. If the CLI is missing, load the tests-setup skill.
 
 ## 3. Assign lanes by frequency
 
@@ -33,7 +40,7 @@ specific areas first. If the CLI is missing, load the tests-setup skill.
 |---|---|---|
 | edit | Tests affected by the files just changed | After each agent edit, seconds |
 | merge | The fast suite for critical and standard tiers | Locally, before pushing or merging |
-| scheduled | Everything, on an OS matrix | Nightly or weekly cron |
+| scheduled | Everything, on an OS matrix | Weekly cron in dev, nightly from the test phase on |
 | release | Everything plus a clean install and packaging check | On a release tag |
 
 Tier decides the lane: critical tests run in edit or merge, standard in edit, merge or scheduled, low in scheduled or
@@ -43,7 +50,8 @@ Starting scripts until the lane tooling exists:
 
 - vitest: edit `vitest related --run <changed files>`, merge `vitest run --changed origin/main`, full `vitest run`.
   `--changed` needs an `origin/main` ref; with no remote yet, `vitest run --changed` covers uncommitted changes.
-- jest: edit `jest --findRelatedTests <changed files>`, merge `jest --onlyChanged`, full `jest`.
+- jest: edit `jest --findRelatedTests <changed files>`, merge `jest --changedSince=origin/main`, full `jest`.
+  `--onlyChanged` sees uncommitted changes only, so it is not a merge lane.
 
 Make the `test` script a single run: `vitest run`, or `jest` without `--watch`. Bare `vitest` can start watch mode in an
 interactive terminal, which blocks an agent that runs it there.
@@ -59,11 +67,15 @@ its own report. Keep that observer cheap and non-blocking.
 - **No `push` trigger on branches.** A pushed pull-request branch would fire both triggers. Skip a post-merge run too:
   the pull-request job already ran on the same tree.
 - **OS matrix off the pull-request path.** Run Windows and macOS with `workflow_dispatch` (take an `os` input), a label
-  such as `ci:full`, a weekly schedule and release tags. They bill at a higher per-minute rate than Linux on private
-  repositories.
-- **Evidence for the merge lane.** Have it write `{sha, lane, result}` and refuse to merge without evidence for the
-  current commit.
-- **Make checks required** only when someone else depends on main.
+  such as `ci:full`, a weekly schedule (nightly from the test phase on) and release tags. They bill at a higher
+  per-minute rate than Linux on private repositories.
+- **Evidence for the merge lane (optional, if you build one).** Have the merge script write `{sha, lane, result}` and
+  refuse to merge without evidence for the current commit.
+- **Drop the pull-request job** only if the local merge gate is written by a verified tool over a clean tree, not by
+  the agent reporting on itself, and the minutes are metered.
+- **By phase.** `dev` is the setup above. `test` runs the OS matrix nightly, with release-tag runs gating the release.
+  `production` makes the path-filtered pull-request checks required, because someone else now depends on main. Make
+  checks required only when someone else depends on main.
 
 CI runs whatever suite was pushed, so it does not catch an agent weakening tests. The audit does.
 
@@ -78,17 +90,19 @@ Agents write most tests, so prevent bloat at the source. Add this block to the p
     - One owner per invariant. Before adding a test, search for an existing test of the same behavior and extend it.
     - Test behavior at seams (public functions, inputs, persistence, transfers), not implementation details. Do not
       assert on mocks alone, snapshot everything, or assert a value against itself.
-    - Pre-release means no consumers: no backward-compatibility, legacy-format or fallback tests unless `consumers`
-      in the risk map names who needs them.
+    - Pre-release usually means no consumers: no backward-compatibility, legacy-format or fallback tests unless
+      `consumers` in the risk map names who needs them. The risk map decides.
     - Tests must not depend on the checkout: no fixed ports (use port 0), no fixed temp paths (use mkdtemp), no
       absolute paths, no reading `.git` directly, no writes under the home directory.
-    - Declare the lane at the top of each test file: `/** @lane merge */` (edit, merge, scheduled or release). If the
-      test reaches code only through a subprocess or the network, add `@subject <path>` for that code.
-    - While editing, run only the tests for the files you changed. Run the merge lane before pushing. Do not run
-      the full suite after every change.
+    - Declare the lane in the file's first comment, before any import: `/** @lane merge */` (edit, merge, scheduled or
+      release). Tags are read only from that leading comment. If the test reaches code only through a subprocess or the
+      network, add `@subject <path>` for that code, as a path from the project root (`src/cli.ts`, not an import-style
+      `../src/cli.ts`, which is dropped). A test with no code subject gets `@risk <critical|standard|low>`.
+    - While editing, run only the tests for the files you changed. Run the project's merge script before pushing. Do
+      not run the full suite after every change.
 
 ## 6. Audit what exists
 
 For an existing suite, load the test-audit skill instead of restructuring by hand.
 
-Evidence for these rules, and where they are opinion, is in `references/doctrine.md`.
+Evidence for these rules, and where they are opinion, is in `<plugin-root>/references/doctrine.md`.

@@ -1,7 +1,7 @@
 ---
 name: tests-setup
 description: Install, check and repair the managed agent-tests runtime (the tests CLI and its Node dependencies) outside the plugin cache.
-when_to_use: Use before the first agent-tests command in a session, after a plugin update, or when an agent-tests skill reports "Managed CLI ... is missing", "rerun tests-setup", E_RUNTIME_MISSING, or a runtime version mismatch.
+when_to_use: Use before the first agent-tests command in a session, after a plugin update, or when an agent-tests skill reports "Managed CLI ... is missing", "rerun tests-setup", E_RUNTIME_MISSING, E_RUNTIME_BROKEN, E_SETUP_FAILED, or a runtime version mismatch.
 ---
 # tests-setup
 
@@ -11,8 +11,8 @@ Skills always launch it through the plugin's checked launcher, never a `tests` o
 
     node "<plugin-root>/scripts/run-managed.js" <command> [args]
 
-`<plugin-root>` is the directory two levels above this SKILL.md. In Codex, resolve it from the
-SKILL.md file you actually loaded, not from the current directory.
+`<plugin-root>` is the directory that holds scripts/run-managed.js, the parent of the skills directory (two levels
+up from this skill's directory). In Codex, resolve it from the SKILL.md file you loaded, not from the current directory.
 
 ## Check
 
@@ -34,6 +34,8 @@ Done when the JSON reports `"ok": true` and `cliVersion` equals `pluginVersion`.
 |---|---|
 | `Managed CLI x.y.z is missing` | Run step 2. |
 | `Managed runtime modified or version mismatch` | Move the named release directory aside, then run step 2. |
+| `Dependency check failed`, `fails its dependency check` or `E_RUNTIME_BROKEN` (unless it says `needs Node 24`) | Move the named release directory aside, then run step 2. |
+| `E_SETUP_FAILED` (the message says what failed) | Fix the stated cause, then rerun step 2. |
 | `Another setup may be running (...setup.lock)` | Confirm no setup process is running, delete the lock, rerun. |
 | `needs Node 24 or newer` | Upgrade Node; do not work around it. |
 | `Cannot locate npm-cli.js` | Install Node.js with npm, then rerun. |
