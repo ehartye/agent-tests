@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { parseRules } from './helpers/rules.ts';
 
 const DOCTRINE = join(dirname(fileURLToPath(import.meta.url)), '..', 'references', 'doctrine.md');
 
@@ -25,24 +26,6 @@ const REQUIRED_RULES = [
   'Mutation testing measures whether a test can fail',
 ];
 
-interface Rule {
-  title: string;
-  claim: string | null;
-  evidence: string[];
-  opinion: string | null;
-}
-
-function parseRules(text: string): Rule[] {
-  return text
-    .split(/^## Rule: /m)
-    .slice(1)
-    .map(section => {
-      const [title, ...lines] = section.split('\n');
-      const field = (name: string): string[] => lines.filter(line => line.startsWith(`${name}: `)).map(line => line.slice(name.length + 2).trim());
-      return { title: title.trim(), claim: field('Claim')[0] ?? null, evidence: field('Evidence'), opinion: field('Opinion')[0] ?? null };
-    });
-}
-
 describe('references/doctrine.md', () => {
   const rules = parseRules(readFileSync(DOCTRINE, 'utf8'));
 
@@ -59,7 +42,7 @@ describe('references/doctrine.md', () => {
     expect(rule?.evidence.length || (rule?.opinion ? 1 : 0)).toBeGreaterThan(0);
   });
 
-  it('cites evidence as a wiki page or a URL', () => {
-    for (const rule of rules) for (const evidence of rule.evidence) expect(evidence).toMatch(/^(?:wiki\/|https?:\/\/)\S+ — \S/);
+  it('cites evidence as a public URL', () => {
+    for (const rule of rules) for (const evidence of rule.evidence) expect(evidence).toMatch(/^https:\/\/\S+ — \S/);
   });
 });

@@ -1,7 +1,7 @@
 ---
 name: test-strategy
 description: Structure a project's tests by phase (dev, test, production) and run frequency (edit, merge, scheduled, release lanes) using a risk map, and keep agent-written tests from bloating the suite.
-when_to_use: Use when starting a project or feature area, or deciding how a project's tests and CI should be structured (what to test, how often each test runs, whether CI is needed and where, and what testing rules to give coding agents). For an existing suite that already feels bloated, use test-audit first.
+when_to_use: Use when starting a project or feature area, or deciding how a project's tests and CI should be structured (what to test, how often each test runs, whether CI is needed and where, and what testing rules to give coding agents), or when writing or reviewing a test for a function, class or feature. For an existing suite that already feels bloated, use test-audit first.
 ---
 # test-strategy
 
@@ -45,6 +45,9 @@ list specific areas first. If the CLI is missing, load the tests-setup skill.
 
 Tier decides the lane: critical tests run in edit or merge, standard in edit, merge or scheduled, low in scheduled or
 release. A test file declares its lane in a leading docblock: `/** @lane merge */`.
+
+Typecheck and lint are the cheapest checks: they take seconds, need no test to maintain and catch many agent mistakes
+(the trophy in doctrine.md puts static checks at its base). Run them in the edit and merge lanes beside the tests.
 
 Starting scripts until the lane tooling exists:
 
@@ -97,11 +100,21 @@ Agents write most tests, so prevent bloat at the source. Add this block to the p
       release). Tags are read only from that leading comment. If the test reaches code only through a subprocess or the
       network, add `@subject <path>` for that code, as a path from the project root (`src/cli.ts`, not an import-style
       `../src/cli.ts`, which is dropped). A test with no code subject gets `@risk <critical|standard|low>`.
+    - For a bug fix, write the failing test first and watch it fail for the reported reason. For any new test, check that
+      it fails when the behavior it covers is broken.
     - While editing, run only the tests for the files you changed. Run the project's merge script before pushing. Do
       not run the full suite after every change.
 
-## 6. Audit what exists
+## 6. Writing a test at each level
+
+The block above is the short form. When writing or reviewing a test, read the level you are working at in
+`<plugin-root>/references/craft.md`: a function or class (what to assert, test doubles, test data), a feature
+(integration, contract and end-to-end tests, time, isolation, third-party APIs) or the suite and process (ownership,
+determinism, coverage, legacy code, agent-written tests).
+
+## 7. Audit what exists
 
 For an existing suite, load the test-audit skill instead of restructuring by hand.
 
-Evidence for these rules, and where they are opinion, is in `<plugin-root>/references/doctrine.md`.
+Evidence for the structure rules (phases, lanes, CI) and where they are opinion is in
+`<plugin-root>/references/doctrine.md`; evidence for the writing rules is in craft.md.

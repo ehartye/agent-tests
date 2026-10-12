@@ -1,6 +1,6 @@
 {
   "name": "agent-tests",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Test-efficiency toolkit for coding agents: risk-based test structure, suite audits and remediation",
@@ -12,7 +12,13 @@
   "bugs": {
     "url": "https://github.com/ehartye/agent-tests/issues"
   },
-  "keywords": ["testing", "ci", "risk-based-testing", "claude-code-plugin", "codex"],
+  "keywords": [
+    "testing",
+    "ci",
+    "risk-based-testing",
+    "claude-code-plugin",
+    "codex"
+  ],
   "engines": {
     "node": ">=24"
   },

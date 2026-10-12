@@ -35,6 +35,9 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    - This version never runs the tests, so wait time and CI minutes are absent. Agent cost is estimated tokens in the
      file. Churn/edits is edits that touched the test without the code it covers, over all edits that modified it;
      `n/a` means no git history (a shallow clone has none) or no resolvable subject.
+   - The CLI checks hooks, scripts and workflows for frequency only. Also read the CI workflow and `package.json`
+     yourself: a `pretest` that repeats `test` runs the suite twice, and a workflow with no install step or cache
+     fails or wastes minutes.
 4. **Read before judging.** Findings are evidence, not verdicts. Open the test files behind the highest-ranked findings
    and the files in each cluster. Pattern matches produce false positives: a test titled "falls back to the default" may
    guard real behavior. Read the code under test too: a test of a one-line pass-through, or a bound the code can never
@@ -58,7 +61,8 @@ Ask in this order. Stop at the first question that settles it.
 3. **Does something cheaper already catch it?** Compare the files in a cluster and the duplicate titles and repeated
    sweeps. Name the test that is the single owner of the behavior.
 4. **Is the test sound?** `tautological`, `snapshot-only`, `mock-only` and `no-direct-assertions` flags mean the test
-   may assert nothing real. Confirm by reading it.
+   may assert nothing real. Confirm by reading it against the rules in `<plugin-root>/references/craft.md`: concrete
+   assertions that could fail, real collaborators or fakes before mocks, one behavior per test.
 5. **Is it safe beside another worktree?** Fixed ports, fixed temp or database paths, absolute paths, reads of `.git`
    and writes under the home directory break parallel runs. Fix the hazard with a `rewrite`; do not delete or
    quarantine the test for it.
