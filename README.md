@@ -49,6 +49,7 @@ on this machine.
 | `references/craft.md` | How to write a good test at each level: a function or class (assertions, test doubles, test data, property-based tests), a feature (integration, contract and end-to-end tests, time, isolation, third-party APIs) and the suite (ownership, determinism, coverage, legacy code, agent-written tests) |
 | `references/architecture-cost.md` | Advisory investigation of architecture that makes tests costly, including complete generated-asset inputs and final verification ownership |
 | `references/node-profiling.md` | Optional Node 24+ reporter, per-file and overall duration, provenance limits and repeatable lane experiments |
+| `references/candidate-evidence.md` | Explicit checked observation of Node-test/Vitest children, content/path/index identities, native counts and honest reuse limits |
 
 ## Risk map
 
@@ -72,12 +73,16 @@ Skills run the CLI through the checked launcher, never from PATH:
 Every failure is one JSON line on stderr (`{"error":{"code","message","hint"}}`) with exit code 2 for a usage error and 1
 otherwise. A broken runtime is reported the same way (`E_RUNTIME_BROKEN`), so an agent never has to read a stack trace.
 
+The checked launcher also accepts `candidate-evidence observe node-test|vitest` and `candidate-evidence check` as an
+explicit standalone helper. Observation runs project tests; scan/report stay static. See the [portable usage and
+input-scope limits](references/candidate-evidence.md) before recording or checking a receipt.
+
 ## Status
 
-Version 0.1 is a static audit for TypeScript and JavaScript projects using vitest, jest or Node's test runner. Scan and
-report never run your tests. An optional Node reporter measures one explicitly requested run; CI minutes and
-flakiness are not measured. Planned: a timed run with a second-worktree check (0.2),
-remediation and CI templates (0.3), Codex packaging verified on both hosts (0.4), then Python and pytest.
+Version 0.3 includes static audits for TypeScript and JavaScript projects using vitest, jest or Node's test runner,
+an optional Node reporter, and explicitly invoked observational candidate evidence for Node-test/Vitest. Scan and
+report never run tests. Candidate observation does not select lanes, suppress checks or authorize integration.
+CI charges and statistical flakiness are not measured; remediation and wider runner/language support remain separate work.
 
 ## Known limitations
 

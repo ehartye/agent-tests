@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { checkDependencies, describeSource, installRuntime, inspectInstallation, resolveRuntime } from '../scripts/managed-runtime.js';
 import { makeTree } from './helpers/tree.ts';
@@ -246,6 +246,30 @@ describe('launcher contract', () => {
   it('run-managed.js reports a missing runtime as E_RUNTIME_MISSING and exit 1', () => {
     const result = run('run-managed.js', ['capabilities'], makeTree());
     expect(result.status).toBe(1);
+    expect(errorOf(result.stderr).code).toBe('E_RUNTIME_MISSING');
+  });
+
+  const observationSource = () => source({
+    'package.json': JSON.stringify({ name: 'agent-tests', version: '1.2.3', type: 'module' }),
+    'scripts/run-managed.js': readFileSync(join(repoRoot, 'scripts/run-managed.js'), 'utf8'),
+    'scripts/managed-runtime.js': readFileSync(join(repoRoot, 'scripts/managed-runtime.js'), 'utf8'),
+    'scripts/tests.mjs': "console.log('static-cli');\n",
+    'scripts/candidate-evidence.mjs': "console.log(JSON.stringify({ script: import.meta.url, args: process.argv.slice(2) }));\n",
+  });
+  it('dispatches explicit observation to the exact checked managed script while other CLI routes stay unchanged', () => {
+    const root = observationSource(), home = makeTree(), installed = installRuntime(root, { home, ...fakes });
+    const invoke = (...args: string[]) => spawnSync(process.execPath, [join(root, 'scripts/run-managed.js'), ...args], { encoding: 'utf8', env: { ...process.env, AGENT_TESTS_HOME: home } });
+    const result = invoke('candidate-evidence', 'observe', 'node-test');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('"script"');
+    expect(JSON.parse(result.stdout)).toEqual({ script: pathToFileURL(join(installed.root, 'scripts/candidate-evidence.mjs')).href, args: ['observe', 'node-test'] });
+    expect(invoke('scan').stdout.trim()).toBe('static-cli');
+  });
+  it.each(['source', 'installed'])('fails closed before observation if the %s script contents change', target => {
+    const root = observationSource(), home = makeTree(), installed = installRuntime(root, { home, ...fakes });
+    writeFileSync(join(target === 'source' ? root : installed.root, 'scripts/candidate-evidence.mjs'), "console.log('must-not-run');");
+    const result = spawnSync(process.execPath, [join(root, 'scripts/run-managed.js'), 'candidate-evidence', 'observe', 'node-test'], { encoding: 'utf8', env: { ...process.env, AGENT_TESTS_HOME: home } });
+    expect(result.status).toBe(1); expect(result.stdout).toBe('');
     expect(errorOf(result.stderr).code).toBe('E_RUNTIME_MISSING');
   });
 });
