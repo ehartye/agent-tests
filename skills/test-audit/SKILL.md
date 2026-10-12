@@ -39,8 +39,9 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    and the files in each cluster. Pattern matches produce false positives: a test titled "falls back to the default" may
    guard real behavior. Read the code under test too: a test of a one-line pass-through, or a bound the code can never
    reach, protects nothing however it is tagged, and a loose bound can hide a real bug.
-   On a large suite do not open every file. A file with no findings, a tier, and either no lane tag or a lane that fits
-   its tier gets `keep` without being opened; count these files and report the count, not rows.
+   On a large suite do not open every file. A file with no findings, no flags, a tier, and either no lane tag or a lane
+   that fits its tier gets `keep` without being opened; count these files and report the count, not rows. A flagged file
+   is never kept unread: the flags are the evidence for question 4 of the rubric.
 5. **Judge** each remaining file with the rubric, then write the verdict table.
 
 ## Rubric
@@ -72,9 +73,9 @@ Ask in this order. Stop at the first question that settles it.
 | keep | Protects a declared risk, nothing cheaper covers it, runs in the right lane. |
 | demote | Valid but runs too often for its value. Change the file's `@lane` tag and the project's scripts or include globs so the lane's command skips it; until lane tooling exists, the tag only records the decision. |
 | merge | Two tests assert the same behavior and one should remain: keep one owner. |
-| rewrite | Brittle, hollow or worktree-hostile: mock-only, snapshot-only, tautological, a fixed port or path, or high churn with no code change. |
+| rewrite | The behavior is worth protecting but the test is brittle, hollow or worktree-hostile: mock-only, snapshot-only, tautological, a fixed port or path, or high churn with no code change. |
 | quarantine | Flaky, and only when the owner or CI history reports it (this version cannot observe flakiness). Name an owner and a time limit, and isolate it from the gating lanes until fixed. |
-| delete | Nothing the test protects exists (a dead shim: also recommend removing the shim code with its test), or the test asserts nothing. |
+| delete | Nothing worth protecting is behind the test: the code it covers is gone or has no consumer (a dead shim: also recommend removing the shim code with its test), or it asserts nothing and there is no behavior to rewrite it around. |
 
 Never recommend deleting a critical-tier test without naming its replacement.
 

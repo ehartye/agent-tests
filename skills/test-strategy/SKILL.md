@@ -74,8 +74,7 @@ its own report. Keep that observer cheap and non-blocking.
 - **Drop the pull-request job** only if the local merge gate is written by a verified tool over a clean tree, not by
   the agent reporting on itself, and the minutes are metered.
 - **By phase.** `dev` is the setup above. `test` runs the OS matrix nightly, with release-tag runs gating the release.
-  `production` makes the path-filtered pull-request checks required, because someone else now depends on main. Make
-  checks required only when someone else depends on main.
+  `production` makes the path-filtered pull-request checks required, because someone else now depends on main.
 
 CI runs whatever suite was pushed, so it does not catch an agent weakening tests. The audit does.
 

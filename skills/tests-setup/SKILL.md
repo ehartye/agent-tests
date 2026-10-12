@@ -33,8 +33,8 @@ Done when the JSON reports `"ok": true` and `cliVersion` equals `pluginVersion`.
 | Message | Fix |
 |---|---|
 | `Managed CLI x.y.z is missing` | Run step 2. |
-| `Managed runtime modified or version mismatch` | Move the named release directory aside, then run step 2. |
-| `Dependency check failed`, `fails its dependency check` or `E_RUNTIME_BROKEN` (unless it says `needs Node 24`) | Move the named release directory aside, then run step 2. |
+| `Managed runtime modified or version mismatch` | Move the release directory aside (`runtimeRoot` in the check JSON names it), then run step 2. |
+| `Dependency check failed`, `fails its dependency check` or `E_RUNTIME_BROKEN` (unless it says `needs Node 24`) | Move the release directory aside (`runtimeRoot` in the check JSON names it), then run step 2. |
 | `E_SETUP_FAILED` (the message says what failed) | Fix the stated cause, then rerun step 2. |
 | `Another setup may be running (...setup.lock)` | Confirm no setup process is running, delete the lock, rerun. |
 | `needs Node 24 or newer` | Upgrade Node; do not work around it. |
