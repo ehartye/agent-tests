@@ -1,7 +1,7 @@
 ---
 name: test-audit
 description: Audit a project's test suite for necessity and efficiency - redundant coverage, compat and fallback shim tests, worktree-hostile tests, tests not tied to a risk tier or tagged for the wrong lane, and tests that run too often - and return a verdict per test file.
-when_to_use: Use when an existing test suite or its CI feels too big, slow or redundant ("tests take forever", "too many tests", "is this overkill", "do we need all of these"), before pruning, merging or demoting tests, or when asked to audit how a project's tests are structured.
+when_to_use: Use when an existing test suite or its CI feels too big, slow or redundant ("tests take forever", "too many tests", "is this overkill"), when architectural decisions or generated-asset pipelines make testing costly, before pruning tests, or when asked to audit testing structure.
 ---
 # test-audit
 
@@ -45,7 +45,12 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    On a large suite do not open every file. A file with no findings, no flags, a tier, and either no lane tag or a lane
    that fits its tier gets `keep` without being opened; count these files and report the count, not rows. A flagged file
    is never kept unread: the flags are the evidence for question 4 of the rubric.
-5. **Judge** each remaining file with the rubric, then write the verdict table.
+5. **Architecture advisory.** Read `<plugin-root>/references/architecture-cost.md`. Trace expensive tests to dependency
+   fanout, repeated setup, pipeline diversity and verification ownership. Inspect actual producers, complete manifest
+   inputs and final output identities before advising consolidation or affected-only reuse. Report concrete alternatives
+   with Time, Risk, Complexity, Best practice and Maintainability; label estimates and name replacement coverage.
+   Missing risk tiers prevent file verdicts, but do not prevent this structural advice. Do not change product architecture.
+6. **Judge** each remaining file with the rubric, then write the verdict table.
 
 ## Rubric
 
@@ -98,6 +103,8 @@ Never recommend deleting a critical-tier test without naming its replacement.
    on the pull-request path.
 5. Totals: estimated tokens in files marked `delete` or `merge`, and how many files with a Lane of `edit` you demote
    out of the edit lane.
-6. What this audit could not measure: wait time, CI minutes and flakiness need a timed run.
+6. What this audit could not measure. Static scan/report do not measure wait time; an optional explicitly requested Node
+   profile can measure one run (see references/node-profiling.md). CI minutes and statistical flakiness remain unmeasured.
+7. Architecture advisory with evidence, alternatives and replacement protection, separate from per-file verdicts.
 
 Stop after this output and let the owner decide what to apply.

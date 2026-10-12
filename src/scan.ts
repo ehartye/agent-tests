@@ -6,7 +6,7 @@ import { detectRedundancy } from './detectors/redundancy.ts';
 import { detectShims } from './detectors/shims.ts';
 import { detectWiring } from './detectors/wiring.ts';
 import { detectWorktreeHazards } from './detectors/worktree.ts';
-import { detectRunner, discoverTests } from './discover.ts';
+import { detectRunner, discoverTestInfrastructure, discoverTests } from './discover.ts';
 import { declaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile } from './parse.ts';
 import { candidateDirs } from './riskdraft.ts';
 import { loadRiskMap, tierFor } from './riskmap.ts';
@@ -132,6 +132,13 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
     attach(detectShims(file.rel, file.parsed).map(finding => ({ ...finding, note: shimNote })));
     attach(detectWorktreeHazards(file.rel, file.lines));
   }
+  for (const rel of discoverTestInfrastructure(root)) {
+    try {
+      attach(detectWorktreeHazards(rel, readFileSync(join(root, rel), 'utf8').split(/\r?\n/)));
+    } catch {
+      // Infrastructure may be unreadable; tests still have their own parse diagnostics.
+    }
+  }
   const redundancy = detectRedundancy(loaded);
   attach(redundancy.findings);
   attach(
@@ -149,7 +156,7 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
   return {
     schema: EVIDENCE_SCHEMA,
     root,
-    runner: detectRunner(root),
+    runner: detectRunner(root, loaded.flatMap(file => file.parsed.imports)),
     phase: map?.phase ?? null,
     riskMapPresent: map !== null,
     files: [...records.values()],

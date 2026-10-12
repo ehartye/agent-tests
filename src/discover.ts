@@ -1,6 +1,7 @@
 import { type Dirent, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { relPosix } from './paths.ts';
+import { openParseSession } from './parse.ts';
 
 /**
  * Directory names skipped at any depth and case-sensitively, so a source directory named `build` or `out` is skipped too.
@@ -15,10 +16,14 @@ export const IGNORED_DIRS = new Set([
   '.next',
   '.turbo',
   '.cache',
+  '.local',
+  'test-results',
+  'playwright-report',
   'out',
   'fixtures',
   '.worktrees',
   '.claude',
+  '.playwright-mcp',
   '.venv',
   'vendor',
 ]);
@@ -67,9 +72,21 @@ export function discoverTests(root: string): string[] {
   return found.sort();
 }
 
-export type Runner = 'vitest' | 'jest' | 'unknown';
+export type Runner = 'vitest' | 'jest' | 'node:test' | 'unknown';
 
-export function detectRunner(root: string): Runner {
+/** Infrastructure is audited for shared resources, but never counted as a test file. */
+export function discoverTestInfrastructure(root: string): string[] {
+  const files: string[] = [];
+  walk(root, (_absolute, rel) => {
+    if (!isTestPath(rel) && CODE_FILE.test(rel) && (
+      /^(?:playwright|vitest|jest)(?:\.[\w-]+)*\.config\./.test(rel) ||
+      /^(?:tests?|__tests__)\/(?:support|helpers?|test-utils)\//.test(rel)
+    )) files.push(rel);
+  });
+  return files.sort();
+}
+
+export function detectRunner(root: string, importedModules?: readonly string[]): Runner {
   const pkgPath = join(root, 'package.json');
   if (existsSync(pkgPath)) {
     try {
@@ -90,5 +107,18 @@ export function detectRunner(root: string): Runner {
   }
   if (names.some(name => /^vitest\.config\./.test(name))) return 'vitest';
   if (names.some(name => /^jest\.config\./.test(name))) return 'jest';
+  if (importedModules) return importedModules.includes('node:test') ? 'node:test' : 'unknown';
+  const session = openParseSession();
+  try {
+    for (const rel of discoverTests(root)) {
+      try {
+        if (session.parse(rel, readFileSync(join(root, rel), 'utf8')).imports.includes('node:test')) return 'node:test';
+      } catch {
+        // Unreadable files remain visible to the scan's unparsed-file reporting.
+      }
+    }
+  } finally {
+    session.close();
+  }
   return 'unknown';
 }

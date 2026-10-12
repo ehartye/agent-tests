@@ -73,6 +73,18 @@ describe('scan of the clean fixture', () => {
 });
 
 describe('scan edge cases', () => {
+  it('finds worktree hazards in browser configuration and shared test infrastructure', () => {
+    const root = makeTree({
+      'tests/live.test.mjs': "import test from 'node:test'; test('live',()=>{});",
+      'playwright.phaser.config.mjs': "export default {use:{baseURL:'http://127.0.0.1:5327'}};",
+      'tests/support/server.mjs': 'export const port = 5332;',
+      'src/app.mjs': 'export const port = 5432;',
+    });
+    const report = scan(root);
+    expect(report.projectFindings.filter(f=>f.rule==='worktree.fixed-port').map(f=>f.file)).toEqual(['playwright.phaser.config.mjs', 'tests/support/server.mjs']);
+    expect(report.files).toHaveLength(1);
+    expect(EvidenceReport.parse(report).runner).toBe('node:test');
+  });
   it('reports a missing risk map and treats shim consumers as unknown', () => {
     const root = makeTree({ 'src/legacy/x.ts': '', 'tests/legacy.test.ts': "import '../src/legacy/x.ts';\ndescribe('legacy', () => {});" });
     const report = scan(root);

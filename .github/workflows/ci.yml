@@ -24,6 +24,11 @@ on:
 permissions:
   contents: read
 
+# Retain the production-threshold stress workload off the ordinary PR path.
+# Bounded real-native restart tests run on every candidate.
+env:
+  AGENT_TESTS_STRESS: ${{ github.event_name != 'pull_request' && '1' || '0' }}
+
 # A newer push to the same pull request cancels the older run.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}

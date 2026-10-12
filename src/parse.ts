@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, resolve } from 'node:path';
 import { SyntaxKind, type CallExpression, type ImportDeclaration, type Node, type PropertyAccessExpression, type SourceFile } from 'typescript/unstable/ast';
 import { isCallExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isPropertyAccessExpression, isStringLiteral, isTaggedTemplateExpression } from 'typescript/unstable/ast/is';
@@ -207,7 +207,8 @@ function startNative(): { fs: WritableFs; api: API } {
  * Each file gets its own directory: reusing a path after its project was closed returned the old content. The previous
  * project is closed and its files removed on the next call, so the native side holds one project at a time.
  */
-export function openParseSession(): ParseSession {
+export function openParseSession({ restartEvery = RESTART_EVERY }: { restartEvery?: number } = {}): ParseSession {
+  if (!Number.isInteger(restartEvery) || restartEvery < 1) throw new Error('Native restart interval must be a positive integer');
   let native = startNative();
   let count = 0;
   let previous: { config: string; source: string } | null = null;
@@ -215,7 +216,7 @@ export function openParseSession(): ParseSession {
     parse(fileName, rawText) {
       // The native side drops a leading byte order mark from the text but node positions still count it, so drop it here too.
       const text = rawText.charCodeAt(0) === 0xfeff ? rawText.slice(1) : rawText;
-      if (count >= RESTART_EVERY) {
+      if (count >= restartEvery) {
         native.api.close();
         native = startNative();
         count = 0;
@@ -252,13 +253,39 @@ export function openParseSession(): ParseSession {
 const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'];
 const CODE_FILE = /\.[cm]?[jt]sx?$/;
 
+/** Direct JSON configs only: inherited/JSONC/bundler-only aliases remain unresolved rather than guessed. */
+function aliasResolver(root: string): (specifier: string) => string[] {
+  try {
+    const config = JSON.parse(readFileSync(resolve(root, 'tsconfig.json'), 'utf8'));
+    if (config.extends !== undefined) return () => [];
+    const options = config.compilerOptions;
+    if (!options || typeof options !== 'object' || !options.paths || typeof options.paths !== 'object') return () => [];
+    const base = resolve(root, typeof options.baseUrl === 'string' ? options.baseUrl : '.');
+    const entries = Object.entries(options.paths).filter(([key, targets]) => key.split('*').length <= 2 && Array.isArray(targets))
+      .sort(([a], [b]) => Number(a.includes('*')) - Number(b.includes('*')) || b.split('*')[0]!.length - a.split('*')[0]!.length || b.length - a.length);
+    return specifier => {
+      for (const [pattern, values] of entries) {
+        const [prefix = '', suffix] = pattern.split('*');
+        if (suffix === undefined ? specifier !== prefix : !specifier.startsWith(prefix) || !specifier.endsWith(suffix) || specifier.length < prefix.length + suffix.length) continue;
+        const matched = suffix === undefined ? '' : specifier.slice(prefix.length, specifier.length - suffix.length);
+        return (values as unknown[]).filter((value): value is string => typeof value === 'string' && value.split('*').length <= 2)
+          .map(value => resolve(base, value.replace('*', matched)));
+      }
+      return [];
+    };
+  } catch {
+    return () => [];
+  }
+}
+
 /** Repo-relative non-test source files a test file imports through relative specifiers. */
 export function resolveSubjects(root: string, testRel: string, imports: string[]): string[] {
   const dir = dirname(resolve(root, testRel));
   const found = new Set<string>();
+  const aliases = aliasResolver(root);
   for (const spec of imports) {
-    if (!spec.startsWith('.')) continue;
-    const base = resolve(dir, spec);
+    const bases = spec.startsWith('.') ? [resolve(dir, spec)] : aliases(spec);
+    for (const base of bases) {
     const stripped = base.replace(/\.[cm]?[jt]sx?$/, '');
     const candidates = [base, ...EXTENSIONS.map(ext => stripped + ext), ...EXTENSIONS.map(ext => resolve(base, `index${ext}`))];
     const hit = candidates.find(candidate => CODE_FILE.test(candidate) && existsSync(candidate) && statSync(candidate).isFile());
@@ -266,6 +293,8 @@ export function resolveSubjects(root: string, testRel: string, imports: string[]
     const rel = relPosix(root, hit);
     if (rel.startsWith('..') || isTestPath(rel) || isSupportPath(rel)) continue;
     found.add(rel);
+    break;
+    }
   }
   return [...found].sort();
 }

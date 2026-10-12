@@ -34,6 +34,9 @@ dependencies. Node.js 24 or newer is required. Codex installation is documented 
 
 The CLI gathers evidence and never judges. The skill's rubric turns evidence into verdicts: keep, demote, merge, rewrite,
 quarantine or delete.
+The audit also advises on architectural causes of testing cost: shared dependency fanout, repeated setup, multiple
+asset pipelines and duplicated verification ownership. It compares changes to boundaries or artifact contracts with
+their time, risk, complexity and maintenance implications before recommending a redesign.
 
 ## References
 
@@ -44,6 +47,8 @@ on this machine.
 |---|---|
 | `references/doctrine.md` | How much to test and how often: efficiency, run frequency, test size, flaky tests, affected-only runs, compat tests, CI for a solo developer, risk tiers, mutation testing |
 | `references/craft.md` | How to write a good test at each level: a function or class (assertions, test doubles, test data, property-based tests), a feature (integration, contract and end-to-end tests, time, isolation, third-party APIs) and the suite (ownership, determinism, coverage, legacy code, agent-written tests) |
+| `references/architecture-cost.md` | Advisory investigation of architecture that makes tests costly, including complete generated-asset inputs and final verification ownership |
+| `references/node-profiling.md` | Optional Node 24+ reporter, per-file and overall duration, provenance limits and repeatable lane experiments |
 
 ## Risk map
 
@@ -69,17 +74,21 @@ otherwise. A broken runtime is reported the same way (`E_RUNTIME_BROKEN`), so an
 
 ## Status
 
-Version 0.1 is a static audit for TypeScript and JavaScript projects using vitest or jest. It never runs your tests, so
-wait time, CI minutes and flakiness are not measured yet. Planned: a timed run with a second-worktree check (0.2),
+Version 0.1 is a static audit for TypeScript and JavaScript projects using vitest, jest or Node's test runner. Scan and
+report never run your tests. An optional Node reporter measures one explicitly requested run; CI minutes and
+flakiness are not measured. Planned: a timed run with a second-worktree check (0.2),
 remediation and CI templates (0.3), Codex packaging verified on both hosts (0.4), then Python and pytest.
 
 ## Known limitations
 
 - Pattern detectors also match strings inside tests that are about those patterns, including this repository's own tests.
   Findings are evidence for the agent to read, not verdicts.
-- Subjects are found through relative imports, `require()` and dynamic `import()` of project files, plus any `@subject`
-  tags. Path aliases (`@/x`, tsconfig `paths`) are not resolved yet, so tests that import code only through an alias have
-  no subject and show as untiered.
+- Discovery skips `.local`, `.playwright-mcp`, `test-results` and `playwright-report` so archived checkouts and generated reports do not
+  inflate the current suite. Test support modules and root Playwright/Jest/Vitest configs are checked for worktree
+  hazards without being counted as tests. Runner detection reports the primary unit runner, not every browser tool.
+- Subjects are found through relative imports, `require()` and dynamic `import()` of project files, plus `@subject`
+  tags and exact/single-wildcard `paths` in a direct JSON `tsconfig.json` (including `baseUrl`). Inherited configs,
+  JSONC and bundler-only aliases remain unresolved, so those tests can still have no subject and show as untiered.
 - Churn needs git history. It is `n/a` in a shallow clone (the usual CI checkout), outside a repository, and for tests with
   no resolvable subject. A test's creation commit is not counted as an edit.
 - The parser reads files through TypeScript 7's JS API, which its authors label `unstable`; the dependency is pinned
@@ -94,6 +103,10 @@ remediation and CI templates (0.3), Codex packaging verified on both hosts (0.4)
     npm run typecheck
 
 CI follows the plugin's own doctrine: one non-blocking Ubuntu job per pull request (path-filtered, drafts skipped, newer pushes cancel older runs), and the Windows and macOS runs on demand, weekly and on release tags.
+
+Vitest runs at most two workers to bound native parser processes and memory. Real-native restart boundaries run in the ordinary suite;
+the 1,200-file production-threshold stress workload runs on manual, weekly and release-tag CI. To include it locally, set
+`AGENT_TESTS_STRESS=1` for `npm test`. The production parser still restarts after 1,000 files.
 
 ## License
 
