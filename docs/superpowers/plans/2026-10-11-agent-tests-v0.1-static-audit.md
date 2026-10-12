@@ -7392,7 +7392,7 @@ import { draftRiskMap } from './riskdraft.ts';
 import { RISK_MAP_PATH, serializeRiskMap } from './riskmap.ts';
 import { scan } from './scan.ts';
 
-const COMMANDS = ['capabilities', 'risk-draft', 'scan', 'report'] as const;
+export const COMMANDS = ['capabilities', 'risk-draft', 'scan', 'report'] as const;
 
 const USAGE = `Usage: tests <${COMMANDS.join('|')}> [--root <dir>] [--write] [--max-files <n>] [--max-per-rule <n>]`;
 
@@ -7617,26 +7617,64 @@ Create `tests/skills.test.ts`:
  * @lane edit
  * @risk standard
  */
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
+import { COMMANDS } from '../src/cli.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SKILLS = join(ROOT, 'skills');
-const COMMANDS = ['capabilities', 'risk-draft', 'scan', 'report'];
 const REQUIRED = ['tests-setup', 'test-audit', 'test-strategy'];
+const CLI_COMMANDS: readonly string[] = COMMANDS;
+const CLI_FLAGS = ['root', 'write', 'max-files', 'max-per-rule'];
+const SETUP_FLAGS = ['check', 'json'];
 
 const skillNames = readdirSync(SKILLS, { withFileTypes: true })
   .filter(entry => entry.isDirectory())
   .map(entry => entry.name);
 
-function load(name: string): { meta: Record<string, string>; body: string } {
+function load(name: string): { text: string; meta: Record<string, string>; body: string } {
   const text = readFileSync(join(SKILLS, name, 'SKILL.md'), 'utf8');
-  const match = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) throw new Error(`${name}/SKILL.md has no frontmatter`);
-  return { meta: parse(match[1]) as Record<string, string>, body: match[2] };
+  return { text, meta: parse(match[1]) as Record<string, string>, body: match[2] };
+}
+
+/** Every source file that can emit an error code: the launcher scripts and the CLI. */
+function sourceFiles(directory: string, extensions: string[]): string[] {
+  return readdirSync(directory).flatMap(entry => {
+    const path = join(directory, entry);
+    if (statSync(path).isDirectory()) return sourceFiles(path, extensions);
+    return extensions.some(extension => entry.endsWith(extension)) ? [path] : [];
+  });
+}
+
+const SOURCES = [
+  ...sourceFiles(join(ROOT, 'scripts'), ['.js', '.mjs']),
+  ...sourceFiles(join(ROOT, 'src'), ['.ts']),
+]
+  .map(path => readFileSync(path, 'utf8'))
+  .join('\n');
+
+/**
+ * Each example is a line that calls run-managed.js or setup.js plus the lines that continue it: up to a blank line or the
+ * next list item, heading or table row. Which script it calls decides which flags are real.
+ */
+function examples(body: string): { script: 'cli' | 'setup'; text: string }[] {
+  const lines = body.split('\n');
+  const found: { script: 'cli' | 'setup'; text: string }[] = [];
+  lines.forEach((line, index) => {
+    if (!/run-managed\.js|setup\.js/.test(line)) return;
+    let text = line;
+    for (let next = index + 1; next < lines.length; next++) {
+      if (lines[next].trim() === '' || /^\s*(?:[-*]|\d+\.|#|\|)\s/.test(lines[next])) break;
+      text += `\n${lines[next]}`;
+    }
+    found.push({ script: /setup\.js/.test(line) ? 'setup' : 'cli', text });
+  });
+  return found;
 }
 
 describe('skills', () => {
@@ -7644,8 +7682,12 @@ describe('skills', () => {
     expect(skillNames).toEqual(expect.arrayContaining(REQUIRED));
   });
 
+  it('reads the commands from the CLI itself', () => {
+    expect(CLI_COMMANDS).toEqual(['capabilities', 'risk-draft', 'scan', 'report']);
+  });
+
   describe.each(skillNames)('%s', name => {
-    const { meta, body } = load(name);
+    const { text, meta, body } = load(name);
 
     it('has frontmatter matching its directory', () => {
       expect(meta.name).toBe(name);
@@ -7658,18 +7700,50 @@ describe('skills', () => {
       expect(meta.when_to_use).toMatch(/^Use /);
     });
 
+    it('keeps description and when_to_use within the listing budget, with no colon-space in a value', () => {
+      expect(meta.description.length + meta.when_to_use.length).toBeLessThan(1536);
+      const frontmatter = text.split(/\r?\n---\r?\n/)[0];
+      for (const line of frontmatter.split(/\r?\n/).slice(1)) expect(line.replace(/^[a-z_]+: /, '')).not.toContain(': ');
+    });
+
     it('stays short enough to hold in context', () => {
       expect(body.split('\n').length).toBeLessThanOrEqual(160);
     });
 
+    it('is plain ASCII with no argument placeholders', () => {
+      expect(text).toMatch(/^[\x00-\x7F]*$/);
+      expect(text).not.toMatch(/\$[1-9]|\$ARGUMENTS/);
+    });
+
     it('only calls CLI commands that exist', () => {
       const called = [...body.matchAll(/run-managed\.js" ([a-z-]+)/g)].map(match => match[1]);
-      for (const command of called) expect(COMMANDS).toContain(command);
+      for (const command of called) expect(CLI_COMMANDS).toContain(command);
+    });
+
+    it('only names options the scripts accept', () => {
+      for (const example of examples(body)) {
+        const allowed = example.script === 'setup' ? SETUP_FLAGS : CLI_FLAGS;
+        for (const match of example.text.matchAll(/(?<![\w-])--([a-z][a-z-]*)/g)) expect(allowed, `--${match[1]} in: ${example.text}`).toContain(match[1]);
+      }
     });
 
     it('only points at scripts and references that exist', () => {
       for (const match of body.matchAll(/scripts\/([\w-]+\.js)/g)) expect(existsSync(join(ROOT, 'scripts', match[1]))).toBe(true);
+      for (const match of body.matchAll(/references\/([\w-]+(?:\.[\w-]+)*)/g)) expect(existsSync(join(ROOT, 'references', match[1])), match[0]).toBe(true);
     });
+
+    it('only names error codes the code can emit', () => {
+      for (const match of text.matchAll(/\bE_[A-Z_]+\b/g)) expect(SOURCES.includes(match[0]), `${match[0]} is not emitted by any source`).toBe(true);
+    });
+
+    it('defines <plugin-root> when it launches a script', () => {
+      if (!/run-managed\.js|setup\.js/.test(body)) return;
+      expect(body).toMatch(/^.*`<plugin-root>` is the directory.*$/m);
+    });
+  });
+
+  it('has tests-setup name the setup script', () => {
+    expect(load('tests-setup').body).toContain('scripts/setup.js');
   });
 });
 ```
@@ -7688,7 +7762,7 @@ Create `skills/tests-setup/SKILL.md`:
 ---
 name: tests-setup
 description: Install, check and repair the managed agent-tests runtime (the tests CLI and its Node dependencies) outside the plugin cache.
-when_to_use: Use before the first agent-tests command in a session, after a plugin update, or when an agent-tests skill reports "Managed CLI ... is missing", "rerun tests-setup", E_RUNTIME_MISSING, or a runtime version mismatch.
+when_to_use: Use before the first agent-tests command in a session, after a plugin update, or when an agent-tests skill reports "Managed CLI ... is missing", "rerun tests-setup", E_RUNTIME_MISSING, E_RUNTIME_BROKEN, E_SETUP_FAILED, or a runtime version mismatch.
 ---
 # tests-setup
 
@@ -7698,8 +7772,8 @@ Skills always launch it through the plugin's checked launcher, never a `tests` o
 
     node "<plugin-root>/scripts/run-managed.js" <command> [args]
 
-`<plugin-root>` is the directory two levels above this SKILL.md. In Codex, resolve it from the
-SKILL.md file you actually loaded, not from the current directory.
+`<plugin-root>` is the directory that holds scripts/run-managed.js, the parent of the skills directory (two levels
+up from this skill's directory). In Codex, resolve it from the SKILL.md file you loaded, not from the current directory.
 
 ## Check
 
@@ -7720,7 +7794,9 @@ Done when the JSON reports `"ok": true` and `cliVersion` equals `pluginVersion`.
 | Message | Fix |
 |---|---|
 | `Managed CLI x.y.z is missing` | Run step 2. |
-| `Managed runtime modified or version mismatch` | Move the named release directory aside, then run step 2. |
+| `Managed runtime modified or version mismatch` | Move the release directory aside (`runtimeRoot` in the check JSON names it), then run step 2. |
+| `Dependency check failed`, `fails its dependency check` or `E_RUNTIME_BROKEN` (unless it says `needs Node 24`) | Move the release directory aside (`runtimeRoot` in the check JSON names it), then run step 2. |
+| `E_SETUP_FAILED` (the message says what failed) | Fix the stated cause, then rerun step 2. |
 | `Another setup may be running (...setup.lock)` | Confirm no setup process is running, delete the lock, rerun. |
 | `needs Node 24 or newer` | Upgrade Node; do not work around it. |
 | `Cannot locate npm-cli.js` | Install Node.js with npm, then rerun. |
@@ -7733,7 +7809,7 @@ Create `skills/test-audit/SKILL.md`:
 ```markdown
 ---
 name: test-audit
-description: Audit a project's test suite for necessity and efficiency - redundant coverage, compat and fallback shim tests, worktree-hostile tests, tests not tied to a risk tier or lane, and tests that run too often - and return a verdict per test file.
+description: Audit a project's test suite for necessity and efficiency - redundant coverage, compat and fallback shim tests, worktree-hostile tests, tests not tied to a risk tier or tagged for the wrong lane, and tests that run too often - and return a verdict per test file.
 when_to_use: Use when an existing test suite or its CI feels too big, slow or redundant ("tests take forever", "too many tests", "is this overkill", "do we need all of these"), before pruning, merging or demoting tests, or when asked to audit how a project's tests are structured.
 ---
 # test-audit
@@ -7743,18 +7819,25 @@ a fast test that repeats three others is waste. Speed alone never decides a verd
 
 The CLI gathers evidence and never judges. You judge, using the rubric below. Do not edit tests in this skill.
 
+`<plugin-root>` is the directory that holds scripts/run-managed.js, the parent of the skills directory (two levels
+up from this skill's directory). In Codex, resolve it from the SKILL.md file you loaded, not from the current directory.
+Quote the project path (`"<project>"`) so a Windows path with spaces survives.
+
 ## Steps
 
 1. **Runtime.** `node "<plugin-root>/scripts/setup.js" --check --json`. If `ok` is false, load the tests-setup skill.
 2. **Risk map.** Look for `.testing/risk.yml` in the project.
-   - Missing: run `node "<plugin-root>/scripts/run-managed.js" risk-draft --root <project>` and show the owner the draft.
-     Ask two things: the project phase (`dev` pre-release, `test` stabilizing, `production` released) and who consumes
-     this code (`consumers`; an empty list means nobody). Apply their answers, then write it with `--write`.
-     Never write the map before the owner has confirmed tiers, phase and consumers.
+   - Missing: run `node "<plugin-root>/scripts/run-managed.js" risk-draft --root "<project>"`, which prints a draft and
+     writes nothing, and show the owner the draft. Ask three things: the project phase (`dev` pre-release, `test`
+     stabilizing, `production` released), who consumes this code (`consumers`; an empty list means nobody), and which
+     areas are critical, standard or low. Never write the file before the owner has confirmed all three. Then run the
+     same command with `--write` to create the file, edit `.testing/risk.yml` to apply their answers (phase, consumers,
+     tiers), and rerun `report` to validate it; an `E_RISKMAP` error names the bad field.
    - Present: read it. Treat `phase`, `consumers` and `areas` as the owner's decisions.
-3. **Evidence.** `node "<plugin-root>/scripts/run-managed.js" report --root <project>` prints a ranked Markdown view
+3. **Evidence.** `node "<plugin-root>/scripts/run-managed.js" report --root "<project>"` prints a ranked Markdown view
    (add `--max-files <n>` for a longer table); `scan` prints the full JSON.
-   - Project findings (CI, hooks, scripts, agent instructions, risk-map gaps) come first, then a table of test files.
+   - The report opens with a header and category counts. Project findings (CI, hooks, scripts, agent instructions,
+     risk-map gaps) follow, then a table of test files.
    - The table ranks unparsed files first (the tool could not read their structure, so read those directly), then files
      with the most distinct finding rules. The Rules column shows which rules fired. Several `redundancy.shared-subject`
      findings are weak evidence; one `worktree.*` or `shim.*` rule on a real hazard is strong.
@@ -7765,22 +7848,29 @@ The CLI gathers evidence and never judges. You judge, using the rubric below. Do
    and the files in each cluster. Pattern matches produce false positives: a test titled "falls back to the default" may
    guard real behavior. Read the code under test too: a test of a one-line pass-through, or a bound the code can never
    reach, protects nothing however it is tagged, and a loose bound can hide a real bug.
-5. **Judge** each file with the rubric, then write the verdict table.
+   On a large suite do not open every file. A file with no findings, no flags, a tier, and either no lane tag or a lane
+   that fits its tier gets `keep` without being opened; count these files and report the count, not rows. A flagged file
+   is never kept unread: the flags are the evidence for question 4 of the rubric.
+5. **Judge** each remaining file with the rubric, then write the verdict table.
 
 ## Rubric
 
 Ask in this order. Stop at the first question that settles it.
 
-1. **What failure does this test catch, and who is hurt?** Use the file's risk tier. No tier means the risk map has a gap:
-   say so, do not guess.
-2. **Does a consumer exist?** Shim, compat, legacy and fallback tests protect a consumer. With `consumers: []` nobody
-   depends on the old path, so the test guards nothing.
+1. **What failure does this test catch, and who is hurt?** Use the file's risk tier. A file with no tier gets no
+   verdict: report it as a risk-map gap and do not guess.
+2. **Is the code kept for an old format or API, and does a consumer exist?** Read the code under test first. A runtime
+   fallback for missing input is current behavior, not a shim: judge it with questions 3 to 6. A shim, compat, legacy or
+   migration test protects a consumer. Before you accept `consumers: []` as "nobody", look for the kinds of consumer the
+   doctrine counts: other repositories, plugin or package installs from this repo, stored data in the old format and
+   a published API. With none of those, nobody depends on the old path and the test guards nothing.
 3. **Does something cheaper already catch it?** Compare the files in a cluster and the duplicate titles and repeated
    sweeps. Name the test that is the single owner of the behavior.
 4. **Is the test sound?** `tautological`, `snapshot-only`, `mock-only` and `no-direct-assertions` flags mean the test
    may assert nothing real. Confirm by reading it.
 5. **Is it safe beside another worktree?** Fixed ports, fixed temp or database paths, absolute paths, reads of `.git`
-   and writes under the home directory break parallel runs. Fix the hazard; do not delete the test for it.
+   and writes under the home directory break parallel runs. Fix the hazard with a `rewrite`; do not delete or
+   quarantine the test for it.
 6. **Does it run at the right frequency?** Compare its tier to its lane tag. Critical tests belong in the edit or merge
    lane, low-tier tests in scheduled or release. A full suite in a hook or on every push is a frequency problem for the
    project, not for one file.
@@ -7790,27 +7880,32 @@ Ask in this order. Stop at the first question that settles it.
 | Verdict | Use when |
 |---|---|
 | keep | Protects a declared risk, nothing cheaper covers it, runs in the right lane. |
-| demote | Valid but runs too often for its value: move it to a less frequent lane. The most common verdict. |
-| merge | Two tests assert the same behavior over the same subject: keep one owner. |
-| rewrite | Brittle or hollow: mock-only, snapshot-only, tautological, or high churn with no code change. |
-| quarantine | Flaky or worktree-hostile: isolate until the hazard is fixed. |
-| delete | Guards a consumer that does not exist, or duplicates another test exactly. |
+| demote | Valid but runs too often for its value. Change the file's `@lane` tag and the project's scripts or include globs so the lane's command skips it; until lane tooling exists, the tag only records the decision. |
+| merge | Two tests assert the same behavior and one should remain: keep one owner. |
+| rewrite | The behavior is worth protecting but the test is brittle, hollow or worktree-hostile: mock-only, snapshot-only, tautological, a fixed port or path, or high churn with no code change. |
+| quarantine | Flaky, and only when the owner or CI history reports it (this version cannot observe flakiness). Name an owner and a time limit, and isolate it from the gating lanes until fixed. |
+| delete | Nothing worth protecting is behind the test: the code it covers is gone or has no consumer (a dead shim: also recommend removing the shim code with its test), or it asserts nothing and there is no behavior to rewrite it around. |
 
 Never recommend deleting a critical-tier test without naming its replacement.
 
 ## Output
 
 1. A table: `File | Tier | Verdict | Why (finding rule and evidence) | Agent tokens | Churn`.
-   Order it by review priority: expensive and low value first. Show the cost columns separately; do not collapse them
-   into one score unless the risk map's `weights` ask you to.
-2. Project-level actions from the `frequency.*` and `wiring.*` findings: hooks, watch mode, CI triggers, OS matrices,
+   List only files that are not trivially kept, and add one line with the count of files kept unopened.
+   Order it by review priority: expensive and low value first. Show the cost columns separately. The default `weights`
+   are all 1; combine them into one score only if the owner edited the weights.
+2. Files with no tier, listed without a verdict, as risk-map gaps.
+3. Project-level actions from the `frequency.*` and `wiring.*` findings: hooks, watch mode, CI triggers, OS matrices,
    missing risk-map areas, critical areas with no tests.
-3. CI advice for the phase: `dev` wants one non-blocking Linux job per pull request and the OS matrix on demand only,
-   `test` adds a scheduled OS matrix and release-tag runs, `production` makes path-filtered pull-request checks
-   required. Flag any `push` trigger on branches and any Windows or macOS run on the pull-request path.
-4. What this audit could not measure: wait time, CI minutes and flakiness need a timed run.
+4. CI advice for the phase: `dev` wants one non-blocking Linux job per pull request, with the OS matrix on demand,
+   weekly and on release tags; `test` runs the OS matrix nightly, with release-tag runs gating the release; `production`
+   makes path-filtered pull-request checks required. Flag any `push` trigger on branches and any Windows or macOS run
+   on the pull-request path.
+5. Totals: estimated tokens in files marked `delete` or `merge`, and how many files with a Lane of `edit` you demote
+   out of the edit lane.
+6. What this audit could not measure: wait time, CI minutes and flakiness need a timed run.
 
-Stop after the table and let the owner decide what to apply.
+Stop after this output and let the owner decide what to apply.
 ```
 
 Create `skills/test-strategy/SKILL.md`:
@@ -7823,15 +7918,20 @@ when_to_use: Use when starting a project or feature area, or deciding how a proj
 ---
 # test-strategy
 
-Efficiency means protection per unit of cost. The same test costs about a hundred times more on every edit than
-nightly, so most of the win is putting each test in the right lane, not deleting tests.
+Efficiency means protection per unit of cost. The same test costs many times more on every edit than nightly, so
+putting each test in the right lane usually saves more than deleting it, provided each lane still runs often enough
+to keep the set of suspect changes small.
+
+`<plugin-root>` is the directory that holds scripts/run-managed.js, the parent of the skills directory (two levels
+up from this skill's directory). In Codex, resolve it from the SKILL.md file you loaded, not from the current directory.
+Quote the project path (`"<project>"`) so a Windows path with spaces survives.
 
 ## 1. Know the phase
 
 | Phase | Goal | Tests that matter | Automatic CI | Compat tests |
 |---|---|---|---|---|
-| dev (pre-release) | Iteration speed | Core invariants, a few user journeys | One non-blocking Linux job per pull request. OS matrix on demand only. | None: no consumers |
-| test (stabilizing) | Release confidence | Journeys, public-surface contracts, critical-tier depth | The same, plus a scheduled OS matrix and release-tag runs | Only for declared consumers |
+| dev (pre-release) | Iteration speed | Core invariants, a few user journeys | One non-blocking Linux job per pull request. OS matrix on demand, weekly and on release tags. | None unless `consumers` names one |
+| test (stabilizing) | Release confidence | Journeys, public-surface contracts, critical-tier depth | The same, with the OS matrix nightly and release-tag runs gating the release | Only for declared consumers |
 | production | Do not break people | Regression and compat for declared consumers, post-deploy smoke | Required, path-filtered pull-request checks | Yes, for declared consumers |
 
 Ask the owner which phase the project is in. Moving to the next phase is an explicit step: fill in `consumers`,
@@ -7839,10 +7939,13 @@ change `phase`.
 
 ## 2. Write the risk map
 
-`node "<plugin-root>/scripts/run-managed.js" risk-draft --root <project>` drafts `.testing/risk.yml` from directory
-names. Show it to the owner, apply their corrections, then `--write` and commit it. Tiers: `critical` (data loss,
-auth, money, public contracts), `standard`, `low` (presentation, examples). First matching area wins, so list
-specific areas first. If the CLI is missing, load the tests-setup skill.
+`node "<plugin-root>/scripts/run-managed.js" risk-draft --root "<project>"` prints a draft of `.testing/risk.yml` from
+directory names and writes nothing. Show it to the owner and ask for the phase, the `consumers` and which areas are
+critical, standard or low. Never write the file before they have confirmed all three. Then run the same command with
+`--write` to create the file, edit `.testing/risk.yml` to apply their answers (phase, consumers, tiers), rerun
+`report --root "<project>"` to validate it (an `E_RISKMAP` error names the bad field) and commit it. Tiers: `critical`
+(data loss, auth, money, public contracts), `standard`, `low` (presentation, examples). First matching area wins, so
+list specific areas first. If the CLI is missing, load the tests-setup skill.
 
 ## 3. Assign lanes by frequency
 
@@ -7850,7 +7953,7 @@ specific areas first. If the CLI is missing, load the tests-setup skill.
 |---|---|---|
 | edit | Tests affected by the files just changed | After each agent edit, seconds |
 | merge | The fast suite for critical and standard tiers | Locally, before pushing or merging |
-| scheduled | Everything, on an OS matrix | Nightly or weekly cron |
+| scheduled | Everything, on an OS matrix | Weekly cron in dev, nightly from the test phase on |
 | release | Everything plus a clean install and packaging check | On a release tag |
 
 Tier decides the lane: critical tests run in edit or merge, standard in edit, merge or scheduled, low in scheduled or
@@ -7860,7 +7963,8 @@ Starting scripts until the lane tooling exists:
 
 - vitest: edit `vitest related --run <changed files>`, merge `vitest run --changed origin/main`, full `vitest run`.
   `--changed` needs an `origin/main` ref; with no remote yet, `vitest run --changed` covers uncommitted changes.
-- jest: edit `jest --findRelatedTests <changed files>`, merge `jest --onlyChanged`, full `jest`.
+- jest: edit `jest --findRelatedTests <changed files>`, merge `jest --changedSince=origin/main`, full `jest`.
+  `--onlyChanged` sees uncommitted changes only, so it is not a merge lane.
 
 Make the `test` script a single run: `vitest run`, or `jest` without `--watch`. Bare `vitest` can start watch mode in an
 interactive terminal, which blocks an agent that runs it there.
@@ -7876,11 +7980,14 @@ its own report. Keep that observer cheap and non-blocking.
 - **No `push` trigger on branches.** A pushed pull-request branch would fire both triggers. Skip a post-merge run too:
   the pull-request job already ran on the same tree.
 - **OS matrix off the pull-request path.** Run Windows and macOS with `workflow_dispatch` (take an `os` input), a label
-  such as `ci:full`, a weekly schedule and release tags. They bill at a higher per-minute rate than Linux on private
-  repositories.
-- **Evidence for the merge lane.** Have it write `{sha, lane, result}` and refuse to merge without evidence for the
-  current commit.
-- **Make checks required** only when someone else depends on main.
+  such as `ci:full`, a weekly schedule (nightly from the test phase on) and release tags. They bill at a higher
+  per-minute rate than Linux on private repositories.
+- **Evidence for the merge lane (optional, if you build one).** Have the merge script write `{sha, lane, result}` and
+  refuse to merge without evidence for the current commit.
+- **Drop the pull-request job** only if the local merge gate is written by a verified tool over a clean tree, not by
+  the agent reporting on itself, and the minutes are metered.
+- **By phase.** `dev` is the setup above. `test` runs the OS matrix nightly, with release-tag runs gating the release.
+  `production` makes the path-filtered pull-request checks required, because someone else now depends on main.
 
 CI runs whatever suite was pushed, so it does not catch an agent weakening tests. The audit does.
 
@@ -7895,20 +8002,22 @@ Agents write most tests, so prevent bloat at the source. Add this block to the p
     - One owner per invariant. Before adding a test, search for an existing test of the same behavior and extend it.
     - Test behavior at seams (public functions, inputs, persistence, transfers), not implementation details. Do not
       assert on mocks alone, snapshot everything, or assert a value against itself.
-    - Pre-release means no consumers: no backward-compatibility, legacy-format or fallback tests unless `consumers`
-      in the risk map names who needs them.
+    - Pre-release usually means no consumers: no backward-compatibility, legacy-format or fallback tests unless
+      `consumers` in the risk map names who needs them. The risk map decides.
     - Tests must not depend on the checkout: no fixed ports (use port 0), no fixed temp paths (use mkdtemp), no
       absolute paths, no reading `.git` directly, no writes under the home directory.
-    - Declare the lane at the top of each test file: `/** @lane merge */` (edit, merge, scheduled or release). If the
-      test reaches code only through a subprocess or the network, add `@subject <path>` for that code.
-    - While editing, run only the tests for the files you changed. Run the merge lane before pushing. Do not run
-      the full suite after every change.
+    - Declare the lane in the file's first comment, before any import: `/** @lane merge */` (edit, merge, scheduled or
+      release). Tags are read only from that leading comment. If the test reaches code only through a subprocess or the
+      network, add `@subject <path>` for that code, as a path from the project root (`src/cli.ts`, not an import-style
+      `../src/cli.ts`, which is dropped). A test with no code subject gets `@risk <critical|standard|low>`.
+    - While editing, run only the tests for the files you changed. Run the project's merge script before pushing. Do
+      not run the full suite after every change.
 
 ## 6. Audit what exists
 
 For an existing suite, load the test-audit skill instead of restructuring by hand.
 
-Evidence for these rules, and where they are opinion, is in `references/doctrine.md`.
+Evidence for these rules, and where they are opinion, is in `<plugin-root>/references/doctrine.md`.
 ```
 
 - [ ] **Step 4: Reconcile the skills with the doctrine**
@@ -7928,7 +8037,7 @@ Frontmatter values are plain YAML scalars, so a colon followed by a space inside
 
 Run: `npx vitest run tests/skills.test.ts`
 
-Expected: PASS, 16 tests.
+Expected: PASS, 33 tests.
 
 Run: `npm run typecheck`
 
@@ -8183,7 +8292,7 @@ Expected:
 - `Phase: dev`, `Risk map: present`, 18 test files;
 - `wiring | 0` and `frequency | 0` in the findings table;
 - `shim | 7` and `worktree | 50`: false positives from `tests/detectors/shims.test.ts` (4), `tests/detectors/worktree.test.ts` (45), `tests/managed-runtime.test.ts` (1), `tests/report.test.ts` (2), `tests/riskdraft.test.ts` (1), `tests/scan.test.ts` (4), whose test data is made of those very patterns;
-- `redundancy | 15`, all `redundancy.shared-subject`: several tests import `src/riskmap.ts` or `src/schema.ts` to build fixtures, not to test them.
+- `redundancy | 16`, all `redundancy.shared-subject`: several tests import `src/riskmap.ts` or `src/schema.ts` to build fixtures, not to test them.
 
 Do not "fix" any of these. They are the evidence the audit skill would read and dismiss, and they are listed under Known limitations in the README. If your counts differ, a code block was mis-typed.
 
@@ -8204,7 +8313,7 @@ Invoke `h-superpowers:verification-before-completion` first: nothing below may b
 
 Run: `npm test`
 
-Expected: `Test Files  18 passed (18)` and `Tests  539 passed (539)`.
+Expected: `Test Files  18 passed (18)` and `Tests  556 passed (556)`.
 
 Run: `npm run typecheck`
 
