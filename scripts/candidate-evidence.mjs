@@ -69,8 +69,8 @@ function toolchain(root, mode) {
   const pkg = mode === 'vitest' ? JSON.parse(readFileSync(join(root, 'node_modules/vitest/package.json'), 'utf8')) : null;
   return {
     node: process.version, abi: process.versions.modules, platform: process.platform, arch: process.arch,
-    executable: realpathSync(process.execPath), executableSha256: hashFile(process.execPath),
-    runner: { name: mode, version: pkg?.version ?? process.version, entrypoint: realpathSync(runner), sha256: hashFile(runner), packageSha256: pkg ? hashFile(join(root, 'node_modules/vitest/package.json')) : null },
+    executable: realpathSync.native(process.execPath), executableSha256: hashFile(process.execPath),
+    runner: { name: mode, version: pkg?.version ?? process.version, entrypoint: realpathSync.native(runner), sha256: hashFile(runner), packageSha256: pkg ? hashFile(join(root, 'node_modules/vitest/package.json')) : null },
     observer: { name: 'agent-tests', version: JSON.parse(readFileSync(join(home, '../package.json'), 'utf8')).version, packageSha256: hashFile(join(home, '../package.json')) },
     helpers: Object.fromEntries(['candidate-evidence.mjs', 'candidate-inputs.mjs', 'candidate-reports.mjs', 'node-profile.mjs'].map(name => [name, hashFile(join(home, name))])),
   };
@@ -127,7 +127,7 @@ async function execute(root, args, directory, timeoutMs) {
 async function main() {
   const options = parse(process.argv.slice(2)), root = canonicalRoot(options.root);
   if (options.action === 'check') {
-    const receiptPath = realpathSync(resolve(options.receipt)), directory = dirname(receiptPath), saved = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    const receiptPath = realpathSync.native(resolve(options.receipt)), directory = dirname(receiptPath), saved = JSON.parse(readFileSync(receiptPath, 'utf8'));
     let current, tools;
     try { current = snapshotInputs(root, { generatedInputs: saved.before?.scope.generatedInputs, outputDirectory: saved.before?.scope.excludedOutputs?.[0] }); tools = toolchain(root, saved.command?.mode); }
     catch (error) { current = { error: error.message }; }
@@ -135,7 +135,7 @@ async function main() {
     console.log(JSON.stringify(result)); process.exitCode = result.ok ? 0 : 1; return;
   }
   if (existsSync(resolve(options.out))) throw Error('Evidence output directory already exists; no overwrite is permitted');
-  const directory = join(realpathSync(dirname(resolve(options.out))), basename(resolve(options.out)));
+  const directory = join(realpathSync.native(dirname(resolve(options.out))), basename(resolve(options.out)));
   if (inside(directory, root)) throw Error('Evidence output must not contain the checkout');
   const reportFile = options.mode === 'node-test' ? 'node-profile.json' : 'vitest.json';
   const invocation = nativeArguments(options.mode, root, options.nativeArgs, options.cpu, join(directory, reportFile));

@@ -51,14 +51,27 @@ describe('observational candidate evidence', () => {
     const { canonicalRoot } = await import(pathToFileURL(join(checkout, 'scripts/candidate-inputs.mjs')).href);
     const f = fixture(), expected = canonicalRoot(f.root);
     const aliases = process.platform === 'win32' ? [f.root.replace(/^[A-Z]/, letter => letter.toLowerCase()), f.root.toUpperCase()] : [f.root];
+    if (process.platform === 'win32') {
+      const short = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        '(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AGENT_TESTS_FIXTURE_PATH).ShortPath'],
+      { env: { ...process.env, AGENT_TESTS_FIXTURE_PATH: f.root }, encoding: 'utf8', windowsHide: true, timeout: 5000 });
+      expect(short.status, short.stderr).toBe(0);
+      const path = short.stdout.trim();
+      expect(existsSync(path)).toBe(true);
+      aliases.push(path);
+    }
     mkdirSync(join(f.root, 'nested'));
     for (const alias of aliases) {
       expect(canonicalRoot(alias)).toBe(expected);
       expect(() => canonicalRoot(join(alias, 'nested'))).toThrow(/full Git checkout root/);
     }
-    const result = run('observe', 'node-test', '--root', aliases[0], '--out', f.out, '--', 'owner.mjs');
+    mkdirSync(join(f.root, '.local'));
+    f.out = join(f.root, '.local', 'evidence');
+    const result = run('observe', 'node-test', '--root', aliases.at(-1)!,
+      '--out', join(aliases.at(-1)!, '.local', 'evidence'), '--generated-input', '.local', '--', 'owner.mjs');
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(receipt(f.out).before.root).toBe(expected);
+    expect(receipt(f.out).before.scope.excludedOutputs).toEqual([join(expected, '.local', 'evidence')]);
     expect(check(f).status).toBe(0);
   });
   it('records a real Node child, counts/skips, source/index/content and declared limits without overwriting output', () => {

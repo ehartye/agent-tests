@@ -30,9 +30,9 @@ function checkedPath(root, name) {
   return path;
 }
 export function canonicalRoot(root) {
-  root = realpathSync(resolve(root));
-  const top = realpathSync(git(root, 'rev-parse', '--show-toplevel').toString('utf8').trim());
-  // Windows realpath can preserve caller casing while Git returns another spelling.
+  root = realpathSync.native(resolve(root));
+  const top = realpathSync.native(git(root, 'rev-parse', '--show-toplevel').toString('utf8').trim());
+  // Native realpath expands Windows DOS short names; relative handles casing aliases.
   if (relative(root, top) !== '') throw Error('Input scope must be the full Git checkout root');
   return top;
 }
