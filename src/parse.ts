@@ -1,5 +1,5 @@
 import { existsSync, statSync } from 'node:fs';
-import { dirname, extname, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, resolve } from 'node:path';
 import { SyntaxKind, type CallExpression, type ImportDeclaration, type Node, type PropertyAccessExpression, type SourceFile } from 'typescript/unstable/ast';
 import { isCallExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isPropertyAccessExpression, isStringLiteral, isTaggedTemplateExpression } from 'typescript/unstable/ast/is';
 import { createVirtualFileSystem } from 'typescript/unstable/fs';
@@ -265,6 +265,31 @@ export function resolveSubjects(root: string, testRel: string, imports: string[]
     if (!hit) continue;
     const rel = relPosix(root, hit);
     if (rel.startsWith('..') || isTestPath(rel) || isSupportPath(rel)) continue;
+    found.add(rel);
+  }
+  return [...found].sort();
+}
+
+const isRegularFile = (path: string): boolean => {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Repo-relative files a test declares with `@subject`. Paths are normalised (backslashes, `./`, `..` segments) and kept only
+ * when they name a regular file inside the root that is neither a test nor test support code. Any file type is allowed,
+ * because a SQL migration or a JSON config can be a deliberate subject.
+ */
+export function declaredSubjects(root: string, declared: string[]): string[] {
+  const found = new Set<string>();
+  for (const path of declared) {
+    const absolute = resolve(root, path.replaceAll('\\', '/'));
+    const rel = relPosix(root, absolute);
+    if (rel === '' || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) continue;
+    if (!isRegularFile(absolute) || isTestPath(rel) || isSupportPath(rel)) continue;
     found.add(rel);
   }
   return [...found].sort();

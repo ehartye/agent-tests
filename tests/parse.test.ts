@@ -1,5 +1,6 @@
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { openParseSession, parseTags, resolveSubjects } from '../src/parse.ts';
+import { declaredSubjects, openParseSession, parseTags, resolveSubjects } from '../src/parse.ts';
 import { parseTestFile } from './helpers/parse.ts';
 import { makeTree } from './helpers/tree.ts';
 
@@ -304,5 +305,26 @@ describe('resolveSubjects', () => {
   it('skips test files, helpers and unresolved paths', () => {
     const root = makeTree({ 'src/a.test.ts': '', 'tests/helpers/tree.ts': '', 'tests/a.test.ts': '' });
     expect(resolveSubjects(root, 'tests/a.test.ts', ['../src/a.test.ts', './helpers/tree.ts', './missing.ts'])).toEqual([]);
+  });
+});
+
+describe('declaredSubjects', () => {
+  const tree = () => makeTree({ 'src/x.ts': '', 'src/y.sql': '', 'tests/b.test.ts': '', 'tests/helpers/tree.ts': '' });
+
+  it('normalises ./ and .. segments and dedupes', () => {
+    expect(declaredSubjects(tree(), ['./src/x.ts', 'src/x.ts', 'src/../src/x.ts'])).toEqual(['src/x.ts']);
+  });
+
+  it('accepts the backslash form', () => {
+    expect(declaredSubjects(tree(), ['src\\x.ts'])).toEqual(['src/x.ts']);
+  });
+
+  it('allows a non-code file such as a SQL migration, and sorts', () => {
+    expect(declaredSubjects(tree(), ['src/y.sql', 'src/x.ts'])).toEqual(['src/x.ts', 'src/y.sql']);
+  });
+
+  it('drops paths outside the root, directories, test files, helpers and missing files', () => {
+    const outside = makeTree({ 'x.ts': '' });
+    expect(declaredSubjects(tree(), ['../../x', '../x.ts', join(outside, 'x.ts'), 'src', 'tests/b.test.ts', 'tests/helpers/tree.ts', 'src/missing.ts'])).toEqual([]);
   });
 });

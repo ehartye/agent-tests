@@ -85,6 +85,7 @@ describe('scan edge cases', () => {
   it('throws E_RISKMAP for an invalid risk map', () => {
     const root = makeTree({ '.testing/risk.yml': 'phase: nope\n' });
     expect(() => scan(root)).toThrow(CliError);
+    expect(() => scan(root)).toThrow(expect.objectContaining({ code: 'E_RISKMAP' }));
   });
 
   it('counts a declared @subject, so a subprocess test still covers its code', () => {
@@ -110,5 +111,96 @@ describe('scan edge cases', () => {
   it('handles a project with no tests', () => {
     const report = scan(makeTree({ 'src/a.ts': '' }));
     expect(report.files).toEqual([]);
+  });
+});
+
+describe('scan of declared subjects', () => {
+  it('drops an @subject that points outside the root, at a directory or at a test file', () => {
+    const root = makeTree({
+      'src/cli.ts': '',
+      'tests/other.test.ts': 'it("x", () => { expect(1).toBe(1); });',
+      'tests/cli.test.ts': '/**\n * @subject ./src/cli.ts\n * @subject ../../x\n * @subject src\n * @subject tests/other.test.ts\n * @subject src\cli.ts\n */\nit("runs", () => { expect(1).toBe(2); });',
+    });
+    expect(scan(root).files.find(file => file.file === 'tests/cli.test.ts')?.subjects).toEqual(['src/cli.ts']);
+  });
+});
+
+describe('scan with a file that cannot be parsed', () => {
+  const deep = (): string => "it('deep', () => {\n  const nested = " + '['.repeat(6000) + ']'.repeat(6000) + ';\n  expect(nested).toBeTruthy();\n});';
+
+  it('marks only that file as unparsed and reports the others normally', () => {
+    const root = makeTree({
+      'src/a.ts': '',
+      'src/z.ts': '',
+      'tests/a.test.ts': "import '../src/a.ts';\nit('a', () => { expect(1).toBe(2); });",
+      'tests/m-bad.test.ts': deep(),
+      'tests/z.test.ts': "import '../src/z.ts';\nit('z', () => { expect(1).toBe(2); });",
+    });
+    const report = scan(root);
+    expect(EvidenceReport.safeParse(report).success).toBe(true);
+    const byFile = Object.fromEntries(report.files.map(file => [file.file, file]));
+    expect(byFile['tests/m-bad.test.ts']?.flags).toEqual(['unparsed']);
+    expect(byFile['tests/m-bad.test.ts']?.tests).toBe(0);
+    expect(byFile['tests/m-bad.test.ts']?.assertions).toBe(0);
+    expect(byFile['tests/a.test.ts']).toMatchObject({ tests: 1, assertions: 1, flags: [], subjects: ['src/a.ts'] });
+    expect(byFile['tests/z.test.ts']).toMatchObject({ tests: 1, assertions: 1, flags: [], subjects: ['src/z.ts'] });
+    expect(scan(root).files.map(file => file.flags)).toEqual(report.files.map(file => file.flags));
+  });
+
+  it('still runs the line-based detectors on an unparsed file', () => {
+    const root = makeTree({ 'tests/bad.test.ts': deep() + "\nconst root = '/Users/me/work';\n" });
+    const report = scan(root);
+    expect(report.files[0]?.flags).toEqual(['unparsed']);
+    expect(report.files[0]?.findings.map(finding => finding.rule)).toContain('worktree.absolute-path');
+    expect(report.files[0]?.cost.agent).toBe(Math.ceil(Buffer.byteLength(readFileSync(join(root, 'tests/bad.test.ts'), 'utf8')) / 4));
+  });
+});
+
+describe('scan details', () => {
+  const critical = (): string => serializeRiskMap({ ...defaultRiskMap(), areas: [{ path: 'src/**', tier: 'critical' }] });
+
+  it('names the declared consumers in the shim note', () => {
+    const root = makeTree({
+      '.testing/risk.yml': serializeRiskMap({ ...defaultRiskMap(), consumers: ['mobile app', 'cli'] }),
+      'src/legacy/x.ts': '',
+      'tests/legacy.test.ts': "import '../src/legacy/x.ts';\ndescribe('legacy', () => {});",
+    });
+    const shim = scan(root).files[0]?.findings.find(finding => finding.category === 'shim');
+    expect(shim?.note).toBe('Consumers declared in the risk map: mobile app, cli. Check whether any still needs this path.');
+  });
+
+  it('puts a hub-subject finding on the shared helper, at project level', () => {
+    const files: Record<string, string> = { '.testing/risk.yml': critical(), 'src/shared.ts': '' };
+    for (let index = 0; index < 11; index++) {
+      files['src/m' + index + '.ts'] = '';
+      files['tests/m' + index + '.test.ts'] = "import '../src/shared.ts';\nimport '../src/m" + index + ".ts';\nit('m" + index + "', () => { expect(1).toBe(2); });";
+    }
+    const report = scan(makeTree(files));
+    const hub = report.projectFindings.filter(finding => finding.rule === 'redundancy.hub-subject');
+    expect(hub.map(finding => finding.file)).toEqual(['src/shared.ts']);
+    expect(report.files.flatMap(file => file.findings).map(finding => finding.rule)).not.toContain('redundancy.hub-subject');
+  });
+
+  it('estimates agent cost as a quarter of the byte length', () => {
+    const text = "it('x', () => { expect('héllo').toBe('héllo!'); });";
+    const report = scan(makeTree({ 'tests/x.test.ts': text }));
+    expect(report.files[0]?.cost.agent).toBe(Math.ceil(Buffer.byteLength(text) / 4));
+    expect(report.files[0]?.cost.wait).toBeNull();
+    expect(report.files[0]?.cost.ci).toBeNull();
+  });
+
+  it('leaves churn and edits null for a tree outside git', () => {
+    const report = scan(makeTree({ 'tests/x.test.ts': "it('x', () => { expect(1).toBe(2); });" }));
+    expect(report.files[0]?.cost.churn).toBeNull();
+    expect(report.files[0]?.cost.edits).toBeNull();
+  });
+
+  it('lets @risk low override a critical subject area but keeps the area', () => {
+    const root = makeTree({
+      '.testing/risk.yml': critical(),
+      'src/a.ts': '',
+      'tests/a.test.ts': "/** @risk low */\nimport '../src/a.ts';\nit('a', () => { expect(1).toBe(2); });",
+    });
+    expect(scan(root).files[0]).toMatchObject({ tier: 'low', area: 'src/**' });
   });
 });

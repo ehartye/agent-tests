@@ -44,7 +44,7 @@ export const Finding = z.object({
 });
 export type Finding = z.infer<typeof Finding>;
 
-export const FileFlag = z.enum(['tautological', 'snapshot-only', 'mock-only', 'no-direct-assertions']);
+export const FileFlag = z.enum(['tautological', 'snapshot-only', 'mock-only', 'no-direct-assertions', 'unparsed']);
 export type FileFlag = z.infer<typeof FileFlag>;
 
 export const TestFileRecord = z.object({
