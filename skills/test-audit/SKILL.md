@@ -58,7 +58,8 @@ Ask in this order. Stop at the first question that settles it.
 3. **Does something cheaper already catch it?** Compare the files in a cluster and the duplicate titles and repeated
    sweeps. Name the test that is the single owner of the behavior.
 4. **Is the test sound?** `tautological`, `snapshot-only`, `mock-only` and `no-direct-assertions` flags mean the test
-   may assert nothing real. Confirm by reading it.
+   may assert nothing real. Confirm by reading it against the rules in `<plugin-root>/references/craft.md`: concrete
+   assertions that could fail, real collaborators or fakes before mocks, one behavior per test.
 5. **Is it safe beside another worktree?** Fixed ports, fixed temp or database paths, absolute paths, reads of `.git`
    and writes under the home directory break parallel runs. Fix the hazard with a `rewrite`; do not delete or
    quarantine the test for it.

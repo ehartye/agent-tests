@@ -35,6 +35,16 @@ dependencies. Node.js 24 or newer is required. Codex installation is documented 
 The CLI gathers evidence and never judges. The skill's rubric turns evidence into verdicts: keep, demote, merge, rewrite,
 quarantine or delete.
 
+## References
+
+Every rule the skills teach is cited to a public source or labeled as opinion, so nothing depends on a private note or
+on this machine.
+
+| File | Covers |
+|---|---|
+| `references/doctrine.md` | How much to test and how often: efficiency, run frequency, test size, flaky tests, affected-only runs, compat tests, CI for a solo developer, risk tiers, mutation testing |
+| `references/craft.md` | How to write a good test at each level: a function or class (assertions, test doubles, test data, property-based tests), a feature (integration, contract and end-to-end tests, time, isolation, third-party APIs) and the suite (ownership, determinism, coverage, legacy code, agent-written tests) |
+
 ## Risk map
 
 `.testing/risk.yml` is committed to the project. It records the phase (`dev`, `test`, `production`), who consumes the code
