@@ -38,6 +38,36 @@ describe('store', () => {
 });
 `;
 
+describe('TypeScript path aliases as subjects', () => {
+  it('gives exact aliases and then the longest wildcard prefix precedence', () => {
+    const root = makeTree({
+      'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '@*': ['src/broad/*'], '@sim/*': ['src/sim/*'], '@sim/value': ['src/exact.ts'] } } }),
+      'src/broad/sim/value.ts': '', 'src/sim/value.ts': '', 'src/exact.ts': '', 'src/sim/other.ts': '', 'src/broad/sim/other.ts': '',
+    });
+    expect(resolveSubjects(root,'tests/value.test.ts',['@sim/value','@sim/other'])).toEqual(['src/exact.ts','src/sim/other.ts']);
+  });
+  it('keeps relative subjects while declining inherited or JSONC alias configurations', () => {
+    for (const config of ['{"extends":"./base.json","compilerOptions":{"paths":{"@x":["src/x.ts"]}}}', '{/*config*/"compilerOptions":{"paths":{"@x":["src/x.ts"]}}}']) {
+      const root=makeTree({'tsconfig.json':config,'src/x.ts':''});
+      expect(resolveSubjects(root,'tests/x.test.ts',['@x','../src/x.ts'])).toEqual(['src/x.ts']);
+    }
+  });
+  it('resolves exact and wildcard aliases from a direct tsconfig without treating packages as aliases', () => {
+    const root = makeTree({
+      'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '@sim/*': ['./src/sim/*'], '@clock': ['./src/sim/clock.ts'] } } }),
+      'src/sim/clock.ts': '', 'tests/clock.test.ts': '',
+    });
+    expect(resolveSubjects(root, 'tests/clock.test.ts', ['@sim/clock', '@clock', 'vitest'])).toEqual(['src/sim/clock.ts']);
+  });
+  it('tries ordered targets and respects baseUrl while excluding test support and missing targets', () => {
+    const root = makeTree({
+      'tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: './src', paths: { '@sim/*': ['missing/*', 'sim/*'], '@helper': ['../tests/helpers/value.ts'] } } }),
+      'src/sim/value.ts': '', 'tests/helpers/value.ts': '', 'tests/value.test.ts': '',
+    });
+    expect(resolveSubjects(root, 'tests/value.test.ts', ['@sim/value', '@sim/missing', '@helper'])).toEqual(['src/sim/value.ts']);
+  });
+});
+
 describe('parseTestFile', () => {
   const parsed = parseTestFile('tests/store.test.ts', SAMPLE);
 

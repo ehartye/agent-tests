@@ -38,6 +38,14 @@ describe('walk', () => {
 });
 
 describe('discoverTests', () => {
+  it('excludes browser automation archive checkouts', () => {
+    const root = makeTree({ 'tests/live.test.mjs': '', '.playwright-mcp/matrix/source/tests/copied.test.mjs': '' });
+    expect(discoverTests(root)).toEqual(['tests/live.test.mjs']);
+  });
+  it('excludes archived local releases and generated reports', () => {
+    const root = makeTree({ 'tests/live.test.mjs': '', '.local/releases/old/tests/stale.test.mjs': '', 'test-results/copy.test.mjs': '', 'playwright-report/copy.spec.mjs': '' });
+    expect(discoverTests(root)).toEqual(['tests/live.test.mjs']);
+  });
   it('finds test files in sorted order and skips ignored directories, including fixtures', () => {
     const root = makeTree({
       'b.test.ts': '',
@@ -67,6 +75,16 @@ describe('discoverTests', () => {
 });
 
 describe('detectRunner', () => {
+  it('does not identify example text in comments or string fixtures as active Node imports', () => {
+    const root = makeTree({ 'tests/example.test.mjs': '// Example: import test from "node:test";\nconst fixture = "import test from \'node:test\';";\nexport {};' });
+    expect(detectRunner(root)).toBe('unknown');
+  });
+  it('detects a Node test suite behind a wrapper and still prefers configured vitest', () => {
+    const files = { 'package.json': JSON.stringify({ scripts: { test: 'node scripts/test.mjs' } }), 'scripts/test.mjs': '', 'tests/live.test.mjs': "import {test} from 'node:test'; test('works',()=>{});" };
+    expect(detectRunner(makeTree(files))).toBe('node:test');
+    expect(detectRunner(makeTree({ ...files, 'vitest.config.ts': '' }))).toBe('vitest');
+    expect(detectRunner(makeTree({ '.local/old.test.mjs': "import test from 'node:test';" }))).toBe('unknown');
+  });
   it('prefers vitest from package.json', () => {
     const root = makeTree({ 'package.json': JSON.stringify({ devDependencies: { vitest: '5.0.3', jest: '30.0.0' } }) });
     expect(detectRunner(root)).toBe('vitest');

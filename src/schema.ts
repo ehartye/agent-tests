@@ -79,7 +79,7 @@ export const EVIDENCE_SCHEMA = 'agent-tests/evidence@1';
 export const EvidenceReport = z.object({
   schema: z.literal(EVIDENCE_SCHEMA),
   root: z.string(),
-  runner: z.enum(['vitest', 'jest', 'unknown']),
+  runner: z.enum(['vitest', 'jest', 'node:test', 'unknown']),
   phase: Phase.nullable(),
   riskMapPresent: z.boolean(),
   files: z.array(TestFileRecord),

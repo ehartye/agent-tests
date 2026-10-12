@@ -115,6 +115,9 @@ determinism, coverage, legacy code, agent-written tests).
 ## 7. Audit what exists
 
 For an existing suite, load the test-audit skill instead of restructuring by hand.
+When structure itself makes testing costly, use `<plugin-root>/references/architecture-cost.md` to advise on boundaries,
+shared setup and generated-asset verification ownership before proposing more tests. Keep this advisory until changes
+are authorized; require complete input and output identities before trusting changed-only asset reuse.
 
 Evidence for the structure rules (phases, lanes, CI) and where they are opinion is in
 `<plugin-root>/references/doctrine.md`; evidence for the writing rules is in craft.md.
