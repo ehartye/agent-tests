@@ -1,0 +1,47 @@
+# agent-tests risk map. Confirm or edit, then commit it.
+# First matching area wins, so list specific areas before broad ones.
+# consumers: who depends on this code? An empty list means compat and fallback tests guard nobody.
+phase: dev
+consumers: []
+weights:
+  wait: 1
+  agent: 1
+  ci: 1
+  churn: 1
+lanes:
+  edit:
+    runs: affected-files
+    trigger: agent-edit
+  merge:
+    runs: critical+standard
+    trigger: local-pre-push
+  scheduled:
+    runs: all
+    trigger: cron
+    os:
+      - ubuntu
+      - windows
+      - macos
+  release:
+    runs: all+clean-install
+    trigger: tag
+    os:
+      - ubuntu
+      - windows
+      - macos
+areas:
+  - path: scripts/**
+    tier: critical
+    why: installs and launches the runtime on the user's machine
+  - path: src/cli.ts
+    tier: critical
+    why: writes .testing/risk.yml into the user's project
+  - path: src/riskmap.ts
+    tier: critical
+    why: reads and validates the owner's risk decisions
+  - path: src/detectors/**
+    tier: standard
+    why: detectors produce evidence for the audit; a wrong finding misleads but cannot damage a project
+  - path: src/**
+    tier: standard
+    why: evidence gathering; wrong output misleads the audit but cannot damage a project
