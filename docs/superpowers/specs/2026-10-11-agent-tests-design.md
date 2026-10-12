@@ -1,6 +1,6 @@
 # agent-tests — design
 
-Date: 2026-10-11. Status: design approved section by section; awaiting spec review.
+Date: 2026-10-11. Status: v0.1 (M0 to M2) implemented per docs/superpowers/plans/2026-10-11-agent-tests-v0.1-static-audit.md; M3 to M6 pending their own plans.
 
 ## Problem
 
