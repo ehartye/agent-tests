@@ -46,6 +46,9 @@ list specific areas first. If the CLI is missing, load the tests-setup skill.
 Tier decides the lane: critical tests run in edit or merge, standard in edit, merge or scheduled, low in scheduled or
 release. A test file declares its lane in a leading docblock: `/** @lane merge */`.
 
+Typecheck and lint are the cheapest checks: they take seconds, need no test to maintain and catch many agent mistakes
+(the trophy in doctrine.md puts static checks at its base). Run them in the edit and merge lanes beside the tests.
+
 Starting scripts until the lane tooling exists:
 
 - vitest: edit `vitest related --run <changed files>`, merge `vitest run --changed origin/main`, full `vitest run`.

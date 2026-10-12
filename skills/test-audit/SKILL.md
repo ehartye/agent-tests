@@ -35,6 +35,9 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    - This version never runs the tests, so wait time and CI minutes are absent. Agent cost is estimated tokens in the
      file. Churn/edits is edits that touched the test without the code it covers, over all edits that modified it;
      `n/a` means no git history (a shallow clone has none) or no resolvable subject.
+   - The CLI checks hooks, scripts and workflows for frequency only. Also read the CI workflow and `package.json`
+     yourself: a `pretest` that repeats `test` runs the suite twice, and a workflow with no install step or cache
+     fails or wastes minutes.
 4. **Read before judging.** Findings are evidence, not verdicts. Open the test files behind the highest-ranked findings
    and the files in each cluster. Pattern matches produce false positives: a test titled "falls back to the default" may
    guard real behavior. Read the code under test too: a test of a one-line pass-through, or a bound the code can never
