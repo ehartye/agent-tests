@@ -30,3 +30,7 @@ changes the recommendation. Keep a failed setup attempt separate from a valid pe
 
 This uses the documented custom reporter and per-file/overall summary events in
 [Node 24's test runner documentation](https://nodejs.org/docs/latest-v24.x/api/test.html#custom-reporters).
+
+For before/after source-byte and index evidence around one newly executed native command, use the checked
+managed [candidate evidence recorder](candidate-evidence.md). It supports Node-test and Vitest, refuses cached
+reruns/report replay and reports declared scope limits. It does not authorize test reuse or integration.

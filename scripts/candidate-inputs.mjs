@@ -32,8 +32,9 @@ function checkedPath(root, name) {
 export function canonicalRoot(root) {
   root = realpathSync(resolve(root));
   const top = realpathSync(git(root, 'rev-parse', '--show-toplevel').toString('utf8').trim());
-  if (root !== top) throw Error('Input scope must be the full Git checkout root');
-  return root;
+  // Windows realpath can preserve caller casing while Git returns another spelling.
+  if (relative(root, top) !== '') throw Error('Input scope must be the full Git checkout root');
+  return top;
 }
 export function snapshotInputs(root, { generatedInputs = [], outputDirectory } = {}) {
   root = canonicalRoot(root);

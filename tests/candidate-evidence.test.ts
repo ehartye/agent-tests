@@ -5,7 +5,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -37,8 +37,30 @@ function run(...args: string[]) {
 const receipt = (out: string) => JSON.parse(readFileSync(join(out, 'receipt.json'), 'utf8'));
 const observe = (f: ReturnType<typeof fixture>, ...extra: string[]) => run('observe', 'node-test', '--root', f.root, '--out', f.out, ...extra, '--', 'owner.mjs');
 const check = (f: ReturnType<typeof fixture>, candidate = f.sha) => run('check', '--root', f.root, '--receipt', join(f.out, 'receipt.json'), '--candidate', candidate);
+function linkVitest(root: string) {
+  // A directory-only ignore does not ignore a node_modules symlink on POSIX.
+  const modules = join(root, 'node_modules'); mkdirSync(modules);
+  symlinkSync(join(checkout, 'node_modules/vitest'), join(modules, 'vitest'), process.platform === 'win32' ? 'junction' : 'dir');
+  expect(lstatSync(modules).isDirectory()).toBe(true);
+  expect(lstatSync(modules).isSymbolicLink()).toBe(false);
+  expect(git(root, 'check-ignore', 'node_modules/vitest')).toBe('node_modules/vitest');
+}
 
 describe('observational candidate evidence', () => {
+  it('matches real checkout path aliases while refusing checkout subdirectories', async () => {
+    const { canonicalRoot } = await import(pathToFileURL(join(checkout, 'scripts/candidate-inputs.mjs')).href);
+    const f = fixture(), expected = canonicalRoot(f.root);
+    const aliases = process.platform === 'win32' ? [f.root.replace(/^[A-Z]/, letter => letter.toLowerCase()), f.root.toUpperCase()] : [f.root];
+    mkdirSync(join(f.root, 'nested'));
+    for (const alias of aliases) {
+      expect(canonicalRoot(alias)).toBe(expected);
+      expect(() => canonicalRoot(join(alias, 'nested'))).toThrow(/full Git checkout root/);
+    }
+    const result = run('observe', 'node-test', '--root', aliases[0], '--out', f.out, '--', 'owner.mjs');
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(receipt(f.out).before.root).toBe(expected);
+    expect(check(f).status).toBe(0);
+  });
   it('records a real Node child, counts/skips, source/index/content and declared limits without overwriting output', () => {
     const f = fixture(); const result = observe(f);
     expect(result.status, result.stderr).toBe(0);
@@ -92,17 +114,21 @@ describe('observational candidate evidence', () => {
     const result = check(f, git(f.root, 'rev-parse', 'HEAD'));
     expect(result.status).toBe(1); expect(result.stdout).toMatch(/cannot be remapped/);
   });
-  it('retains actual failed and signalled native children as rejected evidence', () => {
+  it('retains actual failed and timed-out native children as rejected evidence', () => {
     const failed = fixture("import {test} from 'node:test';test('failed',()=>{throw Error('controlled failure')});");
     expect(observe(failed).status).toBe(1);
     expect(receipt(failed.out).child.exitCode).toBe(1);
     expect(receipt(failed.out).report.summary.counts.failed).toBe(1);
-    const signalled = fixture("import {test} from 'node:test';test('held',()=>new Promise(()=>{}));setInterval(()=>{},1000);");
-    const result = run('observe', 'node-test', '--root', signalled.root, '--out', signalled.out, '--timeout-ms', '500', '--', '--test-isolation=none', 'owner.mjs');
+    const interrupted = fixture("import {test} from 'node:test';test('held',()=>new Promise(()=>{}));setInterval(()=>{},1000);");
+    const result = run('observe', 'node-test', '--root', interrupted.root, '--out', interrupted.out, '--timeout-ms', '500', '--', '--test-isolation=none', 'owner.mjs');
     expect(result.status).toBe(1);
-    expect(receipt(signalled.out).child.timedOut).toBe(true);
-    expect(receipt(signalled.out).child.signal).toBe('SIGTERM');
-    expect(check(signalled).status).toBe(1);
+    const saved = receipt(interrupted.out);
+    // Node may handle SIGTERM and report a numeric exit code with a null signal.
+    expect(saved.child.timedOut).toBe(true);
+    expect(saved.validation).toMatchObject({ ok: false, state: 'rejected' });
+    expect(saved.validation.reasons).toContain('Observed child exceeded its explicit timeout');
+    const checked = check(interrupted); expect(checked.status).toBe(1);
+    expect(JSON.parse(checked.stdout)).toMatchObject({ ok: false, state: 'rejected' });
   });
   it('rejects missing/incomplete count reports and a recorded spawn error rather than trusting a zero exit', () => {
     const f = fixture(); expect(observe(f).status).toBe(0);
@@ -146,7 +172,7 @@ describe('observational candidate evidence', () => {
   });
   it('refuses Vitest watch/single-run overrides and report replay before creating evidence or starting a native runner', () => {
     const f = fixture();
-    symlinkSync(join(checkout, 'node_modules'), join(f.root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    linkVitest(f.root);
     for (const flag of ['--mergeReports=missing-replays', '--merge-reports=missing-replays', '-w', '--standalone', '--run=false', '--no-run']) {
       const result = run('observe', 'vitest', '--root', f.root, '--out', f.out, '--', flag, 'owner.mjs');
       expect(result.status).toBe(1);
@@ -176,7 +202,7 @@ describe('observational candidate evidence', () => {
   });
   it('records actual Vitest results, preserving unreported cancellations as unknown and refusing absent counts', () => {
     const f = fixture();
-    symlinkSync(join(checkout, 'node_modules'), join(f.root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    linkVitest(f.root);
     writeFileSync(join(f.root, 'native.test.mjs'), "import {test} from 'vitest';test('pass',()=>{});test.skip('skip',()=>{});");
     const result = run('observe', 'vitest', '--root', f.root, '--out', f.out, '--', 'native.test.mjs');
     expect(result.status, result.stdout + result.stderr).toBe(0);
