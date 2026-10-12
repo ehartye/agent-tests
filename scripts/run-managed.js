@@ -9,7 +9,10 @@ import { resolveRuntime } from './managed-runtime.js';
 const source = join(dirname(fileURLToPath(import.meta.url)), '..');
 try {
   const runtime = resolveRuntime(source);
-  const child = spawnSync(process.execPath, [runtime.cli, ...process.argv.slice(2)], { stdio: 'inherit', windowsHide: true });
+  const args = process.argv.slice(2);
+  const observation = args[0] === 'candidate-evidence';
+  const entrypoint = observation ? join(runtime.root, 'scripts', 'candidate-evidence.mjs') : runtime.cli;
+  const child = spawnSync(process.execPath, [entrypoint, ...(observation ? args.slice(1) : args)], { stdio: 'inherit', windowsHide: true });
   if (child.error) throw child.error;
   process.exitCode = child.status ?? 1;
 } catch (error) {
