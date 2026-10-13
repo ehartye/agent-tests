@@ -58,6 +58,7 @@ function ruleCounts(file: TestFileRecord): Array<[string, number]> {
 }
 
 const isUnparsed = (file: TestFileRecord): boolean => file.flags.includes('unparsed');
+const hasOpaqueRegistration = (file: TestFileRecord): boolean => file.findings.some(finding => finding.rule === 'wiring.opaque-test-registration');
 
 function rulesCell(file: TestFileRecord): string {
   const counts = ruleCounts(file);
@@ -74,6 +75,7 @@ function rankFiles(files: TestFileRecord[]): TestFileRecord[] {
     .sort(
       (a, b) =>
         Number(isUnparsed(b.file)) - Number(isUnparsed(a.file)) ||
+        Number(hasOpaqueRegistration(b.file)) - Number(hasOpaqueRegistration(a.file)) ||
         b.distinct - a.distinct ||
         b.file.findings.length - a.file.findings.length ||
         b.file.cost.agent - a.file.cost.agent ||
@@ -121,10 +123,11 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
   out.push(
     '',
     '**How to read this.** Findings are evidence, not verdicts: judge each one against the risk map and the test itself.',
-    'Files are ranked with unparsed files first, then by distinct finding rules, then total findings, then agent tokens.',
+    'Files are ranked with unparsed files first, then opaque registration candidates, then by distinct finding rules, total findings and agent tokens.',
     'Agent is the estimated tokens in the file. Churn/edits counts edits that touched the test without the code it covers, over all edits that modified it; n/a means no git history or no resolvable subject.',
     'Wait time and CI minutes need a timed run and are not in this report.',
     'Flags: tautological, snapshot-only, mock-only, no-direct-assertions (possibly assertions in a helper), unparsed.',
+    'Recognized declarations are static calls, not native expanded case counts. A count marked +? has opaque helper registration candidates; inspect their provider before treating it as complete.',
     '',
     '## Findings by category',
     '',
@@ -146,7 +149,7 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
     out.push('| File | Tier | Lane | Tests | Asserts | Flags | Agent tokens | Churn/edits | Rules |', '|---|---|---|---|---|---|---|---|---|');
     for (const file of shown) {
       const tier = file.tier ?? (report.riskMapPresent ? 'untiered' : 'no map');
-      const structure = isUnparsed(file) ? ['?', '?'] : [String(file.tests), String(file.assertions)];
+      const structure = isUnparsed(file) ? ['?', '?'] : [`${file.tests}${hasOpaqueRegistration(file) ? '+?' : ''}`, String(file.assertions)];
       const churn = file.cost.churn !== null && file.cost.edits !== null ? `${file.cost.churn}/${file.cost.edits}` : 'n/a';
       out.push(
         `| ${cell(file.file)} | ${tier} | ${file.tags.lane ?? '-'} | ${structure[0]} | ${structure[1]} | ${cell(file.flags.join(', ')) || '-'} | ${file.cost.agent} | ${churn} | ${rulesCell(file)} |`,

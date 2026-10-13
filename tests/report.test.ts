@@ -41,6 +41,15 @@ function report(overrides: Partial<EvidenceReport> = {}): EvidenceReport {
   };
 }
 
+it('labels opaque factory counts as incomplete while preserving evidence JSON', () => {
+  const markdown = renderMarkdown(report({ files: [record('tests/sources.test.js', {
+    tests: 0, findings: [finding({ category: 'wiring', file: 'tests/sources.test.js',
+      rule: 'wiring.opaque-test-registration', evidence: 'sourceTest' })],
+  })] }));
+  expect(markdown).toContain('0+?');
+  expect(markdown).toContain('Recognized declarations');
+});
+
 /** The text of one `##` section, from its heading to the next `##` heading. */
 function section(markdown: string, heading: string): string {
   const start = markdown.indexOf(`## ${heading}`);

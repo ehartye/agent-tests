@@ -87,6 +87,11 @@ CI charges and statistical flakiness are not measured; remediation and wider run
 Version 0.3.1 adds explicit Svelte component subjects and advisory evidence for full test suites chained into build scripts,
 based on the APcademy Government case study.
 
+Version 0.3.2 marks possible helper-based test registrations as incomplete inventory (`+?` in Markdown), preserving the
+JSON count of recognized declarations. Its skills distinguish audit-only requests from authorized implementation and
+shipping, keep full merge checks until a replacement is verified, and measure cold selection/setup cost before choosing
+an edit lane. Current invalid-input behavior is separate from old-format preservation obligations.
+
 ## Known limitations
 
 - Pattern detectors also match strings inside tests that are about those patterns, including this repository's own tests.
@@ -105,6 +110,10 @@ based on the APcademy Government case study.
   no resolvable subject. A test's creation commit is not counted as an edit.
 - The parser reads files through TypeScript 7's JS API, which its authors label `unstable`; the dependency is pinned
   exactly and only `src/parse.ts` uses it. A file it cannot parse is reported with the `unparsed` flag, not skipped.
+- Test counts are recognized static declarations, not native expanded cases. `wiring.opaque-test-registration` flags
+  literal-title curried calls with inline callbacks at module/recognized-suite scope; the provider is unknown and
+  `+?` marks that uncertainty. Ordinary callback APIs can match, and other helper shapes can remain undetected.
+  Inspect the helper and compare the native inventory before judging a zero count or omitting checks.
 - Drift detection ignores a one-segment catch-all such as `src/**`, so a new directory under `src` is reported until it
   has its own area; add areas by hand for anything nested deeper than the draft looks.
 

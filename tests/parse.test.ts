@@ -38,6 +38,25 @@ describe('store', () => {
 });
 `;
 
+describe('opaque test factory candidates', () => {
+  it('preserves uncertainty for top-level and describe-nested helper registrations', () => {
+    const parsed = parseTestFile('factory.test.js', `import { test, expect, describe } from 'vitest';
+      sourceTest(['wiki.md'])('quoted content', () => { expect(1).toBeTruthy(); });
+      describe('sources', () => { sourceTest([])('nested content', async () => {}); });
+      test('known', () => { ordinaryFactory()('not a registration', () => {}); });`);
+    expect(parsed.tests.map(test => test.name)).toEqual(['known']);
+    expect(parsed.opaqueTestCalls?.map(call => call.callee)).toEqual(['sourceTest', 'sourceTest']);
+  });
+
+  it('does not flag ordinary helper bodies or native curried declarations', () => {
+    const parsed = parseTestFile('ordinary.test.js', `function helper() { curry()('value', () => {}); }
+      class Ordinary { method() { curry()('value', () => {}); } }
+      test.skipIf(false)('native', () => {});
+      const value = mapper()('value', () => {});`);
+    expect(parsed.opaqueTestCalls).toBeUndefined();
+  });
+});
+
 describe('TypeScript path aliases as subjects', () => {
   it('does not substitute a JS module for a missing explicit Svelte component', () => {
     const root = makeTree({ 'src/Screen.svelte.js': '' });

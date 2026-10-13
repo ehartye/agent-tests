@@ -17,6 +17,20 @@ const expected = JSON.parse(readFileSync(join(FIXTURES, 'bloated', 'expected.jso
 
 const everyFinding = (report: EvidenceReport) => [...report.files.flatMap(file => file.findings), ...report.projectFindings];
 
+it('reports opaque helper registration instead of implying zero native coverage', () => {
+  const root = makeTree({
+    'tests/sources.test.js': `import { expect } from 'vitest';
+      sourceTest(['external.md'])('fidelity', () => { expect(true).toBeTruthy(); });`,
+  });
+  const file = scan(root, { commitLimit: 1 }).files[0]!;
+  expect(file.tests).toBe(0); // recognized declarations only, never invented native cases
+  expect(file.findings).toContainEqual(expect.objectContaining({
+    rule: 'wiring.opaque-test-registration', line: 2,
+    evidence: 'sourceTest',
+  }));
+  expect(EvidenceReport.safeParse(scan(root, { commitLimit: 1 })).success).toBe(true);
+});
+
 describe('scan of the bloated fixture', () => {
   const report = scan(join(FIXTURES, 'bloated'), { commitLimit: 1 });
 
