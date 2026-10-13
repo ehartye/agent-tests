@@ -61,6 +61,29 @@ function position(value) {
   return {...value};
 }
 
+export function validateJson(input) { return copy(input); }
+
+export function validateProvenance(input) {
+  const identity = copy(input);
+  fields(identity, ['source','buildRef'], 'provenance'); fields(identity.source, ['revision','inputsRef'], 'source provenance');
+  ref(identity.source.revision, 'source revision'); ref(identity.source.inputsRef, 'source inputs ref'); ref(identity.buildRef, 'build ref');
+  return identity;
+}
+
+/** Adapters may admit static result metadata before setup, subscriptions or actions. */
+export function validateVerdict(input) {
+  const result = copy(input);
+  fields(result, ['passed','targetReached','checks'], 'verdict');
+  assert(typeof result.passed === 'boolean' && typeof result.targetReached === 'boolean' && Array.isArray(result.checks), 'Verdict must contain explicit booleans/checks');
+  for (const check of result.checks) { fields(check, ['id','passed'], 'verdict check'); text(check.id, 'check id'); assert(typeof check.passed === 'boolean', 'Check must explicitly pass or fail'); }
+  return result;
+}
+
+export function validateEvidence(input) {
+  assert(Array.isArray(input), 'Evidence must be an explicit JSON array');
+  return copy(input);
+}
+
 /** Validate the common envelope. The adapter owns validation/resolution of local policy and scenario options. */
 export function validateConfig(input, capabilities) {
   const config = copy(input);
@@ -104,9 +127,7 @@ export function validateConfig(input, capabilities) {
 export function createRunRecorder(input, {capabilities, provenance, start}) {
   const admitted = copy(capabilities), config = validateConfig(input, admitted), initial = position(start);
   assert(initial.beat === 0 && initial.wallMs === 0, 'Run starts at beat/wall zero with explicitly declared sim origin');
-  const identity = copy(provenance);
-  fields(identity, ['source','buildRef'], 'provenance'); fields(identity.source, ['revision','inputsRef'], 'source provenance');
-  ref(identity.source.revision, 'source revision'); ref(identity.source.inputsRef, 'source inputs ref'); ref(identity.buildRef, 'build ref');
+  const identity = validateProvenance(provenance);
   const pending = new Map(), tail = [], byIntent = {}, refusals = {};
   let last = initial, observedBeat = initial.beat, currentIntent = null, phase = 'running', termination = null, verdict = null, native = null, evidence = [];
   let sequence = 0, actionSequence = 0, attempted = 0, accepted = 0, refused = 0, fallbacks = 0, omitted = 0;
@@ -133,8 +154,7 @@ export function createRunRecorder(input, {capabilities, provenance, start}) {
     tail: {events: tail, omitted, coverage: omitted ? 'tail' : 'full'}, evidence, native,
   }, 64 * 1024 * 1024);
   const attachEvidence = ({evidence: refs, native: nativeReport}) => {
-    assert(Array.isArray(refs), 'Evidence must be an explicit JSON array');
-    const nextEvidence = copy(refs), nextNative = copy(nativeReport);
+    const nextEvidence = validateEvidence(refs), nextNative = copy(nativeReport);
     evidence = nextEvidence; native = nextNative;
   };
   return {
@@ -195,10 +215,7 @@ export function createRunRecorder(input, {capabilities, provenance, start}) {
     },
     finish({reason, detail, at, verdict: requested, evidence: refs, native: nativeReport}) {
       active(); oneOf(reason, REASONS, 'termination'); text(detail, 'termination detail', 1024);
-      const next = checkAt(at), result = copy(requested);
-      fields(result, ['passed','targetReached','checks'], 'verdict');
-      assert(typeof result.passed === 'boolean' && typeof result.targetReached === 'boolean' && Array.isArray(result.checks), 'Verdict must contain explicit booleans/checks');
-      for (const check of result.checks) { fields(check, ['id','passed'], 'verdict check'); text(check.id, 'check id'); assert(typeof check.passed === 'boolean', 'Check must explicitly pass or fail'); }
+      const next = checkAt(at), result = validateVerdict(requested);
       attachEvidence({evidence: refs, native: nativeReport});
       const invalid = ['input-failure','error','cancelled'].includes(reason) || pending.size > 0 || result.checks.some(check => !check.passed) || (reason === 'target' && !result.targetReached);
       result.passed = result.passed && !invalid; last = next; phase = 'finished'; termination = {reason, detail, at: next}; verdict = result;

@@ -92,6 +92,11 @@ cooperative budgets, confirmed action outcomes, refusals and fallbacks. `snapsho
 `summarizeRun` produces a compact text summary. Game adapters retain their directors, rules,
 local option validation, stop precedence, clocks, watchdogs and cleanup.
 
+Adapters can preflight JSON observation options, provenance, static checks and artifact references with
+`validateJson`, `validateProvenance`, `validateVerdict` and `validateEvidence` before setup or subscriptions.
+These return detached, validated JSON data; native callbacks remain outside the observation data.
+The recorder uses those same validators when accepting final reports.
+
 Call `attempt` before delivery, retain its action ID, then `confirm` only after observing the actual
 result. A forbidden alternate route records input failure and throws before delivery.
 Adapters can then call `attachEvidence({evidence, native})` with actual artifact references; this

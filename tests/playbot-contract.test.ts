@@ -1,11 +1,11 @@
 import {existsSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {beforeAll, describe, expect, it} from 'vitest';
-let createRunRecorder: any, validateConfig: any, summarizeRun: any;
+let createRunRecorder: any, validateConfig: any, summarizeRun: any, validateVerdict: any, validateEvidence: any, validateProvenance: any, validateJson: any;
 beforeAll(async () => {
   const module = new URL('../scripts/playbot-contract.mjs', import.meta.url);
   expect(existsSync(fileURLToPath(module)), 'producer provides the portable Playbot contract').toBe(true);
-  ({createRunRecorder, validateConfig, summarizeRun} = await import(module.href));
+  ({createRunRecorder, validateConfig, summarizeRun, validateVerdict, validateEvidence, validateProvenance, validateJson} = await import(module.href));
 });
 
 const capabilities = {simUnits: ['test-tick'], actions: ['commands', 'native-driver', 'ordinary-input'], fallbackAccounting: true};
@@ -26,6 +26,44 @@ const recorder = (overrides: Record<string, unknown> = {}) => createRunRecorder(
 const verdict = (passed = true, targetReached = true) => ({passed, targetReached, checks: [{id: 'actual-state', passed}]});
 
 describe('portable Playbot run evidence', () => {
+  it('preflights supplied provenance before game setup without fabricating a preview run', () => {
+    expect(typeof validateProvenance).toBe('function');
+    const input = {source: {revision: 'actual-source', inputsRef: null}, buildRef: null};
+    const admitted = validateProvenance(input); input.source.revision = 'mutated';
+    expect(admitted.source.revision).toBe('actual-source');
+    expect(() => validateProvenance({source: {revision: 12, inputsRef: null}, buildRef: null})).toThrow(/ref|revision/);
+    expect(() => validateProvenance({...provenance, unknown: true})).toThrow(/unknown/);
+  });
+
+  it('preflights detached JSON observation options while leaving native callbacks outside that data', () => {
+    expect(typeof validateJson).toBe('function');
+    let reads = 0;
+    const input = Object.defineProperty({}, 'budget', {enumerable: true, get() {reads++; return {beats: 2};}});
+    expect(() => validateJson(input)).toThrow(/JSON/); expect(reads).toBe(0);
+    expect(() => validateJson({callback: () => true})).toThrow(/JSON/);
+    const opts = {budget: {beats: 2}}, admitted = validateJson(opts); opts.budget.beats = 99;
+    expect(admitted.budget.beats).toBe(2);
+  });
+
+  it('preflights immutable verdict metadata before an adapter installs observers or runs actions', () => {
+    expect(typeof validateVerdict).toBe('function');
+    const input = verdict(), admitted = validateVerdict(input);
+    input.checks[0].passed = false;
+    expect(admitted.checks[0].passed).toBe(true);
+    expect(() => validateVerdict({...verdict(), checks: [{id: 'actual-state', passed: 'yes'}]})).toThrow(/pass|boolean/);
+    expect(() => validateVerdict({...verdict(), misspelled: true})).toThrow(/unknown/);
+  });
+
+  it('preflights explicit JSON evidence without invoking getters or retaining mutable caller values', () => {
+    expect(typeof validateEvidence).toBe('function');
+    expect(() => validateEvidence({})).toThrow(/array/);
+    let reads = 0;
+    const bad = Object.defineProperty({}, 'ref', {enumerable: true, get() {reads++; return 'expensive';}});
+    expect(() => validateEvidence([bad])).toThrow(/JSON/); expect(reads).toBe(0);
+    const input = [{ref: 'original.json'}], admitted = validateEvidence(input);
+    input[0].ref = 'mutated'; expect(admitted).toEqual([{ref: 'original.json'}]);
+  });
+
   it('accepts signed integer seeds without changing native seed semantics', () => {
     expect(recorder({seeds: {game: -1, bot: -7}}).snapshot().config.seeds).toEqual({game: -1, bot: -7});
   });

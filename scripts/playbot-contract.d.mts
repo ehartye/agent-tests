@@ -39,5 +39,9 @@ export interface RunRecorder {
   finish(result: {reason: TerminationReason; detail: string; at: RunPosition; verdict: Verdict; evidence: JsonValue[]; native: JsonValue}): RunResult;
 }
 export declare function validateConfig(input: unknown, capabilities: AdapterCapabilities): RunConfig;
+export declare function validateJson(input: unknown): JsonValue;
+export declare function validateProvenance(input: unknown): Provenance;
+export declare function validateVerdict(input: unknown): Verdict;
+export declare function validateEvidence(input: unknown): JsonValue[];
 export declare function createRunRecorder(input: unknown, options: {capabilities: AdapterCapabilities; provenance: Provenance; start: RunPosition}): RunRecorder;
 export declare function summarizeRun(result: RunResult): string;
