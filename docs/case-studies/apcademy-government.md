@@ -53,6 +53,47 @@ validates these two observed outcomes. This does not measure app test duration, 
 
 These are follow-up investigations rather than implemented runner/config tracing or safe affected-only selection.
 
+## Applied follow-up and version 0.3.2
+
+The owner subsequently authorized APcademy changes and shipping. The app's first testing refactor landed in
+[PR #56](https://github.com/ehartye/apcademy-government/pull/56), commit `793834c`. The confirmed phase is **test**,
+despite evaluation deployments. Current integrity remains critical; disposable student history does not automatically
+require migration shims. No student history or runtime formats were changed.
+
+The native client suite retained 2,206 cases across separate Node, DOM and external-source projects; the server's 124
+cases remain a distinct runner. Ten source files register 18 native cases through `sourceTest(paths)(title, callback)`.
+Version 0.3.1's static declaration count was zero in all ten, despite finding their assertions. Version 0.3.2 flags all
+ten with `wiring.opaque-test-registration` and displays `0+?`; JSON still records zero recognized declarations. Fifteen
+literal-title callback call sites are uncertainty evidence, not an invented 18-case provider implementation. Dynamic
+titles and other shapes can remain undetected, while ordinary curried callback APIs can match. Inspect native inventory.
+
+The further APcademy cost review retained unique generator/schema, source-fidelity, scoring and real-render seams.
+It isolates an unrelated citation-label catalog in a missing-grid failure test, with a throwing question-bank sentinel
+and a guard-removal mutation check. A 602,232-byte prepared synthetic PNG preserves the former 2400x1500 RGB pixels
+(decoded SHA-256 `8fdd3f514a63ee29c19ff82095daa1c3c0d75ce652c743f4ad2bf63432c2f366`) and generator recipe; actual
+native resize/JPEG/stale-file/repeat-port assertions remain. Four integration cases have bounded 15-second capacity
+limits after observed five-second timeouts; default timeouts, worker/pool settings, retries and assertions are unchanged.
+
+The executable edit command retains four filesystem guards, runs the native server for shared inputs and falls back
+to full tests for unknown/configuration/fixture/deleted paths. Direct test edits bypass cold dependency graphs.
+One direct-file run passed 61 cases in 0.402 s native / 1.23 s command wall. A cold related prototype took 35.27 s for
+114 related cases plus 59 guards in two processes; the final script deduplicates their union into one native process.
+These scopes differ. A loaded baseline failed two timeouts; slower worker/pool experiments were rejected. Neither is a
+successful speed comparison. Complete merge/release checks remain; no generic lane selector shipped in agent-tests.
+
+Final portable APcademy release verification passed 2,209 client cases, skipped 18 unavailable-source cases, passed
+124 server cases, validated explanations and built the bundle. Client native duration was 13.10 s; complete release
+wall was 20.62 s. This is one observation under changing host load, not statistical speed or flakiness evidence.
+Two preexisting live-wiki comparisons differ from independently changing canonical content. Missing-source portable
+checks do not certify fidelity, and content corrections were outside this testing refactor.
+
+Plugin skills now continue authorized implementation/shipping after an audit, keep audit-only requests read-only,
+and preserve full merge checks until a replacement is verified. Guidance distinguishes current invalid-input behavior
+from old-format obligations and measures cold selection/preparation cost. Independent review found and corrected two
+instruction contradictions: incomplete changed-only merge commands and missing-map writes during read-only audits.
+The [paired guidance probe](apcademy-guidance-probe.md) reports its decisions and limited evidence. All 642 plugin
+stress cases and typecheck pass locally; release checks separately establish distribution status.
+
 ## Architecture advisory: when should build run tests?
 
 The project's full-suite build gate is structurally visible; its duration has not been measured. These alternatives

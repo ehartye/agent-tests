@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, resolve } from 'node:path';
 import { SyntaxKind, type CallExpression, type ImportDeclaration, type Node, type PropertyAccessExpression, type SourceFile } from 'typescript/unstable/ast';
-import { isCallExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isPropertyAccessExpression, isStringLiteral, isTaggedTemplateExpression } from 'typescript/unstable/ast/is';
+import { isArrowFunction, isCallExpression, isFunctionExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isPropertyAccessExpression, isStringLiteral, isTaggedTemplateExpression } from 'typescript/unstable/ast/is';
 import { createVirtualFileSystem } from 'typescript/unstable/fs';
 import { API } from 'typescript/unstable/sync';
 import { isSupportPath, isTestPath } from './discover.ts';
@@ -16,6 +16,8 @@ export interface ParsedTest {
 }
 
 export interface ParsedFile {
+  /** Possible helper registrations, whose provider semantics are not known statically. */
+  opaqueTestCalls?: Array<{ callee: string; line: number }>;
   imports: string[];
   tests: ParsedTest[];
   /** Every describe and it/test title, for marker detection. */
@@ -92,6 +94,20 @@ function isDeclaration(call: CallExpression, name: string): boolean {
   return call.arguments.length >= 2 || (call.arguments.length === 1 && name.endsWith('.todo'));
 }
 
+/** Only expression statements at module/suite scope resemble registrations. */
+function registrationScope(node: Node): boolean {
+  if (node.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if ([SyntaxKind.FunctionDeclaration, SyntaxKind.MethodDeclaration, SyntaxKind.Constructor,
+      SyntaxKind.GetAccessor, SyntaxKind.SetAccessor].includes(parent.kind)) return false;
+    if (isArrowFunction(parent) || isFunctionExpression(parent)) {
+      const caller = parent.parent;
+      if (!caller || !isCallExpression(caller) || !SUITE_CALLEE.test(calleeName(caller.expression))) return false;
+    }
+  }
+  return true;
+}
+
 /** The expect(...) call at the root of `expect(x).not.toBe(y)` style chains, or null. */
 function expectRoot(callee: PropertyAccessExpression): CallExpression | null {
   let node: Node = callee.expression;
@@ -157,6 +173,13 @@ function extractFacts(sourceFile: SourceFile, text: string): ParsedFile {
         out.titles.push({ text: title, line: next.line });
       } else if (SUITE_CALLEE.test(name) && isDeclaration(node, name)) {
         out.titles.push({ text: titleOf(node), line: lineOf(node) });
+      } else if (!current && isCallExpression(callee) && specifier
+        && (isStringLiteral(specifier) || isNoSubstitutionTemplateLiteral(specifier))
+        && node.arguments[1] && (isArrowFunction(node.arguments[1]) || isFunctionExpression(node.arguments[1]))
+        && registrationScope(node)) {
+        // A curried helper may register tests, or may be an ordinary callback API.
+        // Record that uncertainty; do not invent a test/provider/native count.
+        (out.opaqueTestCalls ??= []).push({ callee: name, line: lineOf(node) });
       } else if (MOCK_CALLEE.test(name)) {
         out.mockCalls++;
       } else if (EXPECT_CALLEE.test(name)) {

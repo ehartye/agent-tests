@@ -23,6 +23,11 @@ is ordinary JavaScript. Confirm what each command actually includes before propo
    preparation within one test run when every assertion remains independent. Inspect collection-time work in suite
    declarations: a filtered test can still prepare every scenario before its callbacks run. Reporter assertion spans
    may omit this preparation, so compare actual command wall time and collection before blaming a fast assertion.
+   Cold related-test selection can build graphs for many unselected files. Measure that overhead and avoid running
+   changed tests again after they were already selected through source dependencies. A failure-path test can isolate
+   an unrelated data catalog while real rendering/integration tests retain ownership of its behavior. A deterministic
+   expensive synthetic fixture may be prepared once outside test callbacks: retain its recipe, input/output identity,
+   bounded artifact size and the real consumer assertions. Moving work to collection merely hides callback cost.
 3. **Pipeline diversity.** Inventory actual entrypoints, producer versions, manifests, outputs and postprocessors.
    Many manifest files can describe one pipeline; several renderer techniques do not automatically mean several
    independent contracts. Count verified implementations, not names or filenames. Follow one representative output
@@ -37,6 +42,9 @@ is ordinary JavaScript. Confirm what each command actually includes before propo
 6. **Process boundaries.** Identify fixed resources, shared mutable files, hardware assumptions and incomplete teardown
    that force serialization or expensive retries. Suggest isolation before adding workers. Never treat reruns as a
    repair for nondeterministic fixtures.
+   Worker-count or pool changes are experiments, not default fixes. Compare the same complete scope and installation,
+   record competing work/resource limits and preserve failures. A failed baseline is not a successful speed comparison;
+   reject a setting that worsens measured feedback rather than raising timeouts globally or skipping assertions.
 
 ## Compare concrete alternatives
 

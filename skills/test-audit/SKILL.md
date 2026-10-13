@@ -8,7 +8,12 @@ when_to_use: Use when an existing test suite or its CI feels too big, slow or re
 The goal is efficiency: protection per unit of cost. A slow test that guards data loss is worth keeping;
 a fast test that repeats three others is waste. Speed alone never decides a verdict.
 
-The CLI gathers evidence and never judges. You judge, using the rubric below. Do not edit tests in this skill.
+The CLI gathers evidence and never judges. You judge, using the rubric below. The audit phase is read-only.
+
+An audit-only request ends with findings. If the owner also authorized applying or shipping improvements, finish
+the audit and continue the approved work under the development workflow; do not add another approval pause or
+leave supported actions as an unspecified future phase. Authorization does not justify pruning without replacement
+coverage. Deliver the measured change, its verification and any precise remaining limitation.
 
 `<plugin-root>` is the directory that holds scripts/run-managed.js, the parent of the skills directory (two levels
 up from this skill's directory). In Codex, resolve it from the SKILL.md file you loaded, not from the current directory.
@@ -21,16 +26,17 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    - Missing: run `node "<plugin-root>/scripts/run-managed.js" risk-draft --root "<project>"`, which prints a draft and
      writes nothing, and show the owner the draft. Ask three things: the project phase (`dev` pre-release, `test`
      stabilizing, `production` released), who consumes this code (`consumers`; an empty list means nobody), and which
-     areas are critical, standard or low. Never write the file before the owner has confirmed all three. Then run the
-     same command with `--write` to create the file, edit `.testing/risk.yml` to apply their answers (phase, consumers,
-     tiers), and rerun `report` to validate it; an `E_RISKMAP` error names the bad field.
+     areas are critical, standard or low. For audit-only work, report the draft and risk gaps without writing it.
+     When map creation or implementation is authorized and those decisions are confirmed, run the same command with
+     `--write`, edit `.testing/risk.yml` to apply the answers, and rerun `report` to validate it; an `E_RISKMAP` error
+     names the bad field. Reuse decisions already confirmed in the session.
    - Present: read it. Treat `phase`, `consumers` and `areas` as the owner's decisions.
 3. **Evidence.** `node "<plugin-root>/scripts/run-managed.js" report --root "<project>"` prints a ranked Markdown view
    (add `--max-files <n>` for a longer table); `scan` prints the full JSON.
    - The report opens with a header and category counts. Project findings (CI, hooks, scripts, agent instructions,
      risk-map gaps) follow, then a table of test files.
-   - The table ranks unparsed files first (the tool could not read their structure, so read those directly), then files
-     with the most distinct finding rules. The Rules column shows which rules fired. Several `redundancy.shared-subject`
+   - The table ranks unparsed files first, then possible opaque registrations (inventory may be incomplete), then files
+     with the most distinct finding rules. Read the first two directly. The Rules column shows which rules fired. Several `redundancy.shared-subject`
      findings are weak evidence; one `worktree.*` or `shim.*` rule on a real hazard is strong.
    - This version never runs the tests, so wait time and CI minutes are absent. Agent cost is estimated tokens in the
      file. Churn/edits is edits that touched the test without the code it covers, over all edits that modified it;
@@ -52,6 +58,11 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    Missing risk tiers prevent file verdicts, but do not prevent this structural advice. Do not change product architecture.
 6. **Judge** each remaining file with the rubric, then write the verdict table.
 
+Treat `wiring.opaque-test-registration` as an inventory gap before assigning a file verdict. Its `+?` report count
+means a literal-title curried callback may register tests through an unknown helper; inspect that helper and the native
+runner's inventory. The numeric JSON count remains recognized static declarations, not expanded native cases.
+Do not infer that a file has no tests from zero recognized declarations, or that no warning proves discovery complete.
+
 ## Rubric
 
 Ask in this order. Stop at the first question that settles it.
@@ -60,9 +71,10 @@ Ask in this order. Stop at the first question that settles it.
    verdict: report it as a risk-map gap and do not guess.
 2. **Is the code kept for an old format or API, and does a consumer exist?** Read the code under test first. A runtime
    fallback for missing input is current behavior, not a shim: judge it with questions 3 to 6. A shim, compat, legacy or
-   migration test protects a consumer. Before you accept `consumers: []` as "nobody", look for the kinds of consumer the
+   migration test protects a declared preservation obligation. Before you accept `consumers: []` as "nobody", look for the kinds of consumer the
    doctrine counts: other repositories, plugin or package installs from this repo, stored data in the old format and
-   a published API. With none of those, nobody depends on the old path and the test guards nothing.
+   a published API. Confirm obligations rather than assuming every stored test record needs preservation. With no
+   obligation, judge whether the old path has any current behavior worth protecting; surface intentional history loss.
 3. **Does something cheaper already catch it?** Compare the files in a cluster and the duplicate titles and repeated
    sweeps. Name the test that is the single owner of the behavior.
 4. **Is the test sound?** `tautological`, `snapshot-only`, `mock-only` and `no-direct-assertions` flags mean the test
@@ -107,4 +119,5 @@ Never recommend deleting a critical-tier test without naming its replacement.
    profile can measure one run (see references/node-profiling.md). CI minutes and statistical flakiness remain unmeasured.
 7. Architecture advisory with evidence, alternatives and replacement protection, separate from per-file verdicts.
 
-Stop after this output and let the owner decide what to apply.
+For an audit-only request, stop after this output and let the owner decide what to apply. For already-authorized
+implementation, use the findings to complete that scope, verify the full replacement checks and report the result.

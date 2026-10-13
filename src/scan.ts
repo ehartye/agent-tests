@@ -129,6 +129,14 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
       ? 'No consumers declared in the risk map.'
       : `Consumers declared in the risk map: ${map.consumers.join(', ')}. Check whether any still needs this path.`;
   for (const file of loaded) {
+    attach((file.parsed.opaqueTestCalls ?? []).map(call => ({
+      category: 'wiring' as const,
+      rule: 'wiring.opaque-test-registration',
+      file: file.rel,
+      line: call.line,
+      message: 'A curried helper resembles test registration, but its provider is unknown. Recognized declarations may undercount this file; inspect the helper or compare a native inventory.',
+      evidence: call.callee,
+    })));
     attach(detectShims(file.rel, file.parsed).map(finding => ({ ...finding, note: shimNote })));
     attach(detectWorktreeHazards(file.rel, file.lines));
   }

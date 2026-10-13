@@ -50,7 +50,8 @@ export function serializeRiskMap(map: RiskMap): string {
   const header =
     '# agent-tests risk map. Confirm or edit, then commit it.\n' +
     '# First matching area wins, so list specific areas before broad ones.\n' +
-    '# consumers: who depends on this code? An empty list means compat and fallback tests guard nobody.\n';
+    '# consumers: who depends on this code, and which compatibility obligations exist?\n' +
+    '# Current missing/invalid-input handling can need coverage without legacy consumers.\n';
   return header + stringify(map, { lineWidth: 0 });
 }
 

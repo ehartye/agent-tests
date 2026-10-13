@@ -24,6 +24,10 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
 Ask the owner which phase the project is in. Moving to the next phase is an explicit step: fill in `consumers`,
 change `phase`.
 
+Deployment for evaluation does not establish production maturity. Record the owner's phase and compatibility
+obligations: current integrity can be critical while disposable test history has no old-format preservation promise.
+Surface intentional history loss; do not infer migration shims merely because stored records or paired devices exist.
+
 ## 2. Write the risk map
 
 `node "<plugin-root>/scripts/run-managed.js" risk-draft --root "<project>"` prints a draft of `.testing/risk.yml` from
@@ -51,10 +55,15 @@ Typecheck and lint are the cheapest checks: they take seconds, need no test to m
 
 Starting scripts until the lane tooling exists:
 
-- vitest: edit `vitest related --run <changed files>`, merge `vitest run --changed origin/main`, full `vitest run`.
-  `--changed` needs an `origin/main` ref; with no remote yet, `vitest run --changed` covers uncommitted changes.
-- jest: edit `jest --findRelatedTests <changed files>`, merge `jest --changedSince=origin/main`, full `jest`.
-  `--onlyChanged` sees uncommitted changes only, so it is not a merge lane.
+Measure the entire candidate command, including dependency-graph collection and filesystem/subprocess checks,
+before choosing it as a faster lane. A cold `related` run can cost more than a direct file or full-project run.
+Preserve known non-imported inputs with explicit guards or conservative fallback; `related`/`--changed` is not
+complete selection evidence by itself. Keep full merge/release checks until their replacement is established.
+
+- vitest: edit `vitest related --run <changed files>`, merge/full `vitest run`.
+  `vitest run --changed origin/main` is optional edit feedback across a branch, not a complete merge gate.
+- jest: edit `jest --findRelatedTests <changed files>`, merge/full `jest`.
+  `--changedSince=origin/main` and `--onlyChanged` are optional edit feedback, not complete merge gates.
 
 Make the `test` script a single run: `vitest run`, or `jest` without `--watch`. Bare `vitest` can start watch mode in an
 interactive terminal, which blocks an agent that runs it there.
@@ -92,8 +101,8 @@ Agents write most tests, so prevent bloat at the source. Add this block to the p
     - One owner per invariant. Before adding a test, search for an existing test of the same behavior and extend it.
     - Test behavior at seams (public functions, inputs, persistence, transfers), not implementation details. Do not
       assert on mocks alone, snapshot everything, or assert a value against itself.
-    - Pre-release usually means no consumers: no backward-compatibility, legacy-format or fallback tests unless
-      `consumers` in the risk map names who needs them. The risk map decides.
+    - Add old-format compatibility tests only for declared obligations. Current missing/invalid-input handling is
+      ordinary behavior and can need coverage even with no legacy consumers. The risk map decides.
     - Tests must not depend on the checkout: no fixed ports (use port 0), no fixed temp paths (use mkdtemp), no
       absolute paths, no reading `.git` directly, no writes under the home directory.
     - Declare the lane in the file's first comment, before any import: `/** @lane merge */` (edit, merge, scheduled or
