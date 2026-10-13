@@ -10,9 +10,9 @@ const source = join(dirname(fileURLToPath(import.meta.url)), '..');
 try {
   const runtime = resolveRuntime(source);
   const args = process.argv.slice(2);
-  const observation = args[0] === 'candidate-evidence';
-  const entrypoint = observation ? join(runtime.root, 'scripts', 'candidate-evidence.mjs') : runtime.cli;
-  const child = spawnSync(process.execPath, [entrypoint, ...(observation ? args.slice(1) : args)], { stdio: 'inherit', windowsHide: true });
+  const helper = new Map([['candidate-evidence', 'candidate-evidence.mjs'], ['playbot-export', 'playbot-export.mjs']]).get(args[0]);
+  const entrypoint = helper ? join(runtime.root, 'scripts', helper) : runtime.cli;
+  const child = spawnSync(process.execPath, [entrypoint, ...(helper ? args.slice(1) : args)], { stdio: 'inherit', windowsHide: true });
   if (child.error) throw child.error;
   process.exitCode = child.status ?? 1;
 } catch (error) {
