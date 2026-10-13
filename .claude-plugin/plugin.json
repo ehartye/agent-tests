@@ -1,6 +1,6 @@
 {
   "name": "agent-tests",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Test-efficiency toolkit for coding agents: structure tests by project phase and risk, audit a suite for redundant, shim, worktree-hostile, unwired and over-frequent tests, and remediate with evidence.",
   "author": { "name": "ehartye" },
   "repository": "https://github.com/ehartye/agent-tests",

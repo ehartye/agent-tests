@@ -77,6 +77,36 @@ The checked launcher also accepts `candidate-evidence observe node-test|vitest` 
 explicit standalone helper. Observation runs project tests; scan/report stay static. See the [portable usage and
 input-scope limits](references/candidate-evidence.md) before recording or checking a receipt.
 
+The managed launcher also exports one browser-safe Playbot evidence module:
+
+    node "<plugin-root>/scripts/run-managed.js" playbot-export --out <game-vendor-directory>
+    node "<plugin-root>/scripts/run-managed.js" playbot-export --out <game-vendor-directory> --verify
+
+The three-file pin contains the actual module, its TypeScript declaration, final digests, producer version and source fingerprint.
+Verification is read-only. Export updates only that owned set and refuses foreign output files.
+Games import `playbot-contract.mjs` directly; no tool process runs per bot beat.
+
+`validateConfig` checks the common run envelope against declared adapter capabilities.
+`createRunRecorder` records effective policy, independent game/bot seeds, origin, transport,
+cooperative budgets, confirmed action outcomes, refusals and fallbacks. `snapshot` returns JSON;
+`summarizeRun` produces a compact text summary. Game adapters retain their directors, rules,
+local option validation, stop precedence, clocks, watchdogs and cleanup.
+
+Adapters can preflight JSON observation options, provenance, static checks and artifact references with
+`validateJson`, `validateProvenance`, `validateVerdict` and `validateEvidence` before setup or subscriptions.
+These return detached, validated JSON data; native callbacks remain outside the observation data.
+The recorder uses those same validators when accepting final reports.
+
+Call `attempt` before delivery, retain its action ID, then `confirm` only after observing the actual
+result. A forbidden alternate route records input failure and throws before delivery.
+Adapters can then call `attachEvidence({evidence, native})` with actual artifact references; this
+operation preserves the closed failure verdict, action counters and termination. JSON inputs must
+contain plain, enumerable data without getters, hidden/symbol properties or sparse arrays. Signed
+integer seeds are preserved; each game retains its own seed normalization.
+Ordinary-input admission requires browser transport and complete forbidden-fallback accounting. Diagnostic snapshots
+are sampled, but action/refusal/fallback counters are always collected; omitted tail events are counted.
+Exact serialized bot continuation is unsupported in contract version 1.
+
 ## Status
 
 Version 0.3 includes static audits for TypeScript and JavaScript projects using vitest, jest or Node's test runner,
@@ -91,6 +121,9 @@ Version 0.3.2 marks possible helper-based test registrations as incomplete inven
 JSON count of recognized declarations. Its skills distinguish audit-only requests from authorized implementation and
 shipping, keep full merge checks until a replacement is verified, and measure cold selection/setup cost before choosing
 an edit lane. Current invalid-input behavior is separate from old-format preservation obligations.
+
+Version 0.4 adds the portable Playbot configuration/recording contract and checked pin export described above.
+It supplies evidence and validation, rather than a common game director or input executor.
 
 ## Known limitations
 

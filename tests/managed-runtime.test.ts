@@ -255,6 +255,7 @@ describe('launcher contract', () => {
     'scripts/managed-runtime.js': readFileSync(join(repoRoot, 'scripts/managed-runtime.js'), 'utf8'),
     'scripts/tests.mjs': "console.log('static-cli');\n",
     'scripts/candidate-evidence.mjs': "console.log(JSON.stringify({ script: import.meta.url, args: process.argv.slice(2) }));\n",
+    'scripts/playbot-export.mjs': "console.log(JSON.stringify({ script: import.meta.url, args: process.argv.slice(2) }));\n",
   });
   it('dispatches explicit observation to the exact checked managed script while other CLI routes stay unchanged', () => {
     const root = observationSource(), home = makeTree(), installed = installRuntime(root, { home, ...fakes });
@@ -269,6 +270,28 @@ describe('launcher contract', () => {
     const root = observationSource(), home = makeTree(), installed = installRuntime(root, { home, ...fakes });
     writeFileSync(join(target === 'source' ? root : installed.root, 'scripts/candidate-evidence.mjs'), "console.log('must-not-run');");
     const result = spawnSync(process.execPath, [join(root, 'scripts/run-managed.js'), 'candidate-evidence', 'observe', 'node-test'], { encoding: 'utf8', env: { ...process.env, AGENT_TESTS_HOME: home } });
+    expect(result.status).toBe(1); expect(result.stdout).toBe('');
+    expect(errorOf(result.stderr).code).toBe('E_RUNTIME_MISSING');
+  });
+  it('exports a Playbot pin through the exact checked managed producer', () => {
+    const root = observationSource(), home = makeTree(), installed = installRuntime(root, {home, ...fakes});
+    const result = spawnSync(process.execPath, [join(root, 'scripts/run-managed.js'), 'playbot-export', '--out', 'pin-dir', '--verify'], {encoding: 'utf8', env: {...process.env, AGENT_TESTS_HOME: home}});
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('"script"');
+    expect(JSON.parse(result.stdout)).toEqual({script: pathToFileURL(join(installed.root, 'scripts/playbot-export.mjs')).href, args: ['--out', 'pin-dir', '--verify']});
+  });
+  it('keeps unknown prototype-named commands on the ordinary CLI route', () => {
+    const root = observationSource(), home = makeTree(); installRuntime(root, {home, ...fakes});
+    for (const command of ['constructor', '__proto__']) {
+      const result = spawnSync(process.execPath, [join(root, 'scripts/run-managed.js'), command], {encoding: 'utf8', env: {...process.env, AGENT_TESTS_HOME: home}});
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe('static-cli');
+    }
+  });
+  it.each(['source', 'installed'])('refuses modified %s export code before delivering a pin', target => {
+    const root = observationSource(), home = makeTree(), installed = installRuntime(root, {home, ...fakes});
+    writeFileSync(join(target === 'source' ? root : installed.root, 'scripts/playbot-export.mjs'), "console.log('must-not-export');");
+    const result = spawnSync(process.execPath, [join(root, 'scripts/run-managed.js'), 'playbot-export', '--out', 'pin-dir'], {encoding: 'utf8', env: {...process.env, AGENT_TESTS_HOME: home}});
     expect(result.status).toBe(1); expect(result.stdout).toBe('');
     expect(errorOf(result.stderr).code).toBe('E_RUNTIME_MISSING');
   });
