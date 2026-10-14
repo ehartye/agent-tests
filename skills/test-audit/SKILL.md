@@ -55,6 +55,8 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    fanout, repeated setup, pipeline diversity and verification ownership. Inspect actual producers, complete manifest
    inputs and final output identities before advising consolidation or affected-only reuse. Report concrete alternatives
    with Time, Risk, Complexity, Best practice and Maintainability; label estimates and name replacement coverage.
+   Use its browser phase timing, metadata-port and earned-campaign guidance before proposing reuse or retirement.
+   For served builds/final assets and same-attempt owner evidence, read `<plugin-root>/references/candidate-evidence.md`.
    Missing risk tiers prevent file verdicts, but do not prevent this structural advice. Do not change product architecture.
 6. **Judge** each remaining file with the rubric, then write the verdict table.
 
@@ -80,6 +82,8 @@ Ask in this order. Stop at the first question that settles it.
 4. **Is the test sound?** `tautological`, `snapshot-only`, `mock-only` and `no-direct-assertions` flags mean the test
    may assert nothing real. Confirm by reading it against the rules in `<plugin-root>/references/craft.md`: concrete
    assertions that could fail, real collaborators or fakes before mocks, one behavior per test.
+   For native renderers, apply its nonempty PNG/glyph oracles, causal negative controls, declared control geometry and
+   capture teardown checks. Static findings cannot certify those runtime properties; inspect the native evidence.
 5. **Is it safe beside another worktree?** Fixed ports, fixed temp or database paths, absolute paths, reads of `.git`
    and writes under the home directory break parallel runs. Fix the hazard with a `rewrite`; do not delete or
    quarantine the test for it.

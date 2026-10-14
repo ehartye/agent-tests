@@ -120,6 +120,9 @@ The block above is the short form. When writing or reviewing a test, read the le
 `<plugin-root>/references/craft.md`: a function or class (what to assert, test doubles, test data), a feature
 (integration, contract and end-to-end tests, time, isolation, third-party APIs) or the suite and process (ownership,
 determinism, coverage, legacy code, agent-written tests).
+For native renderer tests, use its independent PNG/glyph expectations, negative controls, declared control IDs and
+coordinate/scroll/clip contracts, and capture teardown on failure. Attribute served builds and final assets using
+`<plugin-root>/references/candidate-evidence.md`; unchanged same-attempt evidence never waives required gates.
 
 ## 7. Audit what exists
 
@@ -127,6 +130,8 @@ For an existing suite, load the test-audit skill instead of restructuring by han
 When structure itself makes testing costly, use `<plugin-root>/references/architecture-cost.md` to advise on boundaries,
 shared setup and generated-asset verification ownership before proposing more tests. Keep this advisory until changes
 are authorized; require complete input and output identities before trusting changed-only asset reuse.
+Use its phase timing before worker-browser reuse, metadata ports and approved earned campaigns; retain full/release
+gates until replacement coverage is proven. Existing retirement approval applies only to its declared obligations.
 
 Evidence for the structure rules (phases, lanes, CI) and where they are opinion is in
 `<plugin-root>/references/doctrine.md`; evidence for the writing rules is in craft.md.
