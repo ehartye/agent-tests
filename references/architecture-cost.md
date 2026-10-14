@@ -18,6 +18,8 @@ is ordinary JavaScript. Confirm what each command actually includes before propo
 1. **Dependency fanout.** Which central modules make apparently unrelated changes affect many tests? A common import
    can be a legitimate public facade; it is not proof of duplication or a reason to split everything. Identify the
    smallest cohesive owner that could expose the behavior directly. Account for coupling introduced by the split.
+   Keep pure metadata helpers behind small metadata ports; do not import or construct a native Game merely to read
+   IDs, dimensions or configuration. Keep a narrow integration owner for the adapter that supplies that metadata.
 2. **Repeated setup.** Count compiler programs, server starts, raster renders, builds, fixtures and complete journey
    prefixes. Distinguish repeated necessary assertions from repeated expensive preparation. Cache immutable fixture
    preparation within one test run when every assertion remains independent. Inspect collection-time work in suite
@@ -46,12 +48,29 @@ is ordinary JavaScript. Confirm what each command actually includes before propo
    record competing work/resource limits and preserve failures. A failed baseline is not a successful speed comparison;
    reject a setting that worsens measured feedback rather than raising timeouts globally or skipping assertions.
 
+## Browser and campaign cost
+
+Measure browser startup, context creation, assertions, evidence capture and teardown separately before advising reuse.
+A 24.2s invocation with a 2.6s case leaves 21.6s unattributed; it is not an isolated browser-launch measurement. Include
+collection, build/server preparation and reporting in the command total, and preserve failures and cleanup costs.
+If startup dominates, propose runner-owned browser reuse within each worker with a fresh context per case and explicit
+context/browser teardown. Do not introduce a cross-process browser broker; verify isolation and measure the complete
+replacement before claiming savings. This is advisory, not a scanner-detected runtime property.
+
+When already approved, use one earned campaign in the edit lane instead of replaying its prefix for each checkpoint.
+Retain checkpoint assertions, provenance and failure evidence; a saved fixture does not prove the prefix was earned.
+Give independent branches cheaper seam owners and name the coverage each replaces. Keep full and release gates until
+replacement coverage and complete-lane timings are proven; a faster partial campaign alone does not earn retirement.
+
 ## Compare concrete alternatives
 
 For each material cause, record `decision -> evidence -> cost -> alternative -> replacement protection`. Prefer the
 smallest change that improves the edit loop; include keeping the current architecture when a redesign does not pay
 for itself. A common manifest/verification protocol often costs less than replacing every renderer. Recommend one
 generation implementation only when feature parity, authoring quality and maintenance costs justify it.
+For an obsolete renderer/version branch, reuse any explicit retirement approval, identify remaining consumers and map
+its obligations to current-renderer coverage. Approval for one game's renderer does not make every old path removable.
+Keep any still-required behavior covered; do not retain obsolete test branches merely because they used to run.
 
 Below each alternative, state:
 

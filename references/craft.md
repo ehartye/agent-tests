@@ -53,6 +53,11 @@ Evidence: https://jestjs.io/docs/snapshot-testing — Jest docs: review snapshot
 Evidence: https://arxiv.org/abs/2609.05978 — VibeCheck (arXiv 2609.05978): a study of tests from three LLM coding agents on 15 repositories found generated tests are often runnable but frequently lack strong assertions and behavioral coverage.
 Opinion: Treating "verify the mock was called" as a weak assertion by default is judgment built on the Google book's preference for state testing; the Google book itself permits it for state-changing calls with no other observable. A mutation-testing run showing such tests catch real faults would soften this.
 Note: Jest and Vitest share these matcher semantics for the cases above; check Vitest docs for any difference in `expect.assertions` behavior before relying on it.
+Opinion: For PNG/pixel and glyph oracles, require nonempty expected IDs and sampled regions/pixel counts before comparing
+results. Derive concrete expectations from an independent specification or reviewed fixture, not the renderer's own
+output or metadata. Use causal negative controls: remove a required glyph or alter a required region and confirm the
+owning assertion fails for that defect. A zero-sample branch or a generic thrown error is not visual evidence. These
+controls are project advice; demonstrated equivalent fault detection could justify a different oracle.
 
 ## Rule: Cover boundaries and error paths, and use table-driven tests for input variants
 Claim: For each unit, test the edges (empty, zero, one, max, off-by-one, invalid type) and the documented error behavior, not only the happy path. When only the data changes, use `test.each` with descriptive titles instead of copying tests or looping inside one test.
@@ -119,6 +124,10 @@ Claim: Express a feature's acceptance criteria as a given/when/then journey that
 Evidence: https://martinfowler.com/articles/practical-test-pyramid.html — The Practical Test Pyramid article on martinfowler.com: acceptance tests verify that a feature works from the user's perspective, often in given/when/then form. The label matters less than having them, and a lower-level acceptance test beats none. Lower-level tests should cover edge cases.
 Evidence: https://docs.cypress.io/app/core-concepts/best-practices — Cypress docs advise a middle ground between one giant test and many tiny ones with shared long setup. Each test should cover one meaningful behavior, named so a failure is clear, and begin from a programmatically prepared state.
 Opinion: "One journey per feature" is judgment, not a stated rule in these pages. They support few journeys and edge cases lower down. They do not fix a count. A feature with several independent high-risk outcomes may justify more than one journey.
+Opinion: Exercise the actual current renderer and identify the served build and final assets for a native journey.
+After a version change, review old renderer-specific branches against current obligations rather than letting them
+silently pass or skip. A native integration owner must still prove loading/rendering when pure metadata helpers are
+tested separately; metadata validity alone cannot replace that coverage.
 
 ## Rule: Make end-to-end tests deterministic with auto-waiting assertions and per-test data
 Claim: Never use fixed sleeps. Use retrying assertions or polling that wait for an observable outcome, assert on what the user sees, and have each test create its own data and state instead of depending on another test. Do not drive third-party sites you do not control.
@@ -127,6 +136,11 @@ Evidence: https://playwright.dev/docs/test-assertions — Playwright docs: auto-
 Evidence: https://docs.cypress.io/app/core-concepts/best-practices — Cypress docs: you almost never need a cy.wait for an arbitrary time. Wait on an aliased route or a retrying assertion, set up state through code rather than the UI, and stub or avoid third-party login pages.
 Evidence: https://martinfowler.com/articles/nonDeterminism.html — Martin Fowler: fixed sleeps either waste time or fail falsely. Prefer a callback, or polling at short intervals with a generous overall timeout. Lack of isolation lets tests corrupt each other, and quarantining non-deterministic tests keeps the rest of the suite trustworthy.
 Note: The Playwright assertions page does not itself say fixed waits are discouraged. That position comes from the Cypress and Fowler pages.
+Opinion: For native control collectors, assert exact declared control IDs, including missing and unexpected IDs, and
+their roles. Declare coordinate spaces (logical, CSS or device pixels), transforms, horizontal/vertical scroll axes
+and clipping bounds. Check hit targets before and after scrolling; horizontal header navigation is not a pinned
+action merely because it stays visible. Exercise disposal so removed controls and subscriptions stop participating.
+These checks follow the application's declared contract; appearance alone cannot establish control semantics.
 
 ## Rule: Control time and asynchronous work with fake timers or an injected clock
 Claim: For timeouts, retries, debouncing, schedules and expiry, fake the timer or clock (or inject a clock) and advance it explicitly, asserting both the state before and after the time passes. Do not wait in real time, and do not touch the real network.
@@ -144,6 +158,9 @@ Evidence: https://vitest.dev/guide/parallelism — Vitest docs: test files run i
 Evidence: https://martinfowler.com/articles/nonDeterminism.html — Martin Fowler: properly isolated tests can run in any sequence. Rebuilding the starting state for each test, or cleaning up after it, prevents tests corrupting each other.
 Evidence: https://nodejs.org/api/test.html — Node.js test runner docs: by default each test file runs in its own process. With isolation set to none, files share global state and can interfere with each other.
 Opinion: Running safely beside another git worktree follows from these practices (no shared fixed ports, directories or database names), but none of these pages discuss worktrees. The inference holds only if no resource outside the process, such as a shared local database name or fixed port, is hardcoded.
+Opinion: Put capture teardown in a finally path so assertion or screenshot failures still dispose collectors,
+subscriptions, pages and contexts and close owned browser/server resources. Record cleanup outcome even on failure;
+preserve the original failure alongside capture or cleanup errors. Verify this failure path before relying on reuse.
 
 ## Rule: Size a feature's test set by risk and do not re-test lower layers from above
 Claim: Decide what a feature needs by what could go wrong at each seam. Cover logic branches in unit tests, each external seam with one or a few narrow integration or contract tests, and cross-system wiring with a thin journey. Skip assertions at a higher layer that a lower layer already proves.
