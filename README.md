@@ -128,6 +128,9 @@ Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
 
+Version 0.5.1 resolves temporary fixture parents to physical paths before profiling, including macOS temp aliases.
+The opt-in helper and its nonphysical-parent refusal are unchanged.
+
 Version 0.5.0 adds an explicitly selected Inspector worker CPU profiling helper, weighted summaries and
 setup-preserving recipes. Native correctness, profile completion and cleanup remain separate evidence.
 Reachable operational advice covers bounded browser reuse, evaluated data, retry/budget admission and causal paint.
