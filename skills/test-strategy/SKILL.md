@@ -19,7 +19,7 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
 |---|---|---|---|---|
 | dev (pre-release) | Iteration speed | Core invariants, a few user journeys | One non-blocking Linux job per pull request. OS matrix on demand, weekly and on release tags. | None unless `consumers` names one |
 | test (stabilizing) | Release confidence | Journeys, public-surface contracts, critical-tier depth | The same, with the OS matrix nightly and release-tag runs gating the release | Only for declared consumers |
-| production | Do not break people | Regression and compat for declared consumers, post-deploy smoke | Required, path-filtered pull-request checks | Yes, for declared consumers |
+| production | Do not break people | Regression and compat for declared consumers, post-deploy smoke | Required checks for declared obligations, with reliable reporting | Yes, for declared consumers |
 
 Ask the owner which phase the project is in. Moving to the next phase is an explicit step: fill in `consumers`,
 change `phase`.
@@ -70,25 +70,29 @@ interactive terminal, which blocks an agent that runs it there.
 
 ## 4. CI by phase, for a solo developer who works in pull requests
 
-The local merge lane is the gate. CI adds an observer outside the agent, because an agent's "tests pass" is otherwise
-its own report. Keep that observer cheap and non-blocking.
+Use current owner policy before phase defaults. Honor an owner Actions pause or disabled service; never enable or
+dispatch Actions, change remote policy or bypass required checks as part of this advice. Static workflows describe
+configured work, not current service state, actual executions or billed minutes. Keep those evidence levels separate.
 
-- **One Linux job on `pull_request`.** Path-filter it to code, config and lockfile, skip draft pull requests, set
-  `concurrency` with `cancel-in-progress` so a newer push replaces the older run, and do not make it a required check.
-  Nothing waits on it and a flaky red cannot block a merge. Read it at merge time: a red result means look, not block.
-- **No `push` trigger on branches.** A pushed pull-request branch would fire both triggers. Skip a post-merge run too:
-  the pull-request job already ran on the same tree.
-- **OS matrix off the pull-request path.** Run Windows and macOS with `workflow_dispatch` (take an `os` input), a label
-  such as `ci:full`, a weekly schedule (nightly from the test phase on) and release tags. They bill at a higher
-  per-minute rate than Linux on private repositories.
-- **Evidence for the merge lane (optional, if you build one).** Have the merge script write `{sha, lane, result}` and
-  refuse to merge without evidence for the current commit.
-- **Drop the pull-request job** only if the local merge gate is written by a verified tool over a clean tree, not by
-  the agent reporting on itself, and the minutes are metered.
-- **By phase.** `dev` is the setup above. `test` runs the OS matrix nightly, with release-tag runs gating the release.
-  `production` makes the path-filtered pull-request checks required, because someone else now depends on main.
+- **Validation in dev/test.** Consider one cheap, non-blocking Linux `pull_request` observer alongside the local merge
+  lane, subject to owner policy. Skip drafts and cancel obsolete validation runs where reporting obligations allow.
+  Read available red results and investigate real failures. Production retains required checks and platform obligations.
+- **Preserve every publication trigger.** Pages, release/package publication and deployment environments can need
+  branch pushes. Review suite steps inside a mixed workflow separately; opaque wrappers have unknown coverage.
+  Names alone prove no publication or tests. Ordinary test-log artifact upload is not publication.
+- **Establish overlap.** Push and PR syntax alone does not prove duplicate work. Match selection, source, dependencies,
+  configuration, assets and actual passing results before reusing evidence for the same inputs. Keep one applicable
+  validation owner; a clean local receipt alone does not waive hosted or publication obligations.
+- **Preserve platform obligations.** Retain production Windows acceptance and declared merge/release OS requirements.
+  Establish unknown obligations before pruning. Optional OS coverage can move to manual, weekly (nightly from test)
+  and release lanes. Runner fanout is observable; charges and savings require actual billing evidence.
+- **Required reporting.** Workflow-level path filters can strand required checks as pending on docs-only changes.
+  Prefer an always-reporting job with job-level conditional expensive work or an equivalent reporting check. Verify
+  the actual required-check policy before changing filters, draft skips or cancellation behavior.
+- **Merge evidence (optional).** A verified tool can record candidate identity, lane, inputs and result over a clean
+  tree. Source or dependency changes invalidate reuse. Preserve owner-required acceptance and release gates.
 
-CI runs whatever suite was pushed, so it does not catch an agent weakening tests. The audit does.
+CI runs whatever suite was pushed; review test changes as well as CI results.
 
 ## 5. Rules for writing tests
 

@@ -113,10 +113,17 @@ Never recommend deleting a critical-tier test without naming its replacement.
 2. Files with no tier, listed without a verdict, as risk-map gaps.
 3. Project-level actions from the `frequency.*` and `wiring.*` findings: hooks, watch mode, CI triggers, OS matrices,
    missing risk-map areas, critical areas with no tests.
-4. CI advice for the phase: `dev` wants one non-blocking Linux job per pull request, with the OS matrix on demand,
-   weekly and on release tags; `test` runs the OS matrix nightly, with release-tag runs gating the release; `production`
-   makes path-filtered pull-request checks required. Flag any `push` trigger on branches and any Windows or macOS run
-   on the pull-request path.
+4. CI advice starts with current owner policy: honor an owner Actions pause or disabled service; never enable or dispatch
+   Actions or change remote policy through an audit. Configured workflows do not prove enabled services or execution.
+   Preserve every publication trigger (Pages, release/package publication, deployment environments). Review literal suite
+   steps in mixed workflows separately; opaque wrappers have unknown coverage and names alone prove no purpose.
+   Ordinary test-log artifact upload is not publication. Push/PR syntax alone does not prove duplication: match selection,
+   source, dependencies, config, assets and passing results before reusing evidence for the same inputs.
+   Preserve production Windows acceptance and declared platform obligations; establish unknown requirements before pruning.
+   Subject to owner policy, dev/test can use a cheap non-blocking PR observer and optional OS coverage on demand,
+   weekly/nightly and release tags. Production retains required checks. Workflow-level path filters can strand required
+   checks on docs-only changes: use an always-reporting job with job-level conditional work or equivalent reporting.
+   Verify actual required-check policy before changing filters or gates; runner labels do not establish billed savings.
 5. Totals: estimated tokens in files marked `delete` or `merge`, and how many files with a Lane of `edit` you demote
    out of the edit lane.
 6. What this audit could not measure. Static scan/report do not measure wait time; an optional explicitly requested Node

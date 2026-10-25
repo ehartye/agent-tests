@@ -128,6 +128,10 @@ Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
 
+Version 0.4.4 preserves publication triggers and platform obligations in CI advice. Mixed publication/validation
+findings identify the actual suite step, respect event conditions and distinguish configured work from execution
+and billing. Dry runs and similarly named scripts are not treated as publication.
+
 Version 0.4.3 runs Playbot export and verification through aliased parent directories while keeping imports inert.
 It fixes the CLI entrypoint skipped by physical-path aliases, including macOS temporary directory aliases.
 

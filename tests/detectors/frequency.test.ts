@@ -278,13 +278,14 @@ describe('detectFrequency workflows', () => {
     expect(rules(detectFrequency(root, null))).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
   });
 
-  it('describes a push restricted to the default branch as a post-merge run', () => {
+  it('describes configured branch restrictions without inventing the default branch or same-tree execution', () => {
     const root = workflow('on:\n  push:\n    branches: [main]\n  pull_request:\njobs: {}\n');
     const message = detectFrequency(root, null)[0]?.message ?? '';
-    expect(message).toContain('post-merge');
-    expect(message).toContain('already ran on the same tree');
+    expect(message).toContain('main');
+    expect(message).toMatch(/potential overlap/i);
+    expect(message).not.toMatch(/already ran|default branch|Drop it/);
     const master = workflow('on:\n  push:\n    branches: [master]\njobs: {}\n');
-    expect(detectFrequency(master, null)[0]?.message).toContain('post-merge');
+    expect(detectFrequency(master, null)[0]?.message).toContain('master');
     const other = workflow('on:\n  push:\n    branches: [main, dev]\njobs: {}\n');
     expect(detectFrequency(other, null)[0]?.message).toContain('every push to a branch');
     const bare = workflow('on: push\njobs: {}\n');
@@ -298,9 +299,264 @@ describe('detectFrequency workflows', () => {
 
   it('gives the whole dev-phase recommendation', () => {
     const message = detectFrequency(workflow('on: push\njobs: {}\n'), defaultRiskMap())[0]?.message ?? '';
-    for (const part of ['non-blocking Linux job', 'path-filtered', 'drafts skipped', 'newer runs cancelled', 'workflow_dispatch', 'weekly schedule', 'release tags']) {
+    for (const part of ['non-blocking Linux job', 'drafts skipped', 'newer runs cancelled', 'workflow_dispatch', 'weekly schedule', 'release tags', 'owner policy', 'required']) {
       expect(message).toContain(part);
     }
+  });
+});
+
+describe('contextual publication and platform frequency advice', () => {
+  const publishing = (steps: string, extra = '') => `on:\n  push:\n    branches: [main]\n  pull_request:\njobs:\n  harmless_name:\n    runs-on: ubuntu-latest\n${extra}    steps:\n${steps}`;
+  const runStep = (command: string) => `      - name: Validate candidate\n        run: ${command}\n`;
+  const deployStep = '      - uses: actions/deploy-pages@v4\n';
+
+  it.each(['actions/deploy-pages@v4', 'actions/upload-pages-artifact@v3', 'softprops/action-gh-release@v2', 'actions/upload-release-asset@v1'])('preserves a main publication trigger proved by %s despite a misleading job name', action => {
+    const found = detectFrequency(workflow(publishing(`      - uses: ${action}\n`)), null);
+    expect(found.filter(finding => finding.rule === 'frequency.ci-on-push')).toEqual([]);
+  });
+
+  it.each(['npm publish', 'pnpm publish --access public', 'gh release create v1', 'gh release upload v1 dist/app.zip', 'npx wrangler pages deploy dist'])('preserves a publication trigger for a literal command: %s', command => {
+    expect(rules(detectFrequency(workflow(publishing(runStep(command))), null))).not.toContain('frequency.ci-on-push');
+  });
+
+  it('treats an actual environment field as conservative publication context', () => {
+    const found = detectFrequency(workflow(publishing(runStep('npx vitest run'), '    environment:\n      name: github-pages\n')), null);
+    expect(rules(found)).toEqual(['frequency.publication-validation']);
+    expect(found[0].evidence).toContain('environment');
+    expect(found[0].message).toMatch(/preserve.*trigger/i);
+  });
+
+  it.each([
+    ['a job name', '      - run: npm test\n', '    name: deploy\n'],
+    ['a comment or quoted command', '      - run: echo "npm publish; gh release create v1" # actions/deploy-pages@v4\n', ''],
+    ['ordinary artifact upload', '      - run: npm test\n      - uses: actions/upload-artifact@v4\n', ''],
+    ['a similar action name', '      - uses: somebody/actions-deploy-pages@v4\n', ''],
+  ])('does not use %s as positive publication proof', (_label, steps, extra) => {
+    expect(rules(detectFrequency(workflow(publishing(steps, extra)), null))).toContain('frequency.ci-on-push');
+  });
+
+  it('reports only the literal suite step and script trace inside a mixed publication workflow', () => {
+    const root = makeTree({
+      [WF]: publishing(runStep('npm run check') + deployStep),
+      'package.json': JSON.stringify({ scripts: { check: 'npm run test:all && vite build', 'test:all': 'vitest run' } }),
+    });
+    const found = detectFrequency(root, null);
+    expect(rules(found)).toEqual(['frequency.publication-validation']);
+    expect(found[0]).toMatchObject({ category: 'frequency', file: WF });
+    expect(found[0].evidence).toContain('harmless_name');
+    expect(found[0].evidence).toContain('Validate candidate');
+    expect(found[0].evidence).toContain('check -> test:all: vitest run');
+    expect(found[0].evidence).toContain('actions/deploy-pages@v4');
+    expect(found[0].message).toMatch(/potential overlap/i);
+    expect(found[0].message).toMatch(/source.*dependencies.*config.*assets.*result/i);
+    expect(found[0].message).not.toMatch(/already ran|duplicated tests|drop.*trigger/i);
+  });
+
+  it('traces literal publication through a local script but not a quoted mention', () => {
+    const root = makeTree({ [WF]: publishing(runStep('npm run release')), 'package.json': JSON.stringify({ scripts: { release: 'npm run publish:package', 'publish:package': 'npm publish' } }) });
+    expect(detectFrequency(root, null)).toEqual([]);
+  });
+
+  it.each(['step', 'job', 'workflow', 'shell-cd'])('does not attach root package scripts to a different execution directory: %s', scope => {
+    let yaml = publishing(runStep(scope === 'shell-cd' ? 'cd packages/client && npm test' : 'npm test') + deployStep);
+    if (scope === 'step') yaml = yaml.replace('        run: npm test', '        working-directory: packages/client\n        run: npm test');
+    if (scope === 'job') yaml = yaml.replace('    steps:', '    defaults:\n      run:\n        working-directory: packages/client\n    steps:');
+    if (scope === 'workflow') yaml = 'defaults:\n  run:\n    working-directory: packages/client\n' + yaml;
+    const found = detectFrequency(makeTree({ [WF]: yaml, 'package.json': JSON.stringify({ scripts: { test: 'vitest run' } }) }), null);
+    expect(rules(found)).not.toContain('frequency.publication-validation');
+    expect(rules(found)).toContain('frequency.publication-unknown-validation');
+  });
+
+  it('does not resolve a publication script against the wrong package directory', () => {
+    const yaml = publishing(runStep('npm run release')).replace('        run:', '        working-directory: packages/client\n        run:');
+    const found = detectFrequency(makeTree({ [WF]: yaml, 'package.json': JSON.stringify({ scripts: { release: 'npm publish' } }) }), null);
+    expect(rules(found)).toContain('frequency.ci-on-push');
+    expect(found[0].message).toMatch(/purpose is unknown/i);
+  });
+
+  it('stops package-script traces after a nested script changes directories', () => {
+    const root = makeTree({
+      [WF]: publishing(runStep('npm run check') + runStep('npm run release') + deployStep),
+      'package.json': JSON.stringify({ scripts: { check: 'cd packages/client && npm test', test: 'vitest run', release: 'cd packages/client && npm run publish:package', 'publish:package': 'npm publish' } }),
+    });
+    expect(rules(detectFrequency(root, null))).not.toContain('frequency.publication-validation');
+    const publishOnly = makeTree({
+      [WF]: publishing(runStep('npm run release')),
+      'package.json': JSON.stringify({ scripts: { release: 'cd packages/client && npm run publish:package', 'publish:package': 'npm publish' } }),
+    });
+    expect(rules(detectFrequency(publishOnly, null))).toContain('frequency.ci-on-push');
+  });
+
+  it.each(['npx vitest run tests/one.test.ts', 'npm test -- --changed', 'npx vitest run --project browser'])('does not claim a full suite from scoped or unknown selection: %s', command => {
+    const found = detectFrequency(workflow(publishing(runStep(command) + deployStep)), null);
+    expect(rules(found)).not.toContain('frequency.publication-validation');
+    expect(rules(found)).not.toContain('frequency.ci-on-push');
+  });
+
+  it.each(['npx vitest run ${{ inputs.selection }}', 'npm run test:wrapped'])('keeps validation-looking publication wrapper coverage unknown: %s', command => {
+    const root = makeTree({ [WF]: publishing(runStep(command) + deployStep), 'package.json': JSON.stringify({ scripts: { 'test:wrapped': 'node scripts/check.mjs' } }) });
+    const found = detectFrequency(root, null);
+    expect(rules(found)).not.toContain('frequency.ci-on-push');
+    expect(found).toContainEqual(expect.objectContaining({ rule: 'frequency.publication-unknown-validation', evidence: expect.stringContaining(command) }));
+    expect(found.map(finding => finding.message).join(' ')).toMatch(/unknown/i);
+    expect(found.map(finding => finding.message).join(' ')).not.toMatch(/already ran|same tree|drop.*trigger/i);
+  });
+
+  it.each(['node scripts/check.mjs', '${{ inputs.command }}', 'npm ci', 'npm run build'])('does not invent test cost for opaque publication work: %s', command => {
+    expect(detectFrequency(workflow(publishing(runStep(command) + deployStep)), null)).toEqual([]);
+  });
+
+  it('keeps push validation findings qualified even with an identical PR command', () => {
+    const found = detectFrequency(workflow(publishing(runStep('npm test'))), null);
+    expect(rules(found)).toEqual(['frequency.ci-on-push']);
+    expect(found[0].message).toMatch(/potential overlap/i);
+    expect(found[0].message).toMatch(/configured/i);
+    expect(found[0].message).toMatch(/Actions.*enabled/i);
+    expect(found[0].message).not.toMatch(/already ran|same tree|Drop it/);
+  });
+
+  it('preserves production Windows acceptance and cites declared merge and release OS requirements', () => {
+    const map = defaultRiskMap();
+    map.phase = 'production';
+    map.consumers = ['installed Windows client'];
+    map.lanes.merge.os = ['windows-latest'];
+    map.lanes.release.os = ['windows-latest', 'macos-latest'];
+    const found = detectFrequency(workflow('on: [push, pull_request]\njobs:\n  verify:\n    runs-on: windows-latest\n    strategy:\n      matrix:\n        os: [windows-latest, macos-latest]\n    steps: []\n'), map);
+    expect(rules(found)).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);
+    for (const finding of found) {
+      expect(finding.message).toMatch(/preserve/i);
+      expect(finding.message).toContain('merge: windows-latest');
+      expect(finding.message).toContain('release: windows-latest, macos-latest');
+      expect(finding.message).not.toMatch(/keep Windows.*off|higher rate|bill|move.*Linux/i);
+    }
+  });
+
+  it.each(['production', 'dev', null] as const)('qualifies platform obligations and charges with %s context', phase => {
+    const map = phase ? defaultRiskMap() : null;
+    if (map && phase) { map.phase = phase; delete map.lanes.merge.os; delete map.lanes.release.os; }
+    const found = detectFrequency(workflow('on: pull_request\njobs:\n  verify:\n    runs-on: windows-latest\n    steps: []\n'), map);
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toMatch(/obligations.*unknown|establish.*obligations/i);
+    expect(found[0].message).toMatch(/charges.*unmeasured/i);
+    expect(found[0].message).not.toMatch(/keep Windows.*off|higher rate|bills/i);
+  });
+
+  it('preserves declared merge platforms even during development', () => {
+    const map = defaultRiskMap();
+    map.lanes.merge.os = ['windows-latest'];
+    const found = detectFrequency(workflow('on: pull_request\njobs:\n  verify:\n    runs-on: windows-latest\n    steps: []\n'), map);
+    expect(found[0].message).toContain('merge: windows-latest');
+    expect(found[0].message).toMatch(/preserve/i);
+  });
+
+  describe('publication validation event applicability', () => {
+    const mixed = (scope: 'job' | 'step', condition: string, command = 'npx vitest run') => publishing(
+      `      - ${scope === 'step' ? `if: ${condition}\n        ` : ''}run: ${command}\n` + deployStep,
+      scope === 'job' ? `    if: ${condition}\n` : '',
+    );
+
+    it('does not treat a separate PR-only suite job as publication-push work', () => {
+      const yaml = "on: [push, pull_request]\njobs:\n  pr_test:\n    if: github.event_name == 'pull_request'\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n  site:\n    if: github.event_name == 'push'\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/deploy-pages@v4\n";
+      expect(detectFrequency(makeTree({ [WF]: yaml, 'package.json': JSON.stringify({ scripts: { test: 'vitest run' } }) }), null)).toEqual([]);
+    });
+
+    it.each(['job', 'step'] as const)('skips literal PR-only %s validation, including unknown selection', scope => {
+      for (const command of ['npx vitest run', 'npx vitest run ${{ inputs.selection }}']) {
+        expect(detectFrequency(workflow(mixed(scope, "github.event_name == 'pull_request'", command)), null)).toEqual([]);
+      }
+    });
+
+    it.each(['job', 'step'] as const)('uses case-insensitive event literals for %s applicability', scope => {
+      for (const literal of ['PUSH', 'PuSh']) {
+        const applicable = detectFrequency(workflow(mixed(scope, `github.event_name == '${literal}'`)), null);
+        expect(rules(applicable)).toEqual(['frequency.publication-validation']);
+        expect(detectFrequency(workflow(mixed(scope, `github.event_name != '${literal}'`)), null)).toEqual([]);
+      }
+    });
+
+    it.each([
+      "github.ref_type == 'TAG'",
+      "github.ref_type == 'TaG'",
+      "startsWith(github.ref, 'REFS/TAGS/')",
+      "startsWith(github.ref, 'ReFs/TaGs/v')",
+    ])('honors case-insensitive tag-only literal constraints: %s', condition => {
+      for (const scope of ['job', 'step'] as const) {
+        expect(detectFrequency(workflow(mixed(scope, condition)), null)).toEqual([]);
+      }
+    });
+
+    it.each([
+      "github.ref_type == 'BRANCH'",
+      "startsWith(github.ref, 'REFS/HEADS/')",
+      "github.event_name == 'PULL_REQUEST' || github.event_name == 'PuSh'",
+      "${{ !(github.event_name == 'PULL_REQUEST') }}",
+      "${{ contains(env.values, 'PUSH && false && TAG') }}",
+    ])('keeps uppercase push-compatible or unknown conditions possible: %s', condition => {
+      expect(rules(detectFrequency(workflow(mixed('step', condition)), null))).toEqual(['frequency.publication-validation']);
+    });
+
+    it.each([
+      'false',
+      "${{ github.event_name == 'pull_request' }}",
+      "github.event_name != 'push'",
+      "github.event_name == 'pull_request' && !github.event.pull_request.draft",
+      "github.event_name == 'pull_request' || github.event_name == 'schedule'",
+      "startsWith(github.ref, 'refs/tags/')",
+      "github.ref_type == 'tag'",
+    ])('skips a step provably excluded from branch push: %s', condition => {
+      expect(detectFrequency(workflow(mixed('step', condition)), null)).toEqual([]);
+    });
+
+    it.each([
+      "github.event_name == 'push'",
+      "github.event_name == 'pull_request' || github.event_name == 'push'",
+      "github.event_name == 'pull_request' || inputs.force",
+      "${{ !(github.event_name == 'pull_request') }}",
+      "github.ref == 'refs/heads/main'",
+      "${{ contains(env.values, 'x && false && y') }}",
+    ])('retains potential-overlap review without proving execution for %s', condition => {
+      const found = detectFrequency(workflow(mixed('step', condition)), null);
+      expect(rules(found)).toEqual(['frequency.publication-validation']);
+      expect(found[0].message).toMatch(/potential overlap/i);
+      expect(found[0].message).toMatch(/do not prove.*executed/i);
+    });
+  });
+
+  describe('actual publication commands', () => {
+    it.each(['npm', 'pnpm', 'yarn', 'bun'])('retains configured validation for %s publish --dry-run', manager => {
+      const found = detectFrequency(workflow(publishing(runStep(`${manager} publish --dry-run`))), null);
+      expect(rules(found)).toEqual(['frequency.ci-on-push']);
+      expect(found[0].message).toMatch(/purpose is unknown/i);
+    });
+
+    it('does not turn suite plus dry-run into a publication workflow', () => {
+      const found = detectFrequency(workflow(publishing(runStep('npx vitest run') + runStep('npm publish --dry-run'))), null);
+      expect(rules(found)).toEqual(['frequency.ci-on-push']);
+      expect(found[0].evidence).not.toContain('publication:');
+    });
+
+    it.each(['pnpm', 'yarn', 'bun'])('does not classify the script-name prefix %s publish:check as publication', manager => {
+      const found = detectFrequency(makeTree({ [WF]: publishing(runStep(`${manager} publish:check`)), 'package.json': JSON.stringify({ scripts: { 'publish:check': 'node scripts/check.mjs' } }) }), null);
+      expect(rules(found)).toEqual(['frequency.ci-on-push']);
+    });
+
+    it.each(['npm publish --dry-run=true', 'npm publish --help', 'gh release create:check', 'npx wrangler pages deploy:check', 'npm publish $FLAGS'])('requires literal publication intent: %s', command => {
+      expect(rules(detectFrequency(workflow(publishing(runStep(command))), null))).toEqual(['frequency.ci-on-push']);
+    });
+
+    it('does not turn a traced package dry-run into publication', () => {
+      const found = detectFrequency(makeTree({ [WF]: publishing(runStep('npm run release')), 'package.json': JSON.stringify({ scripts: { release: 'npm publish --dry-run' } }) }), null);
+      expect(rules(found)).toEqual(['frequency.ci-on-push']);
+    });
+
+    it.each(['npm publish', 'pnpm publish --access public', 'yarn publish', 'bun publish', 'npm publish --dry-run=false'])('retains a real package publication control: %s', command => {
+      expect(detectFrequency(workflow(publishing(runStep(command))), null)).toEqual([]);
+    });
+
+    it('still follows a suggestively named script when its body actually publishes', () => {
+      const found = detectFrequency(makeTree({ [WF]: publishing(runStep('pnpm publish:check')), 'package.json': JSON.stringify({ scripts: { 'publish:check': 'npm publish' } }) }), null);
+      expect(found).toEqual([]);
+    });
   });
 });
 
