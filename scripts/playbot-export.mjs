@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync} from 'node:fs';
-import {dirname, join, resolve} from 'node:path';
+import {dirname, join, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {describeSource} from './managed-runtime.js';
 
@@ -96,7 +96,15 @@ export function exportPlaybot(source, output) {
   return {changed: true, output, ...result};
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isEntrypoint() {
+  if (!process.argv[1]) return false;
+  try {
+    // Node resolves module URLs through directory aliases; argv can retain them.
+    return relative(realpathSync.native(resolve(process.argv[1])), realpathSync.native(fileURLToPath(import.meta.url))) === '';
+  } catch { return false; } // An importing host may supply a nonexistent argv path.
+}
+
+if (isEntrypoint()) {
   try {
     const args = process.argv.slice(2), options = new Map();
     for (let index = 0; index < args.length; index++) {

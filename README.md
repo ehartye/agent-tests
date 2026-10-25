@@ -128,6 +128,9 @@ Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
 
+Version 0.4.3 runs Playbot export and verification through aliased parent directories while keeping imports inert.
+It fixes the CLI entrypoint skipped by physical-path aliases, including macOS temporary directory aliases.
+
 Version 0.4.2 advertises managed helper commands and verifies byte-identical Playbot pins without rewriting
 provenance metadata. Use `--verify --require-current` for exact producer identity at release gates.
 

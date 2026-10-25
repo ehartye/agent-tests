@@ -1,8 +1,8 @@
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import {beforeAll, describe, expect, it, vi} from 'vitest';
 import {makeTree} from './helpers/tree.ts';
 
@@ -57,6 +57,11 @@ function cliProducer() {
   return source;
 }
 const cli = (source: string, ...args: string[]) => spawnSync(process.execPath, [join(source, 'scripts/playbot-export.mjs'), ...args], {encoding: 'utf8'});
+function aliasedCliProducer() {
+  const source = cliProducer(), alias = join(makeTree({}), 'producer-alias');
+  symlinkSync(source, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  return alias;
+}
 
 describe('one producer-owned browser/headless Playbot pin', () => {
   it('exports the actual portable module with its exact final digest and producer identity', () => {
@@ -197,6 +202,38 @@ describe('one producer-owned browser/headless Playbot pin', () => {
   it('CLI rejects a missing output value before mutation', () => {
     const result = cli(cliProducer(), '--out', '--verify', '--require-current');
     expect(result.status).toBe(1); expect(JSON.parse(result.stderr).error.message).toMatch(/Usage/);
+  });
+
+  it('CLI exports and strictly verifies through an aliased parent directory', () => {
+    const source = aliasedCliProducer(), out = join(makeTree({}), 'pin');
+    const exported = cli(source, '--out', out);
+    expect(exported.status, exported.stderr).toBe(0);
+    expect(JSON.parse(exported.stdout)).toMatchObject({changed: true, valid: true, current: true});
+    expect(readFileSync(join(out, 'playbot-contract.mjs'), 'utf8')).toBe(moduleSource.replaceAll('\r\n', '\n'));
+    const before = snapshot(out), verified = cli(source, '--out', out, '--verify', '--require-current');
+    expect(verified.status, verified.stderr).toBe(0);
+    expect(JSON.parse(verified.stdout)).toMatchObject({valid: true, current: true});
+    expect(snapshot(out)).toEqual(before);
+  });
+
+  it.each(['missing', 'missing-value', 'unknown'])('CLI rejects %s arguments through an aliased parent before mutation', kind => {
+    const source = aliasedCliProducer(), out = join(makeTree({}), 'not-created');
+    const args = kind === 'missing' ? [] : kind === 'missing-value' ? ['--out', '--verify'] : ['--out', out, '--bogus'];
+    const result = cli(source, ...args);
+    expect(result.status).toBe(1); expect(result.stdout).toBe('');
+    expect(JSON.parse(result.stderr).error.code).toBe('E_PLAYBOT_PIN');
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it.each(['wrapper', 'absent', 'nonexistent'])('import stays inert with a %s argv entrypoint and CLI-shaped arguments', kind => {
+    const source = aliasedCliProducer(), out = join(makeTree({}), 'not-created');
+    const importer = join(source, 'scripts/import-exporter.mjs');
+    const argv = kind === 'absent' ? 'delete process.argv[1];' : kind === 'nonexistent' ? `process.argv[1] = ${JSON.stringify(join(source, 'missing.mjs'))};` : '';
+    writeFileSync(importer, `${argv}\nawait import(${JSON.stringify(pathToFileURL(join(source, 'scripts/playbot-export.mjs')).href)});\nconsole.log('imported');\n`);
+    const result = spawnSync(process.execPath, [importer, '--out', out], {encoding: 'utf8'});
+    expect(result.status, result.stderr).toBe(0); expect(result.stderr).toBe('');
+    expect(result.stdout.trim()).toBe('imported');
+    expect(existsSync(out)).toBe(false);
   });
 
   it('preserves foreign output files and refuses undeclared replacement ownership', () => {
