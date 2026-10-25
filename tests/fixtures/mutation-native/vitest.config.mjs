@@ -1,0 +1,2 @@
+import { defineConfig } from 'vitest/config';
+export default defineConfig({ test: { include: process.env.MUTATION_NATIVE_CONTROL === 'syntax' ? ['syntax.vitest.case.mjs'] : ['controls.vitest.case.mjs', ...(process.env.MUTATION_NATIVE_CONTROL === 'mixed-collection' ? ['collection-extra.vitest.case.mjs'] : [])], reporters: ['./capture-vitest.mjs'], maxWorkers: 1, fileParallelism: false, testTimeout: 120, hookTimeout: 120, retry: 0, passWithNoTests: false, watch: false } });

@@ -1,0 +1,3 @@
+import { expect, it } from 'vitest'
+import { isInfrastructureError } from '../tools/mutation/report.mjs'
+it('quotes a diagnostic', () => expect(isInfrastructureError({ name: 'AssertionError', message: 'SyntaxError: quoted' })).toBe(false))

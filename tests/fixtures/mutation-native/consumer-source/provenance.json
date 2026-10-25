@@ -1,0 +1,10 @@
+{
+  "consumerCommit": "0ad4a62c89692c1827dbce97cd87de7fdcbce747",
+  "authoredFixtureOwner": "tests/census/mutationCli.test.ts:31",
+  "ownerSha256": "824cade9676ef17413900f9f6947a5dfce98aae5969f6902a1d7b42e321fd837",
+  "generatedTestSha256": "c6af5fe297f1167da6f7f7cc595c0dce7fea658720966eb113ee602365597764",
+  "generatedTestBytes": 239,
+  "helperSha256": "990fcde79d0e7e9f57234d7808a6d2ca168aa69e0292f3dc5a45450b003ebeb2",
+  "helperBytes": 1192,
+  "nativeExecution": "Executed by tests/mutation-native.test.ts through frozen production reporters; authoritative outcomes belong to the retained per-run captures. Raw .txt avoids producer test discovery. This is the extracted helper/assertion seam, not a full consumer owner or catalogue run."
+}

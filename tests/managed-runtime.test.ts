@@ -256,19 +256,21 @@ describe('launcher contract', () => {
     'scripts/tests.mjs': "console.log('static-cli');\n",
     'scripts/candidate-evidence.mjs': "console.log(JSON.stringify({ script: import.meta.url, args: process.argv.slice(2) }));\n",
     'scripts/playbot-export.mjs': "console.log(JSON.stringify({ script: import.meta.url, args: process.argv.slice(2) }));\n",
+    'scripts/mutation-verdict-cli.mjs': "console.log(JSON.stringify({ script: import.meta.url, args: process.argv.slice(2) }));\n",
   });
-  it('discovers both helper routes through capabilities from the exact checked CLI without changing its commands', () => {
+  it('discovers all helper routes through capabilities from the exact checked CLI without changing its commands', () => {
     const root = observationSource(), home = makeTree();
     writeFileSync(join(root, 'scripts/tests.mjs'), "console.log(JSON.stringify({name: 'agent-tests', version: '1.2.3', commands: ['capabilities','risk-draft','scan','report']}));\n");
     const installed = installRuntime(root, {home, ...fakes});
     const invoke = () => spawnSync(process.execPath, [join(root, 'scripts/run-managed.js'), 'capabilities'], {encoding: 'utf8', env: {...process.env, AGENT_TESTS_HOME: home}});
     const result = invoke();
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({name: 'agent-tests', version: '1.2.3', commands: ['capabilities','risk-draft','scan','report'], launcherCommands: ['candidate-evidence','playbot-export']});
+    expect(JSON.parse(result.stdout)).toEqual({name: 'agent-tests', version: '1.2.3', commands: ['capabilities','risk-draft','scan','report'], launcherCommands: ['candidate-evidence','playbot-export','mutation-verdict']});
     for (const command of JSON.parse(result.stdout).launcherCommands) {
       const dispatched = spawnSync(process.execPath, [join(root, 'scripts/run-managed.js'), command, '--probe'], {encoding: 'utf8', env: {...process.env, AGENT_TESTS_HOME: home}});
       expect(dispatched.status, dispatched.stderr).toBe(0);
-      expect(JSON.parse(dispatched.stdout)).toEqual({script: pathToFileURL(join(installed.root, `scripts/${command}.mjs`)).href, args: ['--probe']});
+      const filename = command === 'mutation-verdict' ? 'mutation-verdict-cli.mjs' : `${command}.mjs`;
+      expect(JSON.parse(dispatched.stdout)).toEqual({script: pathToFileURL(join(installed.root, 'scripts', filename)).href, args: ['--probe']});
     }
     writeFileSync(join(installed.root, 'scripts/playbot-export.mjs'), "console.log('must-not-run');\n");
     const tampered = invoke();

@@ -1,0 +1,27 @@
+import { it, expect, beforeEach, afterEach, beforeAll, afterAll, aroundEach } from 'vitest';
+const control = process.env.MUTATION_NATIVE_CONTROL;
+const mismatch = () => expect('timeout import SyntaxError no tests').toBe('expected');
+if (control === 'collection') throw new RangeError('collection RangeError');
+if (control === 'import') await import('./missing-native-control.mjs');
+if (control === 'beforeEach') beforeEach(mismatch);
+if (control === 'afterEach') afterEach(mismatch);
+if (control === 'beforeAll') beforeAll(mismatch);
+if (control === 'afterAll') afterAll(mismatch);
+if (control === 'mixed-teardown') afterEach(() => { throw new RangeError('teardown RangeError'); });
+if (control === 'hook-timeout') beforeEach(() => new Promise(() => {}));
+if (control === 'aroundEach') aroundEach(async use => { mismatch(); await use(); });
+if (control === 'custom') expect.extend({ toExplode() { throw new RangeError('custom matcher RangeError'); } });
+let tries = 0;
+if (control === 'skipped') it.skip('skipped population', () => {});
+else if (control === 'retry') it('retry population', { retry: 1 }, () => { if (tries++ === 0) mismatch(); });
+else if (control === 'expected-failure') it.fails('expected failure population', mismatch);
+else if (!['no-tests', 'collection', 'import'].includes(control)) it('controlled native body', context => {
+  if (control === 'pass') expect(1).toBe(1);
+  else if (['assertion', 'mixed-teardown', 'mixed-collection'].includes(control)) expect('timeout import SyntaxError no tests').toBe('expected');
+  else if (control === 'ordinary') throw new RangeError('ordinary body RangeError');
+  else if (control === 'fake') throw Object.assign(new Error('fabricated assertion identity'), { name: 'AssertionError', actual: 'actual', expected: 'expected', showDiff: true });
+  else if (control === 'custom') expect(1).toExplode();
+  else if (control === 'test-timeout') return new Promise(() => {});
+  else if (control === 'onTestFinished') context.onTestFinished(mismatch);
+  else expect(1).toBe(1);
+});
