@@ -19,6 +19,7 @@ const AGENT_MERGE_GATE = /^(?:\s+\w+){0,2}\s*,?\s*(?:before|prior\s+to)\s+(?:you
 const EXPENSIVE_OS = /^(?:macos|windows)/i;
 const NOT_WATCH_COMMANDS = new Set(['run', 'related', 'bench', 'list', 'typecheck', 'init']);
 const LAUNCHERS = new Set(['cross-env', 'env', 'npx', 'pnpm', 'exec', 'yarn', 'bunx', 'bun', 'npm', 'run', 'dlx', 'x']);
+const CHANGES_DIRECTORY = /^\s*(?:cd|pushd|popd|Set-Location|Push-Location|Pop-Location)\b/i;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const asStrings = (value: unknown): string[] => (Array.isArray(value) ? value : [value]).filter((entry): entry is string => typeof entry === 'string');
@@ -35,9 +36,20 @@ function readText(path: string): string | null {
 function phaseAdvice(map: RiskMap | null): string {
   if (!map) return '';
   if (map.phase === 'dev') {
-    return ' In the dev phase, prefer one non-blocking Linux job on pull_request (path-filtered, drafts skipped, newer runs cancelled), and workflow_dispatch, a weekly schedule and release tags for the OS matrix.';
+    return ' In the dev phase, subject to current owner policy and required checks, consider one non-blocking Linux job on pull_request (drafts skipped, newer runs cancelled), and workflow_dispatch, a weekly schedule and release tags for optional OS coverage.';
   }
   return '';
+}
+
+const CONFIGURED_CI = ' Configured workflows do not prove Actions is enabled or that jobs executed; charges are unmeasured.';
+
+function platformAdvice(map: RiskMap | null): string {
+  const declared = map ? (['merge', 'release'] as const).flatMap(lane => {
+    const os = map.lanes[lane].os;
+    return os?.length ? [`${lane}: ${os.join(', ')}`] : [];
+  }) : [];
+  const context = declared.length ? ` Preserve declared platform acceptance (${declared.join('; ')}).` : '';
+  return `${context} ${map?.phase === 'production' ? 'Preserve production acceptance; establish platform obligations before pruning.' : 'Other platform obligations are unknown; review runner fanout before moving optional coverage to slower lanes.'}${phaseAdvice(map)}${CONFIGURED_CI}`;
 }
 
 function triggersOf(workflow: Record<string, unknown>): Record<string, unknown> {
@@ -121,6 +133,7 @@ function buildSuiteTrace(scripts: Record<string, unknown>, name: string, chain: 
   const path = [...chain, name];
   for (const part of literalCommands(script)) {
     const command = part.trim();
+    if (CHANGES_DIRECTORY.test(command)) return null;
     if (SCOPED.test(command) || /(?:^|\s)--(?:prefix|workspace|workspaces|cwd|dir|filter)(?:=|\s|$)|(?:^|\s)-[wCF](?:\s|$)/.test(command)) continue;
     if (/\.(?:test|spec)\.[cm]?[jt]sx?\b|(?:^|\s)(?:src|tests?|__tests__)[/\\]|[`]|\$[({]/.test(command)) continue;
     const called = localScriptCall(command);
@@ -134,6 +147,35 @@ function buildSuiteTrace(scripts: Record<string, unknown>, name: string, chain: 
     }
   }
   return null;
+}
+
+// Positive, literal signals only. Ordinary upload-artifact, names and comments do not establish publication.
+const PUBLICATION_ACTION = /^(?:actions\/(?:deploy-pages|upload-pages-artifact|upload-release-asset)|softprops\/action-gh-release|ncipollo\/release-action)@[^\s]+$/;
+const PUBLICATION_COMMAND = /^(?:(?:npm|pnpm|yarn|bun)\s+publish|gh\s+release\s+(?:create|upload)|(?:npx\s+)?wrangler\s+pages\s+deploy)(?=\s|$)/;
+const NONPUBLISHING_ARGUMENT = /(?:^|\s)["']?(?:--dry-run(?:=(?:true|1))?|--help|-h|--version)["']?(?=\s|$)/;
+
+function publicationTrace(scripts: Record<string, unknown>, raw: string, chain: string[] = []): string | null {
+  for (const part of literalCommands(raw)) {
+    const command = part.trim();
+    if (CHANGES_DIRECTORY.test(command)) return null;
+    if (/[`$]/.test(command)) continue;
+    if (PUBLICATION_COMMAND.test(command) && !NONPUBLISHING_ARGUMENT.test(command)) return [...chain, command].join(' -> ');
+    const called = localScriptCall(command);
+    if (!called || chain.includes(called) || typeof scripts[called] !== 'string') continue;
+    if (!/^(?:npm|pnpm|yarn|bun)\s+(?:(?:run|run-script)\s+)?[\w:.-]+\s*$/.test(command)) continue;
+    const trace = publicationTrace(scripts, scripts[called], [...chain, called]);
+    if (trace) return trace;
+  }
+  return null;
+}
+
+/** Unknown coverage is worth reporting only for a visible test command or test-named script, not every build wrapper. */
+function unknownValidation(raw: string): boolean {
+  return literalCommands(raw).some(part => {
+    const command = part.trim();
+    const script = localScriptCall(command);
+    return runsTestTool(command) || (script !== null && /^test(?:$|[:.-])/.test(script));
+  });
 }
 
 /** Join lines that end in a backslash with the next one; each result keeps the number of its first physical line. */
@@ -252,9 +294,33 @@ function runsOnPullRequest(job: Record<string, unknown>): boolean {
   return condition.split('||').some(clause => !NOT_PULL_REQUEST.some(marker => marker.test(clause)));
 }
 
+/** Each OR alternative must start with a literal constraint excluding branch push; unsupported forms stay possible. */
+function mayRunOnBranchPush(owner: Record<string, unknown>): boolean {
+  if (owner.if === false) return false;
+  if (typeof owner.if !== 'string') return true;
+  const raw = owner.if.trim();
+  const condition = /^\$\{\{\s*([\s\S]*?)\s*\}\}$/.exec(raw)?.[1] ?? raw;
+  return condition.split('||').some(alternative => {
+    // Only a leading conjunction constraint is understood, never fragments inside arbitrary functions or strings.
+    const clause = alternative.split('&&')[0]!.trim();
+    const event = /^github\.event_name\s*(==|!=)\s*(['"])([^'"]+)\2$/.exec(clause);
+    if (event) {
+      const isPush = event[3]!.toLowerCase() === 'push';
+      return event[1] === '==' ? isPush : !isPush;
+    }
+    // GitHub string comparisons, including startsWith, ignore literal case; unknown syntax stays unsupported.
+    const refType = /^github\.ref_type\s*==\s*(['"])([^'"]+)\1$/.exec(clause);
+    const refPrefix = /^startsWith\(\s*github\.ref\s*,\s*(['"])([^'"]*)\1\s*\)$/.exec(clause);
+    return !(clause === 'false'
+      || refType?.[2]?.toLowerCase() === 'tag'
+      || refPrefix?.[2]?.toLowerCase().startsWith('refs/tags/'));
+  });
+}
+
 /** Where and how often the suite runs: hooks, watch mode, CI triggers and OS matrices, and agent instructions. */
 export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
   const findings: Finding[] = [];
+  let scripts: Record<string, unknown> = {};
 
   const addHookFinding = (file: string, line: number | undefined, evidence: string): void => {
     findings.push({
@@ -291,7 +357,7 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
     } catch {
       // Unreadable package.json: nothing to report here.
     }
-    const scripts = isRecord(pkg.scripts) ? pkg.scripts : {};
+    scripts = isRecord(pkg.scripts) ? pkg.scripts : {};
     for (const name of ['prebuild', 'build', 'postbuild']) {
       const trace = buildSuiteTrace(scripts, name);
       if (!trace) continue;
@@ -351,7 +417,32 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
     }
     if (!isRecord(workflow)) continue;
     const triggers = triggersOf(workflow);
-    const jobs = (isRecord(workflow.jobs) ? Object.values(workflow.jobs) : []).filter(isRecord).map(job => ({ ...expensiveRunnersOf(job), onPullRequest: runsOnPullRequest(job) }));
+    const jobs = (isRecord(workflow.jobs) ? Object.entries(workflow.jobs) : []).flatMap(([key, raw]) => isRecord(raw)
+      ? [{ key, raw, ...expensiveRunnersOf(raw), onPullRequest: runsOnPullRequest(raw) }]
+      : []);
+    const rootScriptsForStep = (job: Record<string, unknown>, step: Record<string, unknown>): Record<string, unknown> => {
+      const defaultDirectory = (owner: Record<string, unknown>): unknown => {
+        const defaults = isRecord(owner.defaults) ? owner.defaults : {};
+        return isRecord(defaults.run) ? defaults.run['working-directory'] : undefined;
+      };
+      const directory = step['working-directory'] ?? defaultDirectory(job) ?? defaultDirectory(workflow);
+      if (directory !== undefined && directory !== '.' && directory !== './') return {};
+      // A shell directory change invalidates root-package tracing; do not build a shell state evaluator.
+      if (typeof step.run === 'string' && literalCommands(step.run).some(command => CHANGES_DIRECTORY.test(command))) return {};
+      return scripts;
+    };
+    const publication = jobs.flatMap(job => {
+      const signals: string[] = [];
+      if (typeof job.raw.environment === 'string' || isRecord(job.raw.environment)) signals.push(`${job.key}: environment`);
+      for (const step of Array.isArray(job.raw.steps) ? job.raw.steps.filter(isRecord) : []) {
+        if (typeof step.uses === 'string' && PUBLICATION_ACTION.test(step.uses)) signals.push(`${job.key}: ${step.uses}`);
+        if (typeof step.run === 'string') {
+          const trace = publicationTrace(rootScriptsForStep(job.raw, step), step.run);
+          if (trace) signals.push(`${job.key}: ${trace}`);
+        }
+      }
+      return signals;
+    });
     const reportedMatrix = new Set<number>();
     const reportMatrix = (applies: (job: { onPullRequest: boolean }) => boolean): void => {
       jobs.forEach((job, index) => {
@@ -361,7 +452,7 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
           category: 'frequency',
           rule: 'frequency.ci-os-matrix-on-push',
           file,
-          message: 'An automatic workflow fans out to Windows or macOS runners, which bill at a higher rate than Linux.',
+          message: `An automatic workflow is configured to fan out to Windows or macOS runners.${platformAdvice(map)}${publication.length ? ' Preserve publication triggers.' : ''}`,
           evidence: `matrix.os: ${job.matrix.join(', ')}`,
         });
       });
@@ -374,27 +465,42 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
       const tagOnly = has('tags') && !has('branches') && !has('branches-ignore');
       if (!tagOnly) {
         const pushRunners = [...new Set(jobs.flatMap(job => job.all))];
-        if (has('paths') || has('paths-ignore')) {
-          // A path filter excuses Linux but not Windows or macOS.
+        if (publication.length > 0) {
+          for (const job of jobs) {
+            if (!mayRunOnBranchPush(job.raw)) continue;
+            const steps = Array.isArray(job.raw.steps) ? job.raw.steps : [];
+            steps.forEach((step, index) => {
+              if (!isRecord(step) || typeof step.run !== 'string' || !mayRunOnBranchPush(step)) return;
+              const trace = buildSuiteTrace({ ...rootScriptsForStep(job.raw, step), '<workflow-step>': step.run }, '<workflow-step>');
+              if (!trace && !unknownValidation(step.run)) return;
+              findings.push({
+                category: 'frequency',
+                rule: trace ? 'frequency.publication-validation' : 'frequency.publication-unknown-validation',
+                file,
+                message: trace
+                  ? `A configured literal suite step in a publication context has potential overlap with other validation. Preserve every publication trigger. Review this step only after matching selection, source, dependencies, config, assets and an actual passing result; duplication is not established. Opaque wrappers have unknown coverage.${CONFIGURED_CI}`
+                  : `A validation-looking command in a publication context has unknown coverage; a script name or wrapper does not prove a suite run. Preserve every publication trigger and required validation.${CONFIGURED_CI}`,
+                evidence: `${job.key} / step ${index + 1}${typeof step.name === 'string' ? ` (${step.name})` : ''}: ${trace ?? step.run}; publication: ${publication.join('; ')}`,
+              });
+            });
+          }
+        } else if (has('paths') || has('paths-ignore')) {
           if (pushRunners.length > 0) {
             findings.push({
               category: 'frequency',
               rule: 'frequency.ci-on-push',
               file,
-              message: `A push-triggered workflow runs on ${pushRunners.join(', ')}, which bills at a higher rate than Linux, and a path filter does not change that. Keep Windows and macOS off the push path.${phaseAdvice(map)}`,
+              message: `A push-triggered workflow is configured on ${pushRunners.join(', ')} with a path filter. Review potential overlap with local or PR validation; paths alone do not establish complete selection or waive required reporting. Unknown workflow purpose must be established before changing triggers.${platformAdvice(map)}`,
               evidence: 'on: push',
             });
           }
         } else {
           const branches = isRecord(config) ? asStrings(config.branches) : [];
-          const defaultBranchOnly = branches.length > 0 && !has('branches-ignore') && branches.every(branch => /^(?:main|master)$/.test(branch));
           findings.push({
             category: 'frequency',
             rule: 'frequency.ci-on-push',
             file,
-            message: defaultBranchOnly
-              ? `CI runs on every push to the default branch, a post-merge run. ${'pull_request' in triggers ? 'The pull-request job already ran on the same tree. ' : 'A pull_request trigger tests the change before it lands. '}Drop it, or keep it as the single post-merge check.${phaseAdvice(map)}`
-              : `CI runs on every push to a branch with no path filter. A pull_request trigger fires once per pull-request update instead.${phaseAdvice(map)}`,
+            message: `CI is configured on every push to a branch with no path filter.${branches.length ? ` Configured branches: ${branches.join(', ')}.` : ''} Review potential overlap with local or PR validation and retain an applicable validation owner. Trigger syntax does not establish duplicate execution or matching inputs and results. Workflow purpose is unknown without positive publication evidence; establish obligations before changing triggers.${pushRunners.length ? platformAdvice(map) : phaseAdvice(map) + CONFIGURED_CI}`,
             evidence: 'on: push',
           });
         }
@@ -402,14 +508,14 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
       }
     }
     if ('pull_request' in triggers) {
-      // One Linux job per pull-request update is the recommended non-blocking check; a path filter does not excuse Windows or macOS.
+      // Describe configured platform fanout without inventing billing or required-check policy.
       const runners = [...new Set(jobs.filter(job => job.onPullRequest).flatMap(job => job.all))];
       if (runners.length > 0) {
         findings.push({
           category: 'frequency',
           rule: 'frequency.ci-on-pull-request',
           file,
-          message: `A pull_request workflow runs on ${runners.join(', ')}, which bills at a higher rate than Linux, and a path filter does not change that. Keep Windows and macOS off the pull-request path.${phaseAdvice(map)}`,
+          message: `A pull_request workflow is configured on ${runners.join(', ')}. A path filter alone does not establish platform acceptance or required-check policy.${platformAdvice(map)}${publication.length ? ' Preserve publication triggers.' : ''}`,
           evidence: 'on: pull_request',
         });
         reportMatrix(job => job.onPullRequest);

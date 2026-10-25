@@ -17,6 +17,21 @@ const expected = JSON.parse(readFileSync(join(FIXTURES, 'bloated', 'expected.jso
 
 const everyFinding = (report: EvidenceReport) => [...report.files.flatMap(file => file.findings), ...report.projectFindings];
 
+it('retains contextual publication suite evidence through a real deterministic scan', () => {
+  const root = makeTree({
+    '.testing/risk.yml': serializeRiskMap(defaultRiskMap()),
+    'package.json': JSON.stringify({ scripts: { test: 'vitest run' } }),
+    '.github/workflows/publish.yml': 'on:\n  push:\n    branches: [main]\njobs:\n  publish:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n      - uses: actions/deploy-pages@v4\n',
+  });
+  const report = scan(root);
+  expect(EvidenceReport.safeParse(report).success).toBe(true);
+  const frequency = report.projectFindings.filter(finding => finding.category === 'frequency');
+  expect(frequency).toHaveLength(1);
+  expect(frequency[0]).toMatchObject({ rule: 'frequency.publication-validation', file: '.github/workflows/publish.yml' });
+  expect(frequency[0].evidence).toContain('test: vitest run');
+  expect(scan(root)).toEqual(report);
+});
+
 it('reports opaque helper registration instead of implying zero native coverage', () => {
   const root = makeTree({
     'tests/sources.test.js': `import { expect } from 'vitest';

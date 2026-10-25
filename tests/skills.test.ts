@@ -133,4 +133,16 @@ describe('skills', () => {
   it('has tests-setup name the setup script', () => {
     expect(load('tests-setup').body).toContain('scripts/setup.js');
   });
+
+  it.each(['test-audit', 'test-strategy'])('%s preserves publication, platform obligations and current owner policy in CI advice', name => {
+    const body = load(name).body;
+    expect(body).toMatch(/preserve[^\n]*publication/i);
+    expect(body).toMatch(/owner[^\n]*(?:pause|disabled)|(?:pause|disabled)[^\n]*owner/i);
+    expect(body).toMatch(/never[^\n]*(?:enable|dispatch)/i);
+    expect(body).toMatch(/(?:Windows|platform)[^\n]*obligations|obligations[^\n]*(?:Windows|platform)/i);
+    expect(body).toMatch(/workflow-level path filters[^\n]*(?:strand|pending)/i);
+    expect(body).toMatch(/always-reporting|job-level conditional/i);
+    expect(body).toMatch(/same[^\n]*inputs|input[^\n]*match/i);
+    expect(body).not.toMatch(/Flag any `push`|No `push` trigger on branches|already ran on the same tree/);
+  });
 });

@@ -45,4 +45,17 @@ describe('references/doctrine.md', () => {
   it('cites evidence as a public URL', () => {
     for (const rule of rules) for (const evidence of rule.evidence) expect(evidence).toMatch(/^https:\/\/\S+ — \S/);
   });
+
+  it('qualifies automatic CI advice with publication, policy and input evidence', () => {
+    const rule = rules.find(candidate => candidate.title === 'Automatic CI on every push for a solo pre-release project');
+    expect(rule?.claim).toMatch(/publication/i);
+    expect(rule?.claim).toMatch(/owner.*policy/i);
+    expect(rule?.claim).toMatch(/inputs.*results|results.*inputs/i);
+  });
+
+  it('does not infer actual charges or optional platform acceptance from runner labels', () => {
+    const rule = rules.find(candidate => candidate.title === 'Windows and macOS runners cost more than Linux');
+    expect(rule?.claim).toMatch(/unmeasured|do not establish.*charges/i);
+    expect(rule?.claim).toMatch(/platform obligations/i);
+  });
 });
