@@ -57,6 +57,30 @@ A source revision, successful build or file on disk does not prove the server lo
 against the intended build so stale offline output cannot certify current source. The caller owns this evidence;
 neither static scan/report nor this receipt establishes runtime renderer or served-byte identity automatically.
 
+Consumer collectors should retain partial scope at their existing boundaries: planned owners/cases, actually executed,
+failed and unrun scope, plus bounded full diagnostics for failures. Unknown discovery or cleanup stays unknown. A missing
+final report is incomplete even if some owners completed; neither a batch index nor a CPU profile makes it whole-run green.
+This is advice for the project collector, not progressive reporting implemented by this recorder. Keep flush status, native
+test result, coverage counts and resource cleanup as separate facts.
+
+Refuse an existing attempt directory before acquisition instead of overwriting it. After capture, inventory/hash the final
+artifacts and associate each with its producing owner/attempt. Retain failed partial attempts. For ordinary corruption controls,
+copy inputs to an exclusively owned OS-temp directory and remove only that temporary copy in `finally`; never delete historical
+evidence as cleanup. A receipt or artifact path alone proves neither restoration nor descendant drain.
+
+### Mutation evidence remains a separate contract
+
+Start from a green, nonempty baseline with the same selection and actual assertions. A mutation kill requires an executed
+assertion failure; collection/import/syntax errors, no tests, infrastructure errors, timeouts and missing terminal reports remain
+unclassified. Nonzero exit alone is insufficient. Keep an independent frozen, hash-verified judging reporter outside the mutation
+set, especially when mutating a reporter. Restore original source bytes in `finally` and verify their exact hashes even after
+failure; a failed restore invalidates accepted mutation proof. Partial rerun composition must retain each original command,
+source/dependency identity and omitted scope, and must be labeled composed source-pinned evidence. Only a newly executed complete
+list establishes whole-list fresh execution. These are consumer obligations: a generic mutation-verdict command is unshipped,
+and the inspected consumer heuristics do not constitute a finished portable classifier. Candidate checks still require green runs.
+
+### Reuse and identity limits
+
 Record same-attempt reused owner evidence separately from newly executed checks, with its original result and scope.
 Reuse is eligible only when all relevant inputs, helpers, tool/dependency/environment identities, build and final asset
 bytes are unchanged and the project policy permits it. Unknown dependencies widen the affected scope and require fresh

@@ -1,6 +1,6 @@
 {
   "name": "agent-tests",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Test-efficiency toolkit for coding agents: risk-based test structure, suite audits and remediation",

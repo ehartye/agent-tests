@@ -142,6 +142,42 @@ and clipping bounds. Check hit targets before and after scrolling; horizontal he
 action merely because it stays visible. Exercise disposal so removed controls and subscriptions stop participating.
 These checks follow the application's declared contract; appearance alone cannot establish control semantics.
 
+Opinion: Keep browser evaluation results bounded at the producer. Event waits should resolve `void` (for example,
+`events.once('ready', () => resolve())`) or return an explicit small snapshot. Passing an emitter's resolver directly is
+contextual evidence to inspect: an event payload may be safe or may expose an engine graph. Do not label the syntax alone
+as a violation. Project-owned transport guards should reject extra/oversized/cyclic engine-shaped data before serialization.
+This bounded two-field fixture demonstrates the control without allocating a real scene or exhausting desktop memory;
+place the equivalent guard inside the actual browser callback/collector, since Node-only controls prove no browser wiring:
+
+```js
+// bounded-snapshot-control.mjs
+import assert from 'node:assert/strict';
+function admitSnapshot(value) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype ||
+      Object.keys(value).length !== 2 || !Object.hasOwn(value, 'ready') || !Object.hasOwn(value, 'tick') ||
+      typeof value.ready !== 'boolean' || !Number.isFinite(value.tick)) {
+    throw new Error('Expected a bounded ready/tick snapshot');
+  }
+  return { ready: value.ready, tick: value.tick };
+}
+assert.deepEqual(admitSnapshot({ ready: true, tick: 7 }), { ready: true, tick: 7 });
+const engine = { ready: true, tick: 7, scene: null };
+engine.scene = engine;
+assert.throws(() => admitSnapshot(engine), /bounded/);
+assert.throws(() => admitSnapshot({ ready: true, tick: 7, frames: Array(65).fill(0) }), /bounded/);
+```
+
+Opinion: Native art evidence has separate obligations. Bind actual mounted allocation origin/extent, independent raw and
+effective hit bounds, rendered frame/crop UV and camera-visible ancestry to the same owner attempt. Allocation alone cannot
+prove causal paint: an allocated but hidden image and an unrelated matching palette pixel must fail the visual oracle.
+A shifted source plane can still contain the right colors while using the wrong crop/origin; retain independent expected
+source geometry and corrupt-source controls. Use a hidden-source control as well as a corrupt-source control to show that
+required visible pixels depend on the intended art. Camera ancestry is necessary evidence where the contract requires it,
+not sufficient proof of paint. A full reachable-art inventory must cover the continuous scroll union, including clipping
+boundaries and both axes; sparse checkpoints leave intervening reachability unknown. Do not convert one pixel, allocation
+metadata, a shifted plane or sparse scroll samples into full causal art coverage. These are project oracle obligations,
+not a shipped GPU detector or a reason to launch a browser for tiny CPU tests.
+
 ## Rule: Control time and asynchronous work with fake timers or an injected clock
 Claim: For timeouts, retries, debouncing, schedules and expiry, fake the timer or clock (or inject a clock) and advance it explicitly, asserting both the state before and after the time passes. Do not wait in real time, and do not touch the real network.
 Evidence: https://jestjs.io/docs/timer-mocks — Jest docs: native timers depend on real time and are less than ideal for tests. Fake timers let tests run instantly, control when time passes, and assert intermediate and final states. runAllTimers on a recursive timer can loop until Jest aborts.
