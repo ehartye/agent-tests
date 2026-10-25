@@ -14,8 +14,10 @@ node "<plugin-root>/scripts/run-managed.js" candidate-evidence observe vitest --
 
 The Git root must be the complete checkout. Native arguments after `--` preserve the named selection and applicable
 flags. Select an existing checkout file/directory; implicit discovery is refused. The output directory must be new
-and its parent must exist. Output contains native stdout/stderr, native JSON and `receipt.json`; nothing is silently
-overwritten. Keep it private, normally outside the checkout or under its ignored evidence directory.
+and its parent must exist. Output contains native stdout/stderr, native JSON, immutable `attempt-start.json`, numbered
+`progress/` records, `progress-inventory.json` and terminal `receipt.json`. Nothing is silently overwritten. Keep it
+private, normally outside the checkout or under its ignored evidence directory. The physical attempt path must not
+traverse symbolic links or junctions.
 
 Serial/unreviewed work defaults to one runner worker. `--cpu` declares that the operator reviewed the selected owners
 as CPU-only and permits at most two; it does not infer resource use from filenames. Native concurrency flags may lower
@@ -25,10 +27,76 @@ reporter/output overrides are refused because this is a bounded recorder of a ne
 An optional `--timeout-ms N` stops only the recorded native child and retains interruption as failure; it is not a
 replacement for each runner/test owning and cleaning its descendants.
 
-Node uses `process.execPath` with `--test`, ordinary spec output and the existing `node-profile.mjs` reporter. Vitest
-uses the checkout's installed `node_modules/vitest/vitest.mjs run`, ordinary output and its JSON reporter. Both use
+Node uses `process.execPath` with `--test`, native TAP output and a candidate-only wrapper delegating to the unchanged
+`node-profile.mjs` reporter. TAP retains its natural footer and native assertion details. The synchronized serial
+case is qualified; arbitrary parallel output order has no immediate-output promise. Vitest
+uses the checkout's installed `node_modules/vitest/vitest.mjs run`. Exact Vitest 5.0.3 uses default output plus a
+public `vitest/node` JsonReporter subclass. Its constructor owns the attempt's JSON destination, even with conflicting
+configured JSON options. It inherits initialization/coverage and awaits native final JSON; ordinary counts, snapshots
+and coverage semantics remain native. Bounded native case/module/run errors are persisted before being echoed promptly,
+so final default diagnostics can repeat them. Native worker callback batching can introduce a delay. Both runners use
 argument arrays without a shell. The helper does not install a native runner. Any source/runner error prevents valid
 evidence; a failed child still produces a receipt when observation can complete.
+
+Other Vitest versions retain the previous default+JSON invocation and terminal predicate. Their owner progress is
+explicitly `unsupported`; configured JSON destination interference remains a limitation of that fallback. This is
+neither qualification of another version nor a new minimum version requirement. Explicit Node `--test-isolation=none`
+also retains caller argv and terminal acceptance, with owner progress `unavailable`. Neither fallback invents owners.
+CLI reporters already replace arbitrary configured reporter side effects; preserving those side effects is not promised.
+
+Helper options are admitted per action before filesystem access. `observe` accepts `--root`, `--out`, repeated
+`--generated-input`, `--cpu`, `--timeout-ms` and a native tail after `--`; `check` accepts only `--root`, `--receipt`
+and `--candidate`. Duplicate singleton flags and action-inapplicable arguments are now rejected. Helper values use
+separated arguments. Native arguments retain their runner syntax.
+
+## Inspect durable progress without executing project code
+
+```text
+node "<plugin-root>/scripts/run-managed.js" candidate-evidence progress --attempt "<private-run>"
+```
+
+This action accepts exactly one separated `--attempt PATH`, without `--root`, equals form, native tail or other flags.
+It reads only attempt evidence; it does not load the consumer runner or inspect current consumer source. It reports
+selected argv separately from native discovery, known owners and native counts/errors, ended and discovered-unended
+IDs, adapter capability, inventory integrity and known terminal child/report facts. Undiscovered remaining population,
+observer liveness and cleanup stay `unknown`. Static records never establish that an observer is currently running.
+
+Diagnostic `completed` requires valid terminal child closure and usable native terminal evidence for a qualified adapter.
+It can include failed tests or a native no-tests result; check remains the separate acceptance decision. `interrupted`
+requires explicit persisted timeout, signal or native interruption evidence. Missing terminal evidence, recorder death
+or unsupported owner capability yields `unknown`. Known child/native facts are still exposed. Valid incomplete snapshots
+exit 0; usage and integrity problems exit nonzero. `progressGateReasons` expose incomplete qualified adapter facts without
+mislabeling an ordinary interrupted partial as corruption. No diagnostic state or exit status authorizes integration,
+reuse or resume. Native cleanup and process descendant drain are never inferred from child closure or completed owners.
+
+Node owner ends use actual isolated `test:summary.file` boundaries. Definition-file fallback rows in node-profile remain
+provenance only. Error `entryFile`, when natively available, supplies owner association; missing `entryFile` keeps the
+error unscoped and retains its definition file. Overall summaries never become file owners. Vitest owners retain module
+and project identity, including independent IDs for a shared physical path. Module end also occurs on collection failure;
+it does not prove assertions executed. Passed retry cases may retain actual prior errors without becoming newly rejected.
+Counts use native public case results once; unavailable cancellation counts remain null. Receipt time and native duration
+are separate; body-start times are never reconstructed by subtracting durations.
+
+New observations use `agent-tests/candidate-evidence@2`. Start publication precedes spawn and binds the existing source,
+toolchain and actual command identity. Reserved reporter transport overrides inherited transport environment values.
+One synchronous adapter publisher serializes callback writes. Unique `wx` temporary files are synced and closed, then
+published by an exclusive hard link and temporary unlink; this avoids rename's destination-replacement behavior.
+The attempt filesystem must support hard links. Publication failure prevents qualified acceptance; start failure prevents
+spawn. A crash between link and unlink can leave a recognized temporary file, which readers ignore.
+
+Each numbered record binds its attempt ID and exact start-byte hash. Child closure seals sorted start/record raw hashes
+and lengths; @2 check requires the receipt's matching inventory reference, contiguous sequences and valid transitions.
+Qualified adapters also require native run end, no projection/reporter failure and representation of genuine reported
+owner boundaries. Silent partial or empty adapter output cannot certify a nonempty native report. Existing input,
+toolchain, candidate, native count and native child gates still apply. All three new helpers are explicitly fingerprinted.
+
+Readers enforce fixed filenames, contained regular files, schema, binding and sealed inventory integrity. Symlink/junction
+escapes, directory records and changed/missing/extra final records are refused. Limits are 512 KiB per progress record,
+20,000 records and 32 MiB per bounded diagnostic read set. Error projection retains scalar allowlists, 4 cause levels,
+4,096 UTF-8 bytes per error string, at most 128 case and 64 error details per projection and a 192 KiB shared detail budget.
+Exact counts and explicit omitted/truncated totals remain visible. No engine/project/task graphs are serialized.
+An unsealed enumeration is best effort: another record can publish immediately afterward. Hashes are local integrity
+descriptors, not signatures; coherent rewriting of receipt plus inventory is not authenticated history.
 
 ## Check the captured identity
 
@@ -41,6 +109,8 @@ failed/signalled/spawn-error children, or missing/incomplete native reports. It 
 its captured hash. Exact mismatch paths and before/after identity details are retained. A matching observation returns
 `matched`, `matched-with-skips` or `matched-with-todo`; the actual counts stay visible. Skips/todo are not zero-skip
 release acceptance. Missing native fields remain null/unknown—for example, Vitest does not report cancellation counts.
+`check` can parse legacy `agent-tests/candidate-evidence@1` under its old terminal rules. This promises neither legacy
+progress availability nor cross-version replay; current helper/source fingerprints still govern matching.
 
 `--candidate` must match both the captured and current HEAD. If the capture was dirty, HEAD is the committed base for
 the observed working tree, not a tested final commit. Committing/rebasing/squashing later produces a different source
@@ -60,8 +130,8 @@ neither static scan/report nor this receipt establishes runtime renderer or serv
 Consumer collectors should retain partial scope at their existing boundaries: planned owners/cases, actually executed,
 failed and unrun scope, plus bounded full diagnostics for failures. Unknown discovery or cleanup stays unknown. A missing
 final report is incomplete even if some owners completed; neither a batch index nor a CPU profile makes it whole-run green.
-This is advice for the project collector, not progressive reporting implemented by this recorder. Keep flush status, native
-test result, coverage counts and resource cleanup as separate facts.
+The recorder retains native owner facts at the boundaries above; caller-owned population and cleanup policies still apply.
+Keep flush status, native test result, coverage counts and resource cleanup as separate facts.
 
 Refuse an existing attempt directory before acquisition instead of overwriting it. After capture, inventory/hash the final
 artifacts and associate each with its producing owner/attempt. Retain failed partial attempts. For ordinary corruption controls,

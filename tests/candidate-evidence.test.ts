@@ -80,7 +80,7 @@ describe('observational candidate evidence', () => {
     const f = fixture(); const result = observe(f);
     expect(result.status, result.stderr).toBe(0);
     const saved = receipt(f.out);
-    expect(saved.schema).toBe('agent-tests/candidate-evidence@1');
+    expect(saved.schema).toBe('agent-tests/candidate-evidence@2');
     expect(saved.command.executable).toBe(process.execPath);
     expect(saved.command.concurrency).toBe(1);
     expect(saved.child).toMatchObject({ exitCode: 0, signal: null, spawnError: null });
