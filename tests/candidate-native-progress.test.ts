@@ -4,7 +4,7 @@
  * @subject scripts/candidate-vitest-reporter.mjs
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -13,6 +13,7 @@ import { startAttempt, openProgressWriter, sealProgress } from '../scripts/candi
 import { createHash } from 'node:crypto';
 import { nodeErrorFact } from '../scripts/candidate-node-reporter.mjs';
 import { installRuntime } from '../scripts/managed-runtime.js';
+import { physicalTemp } from './helpers/physical-temp.ts';
 const checkout = fileURLToPath(new URL('../', import.meta.url));
 const script = join(checkout, 'scripts/candidate-evidence.mjs');
 const made: string[] = [];
@@ -23,7 +24,7 @@ function git(root: string, ...args: string[]) {
 }
 function fixture(files: Record<string, string>, vitest = false) {
   const parent = process.env.AGENT_TESTS_NATIVE_EVIDENCE_DIR ?? tmpdir(); mkdirSync(parent, { recursive: true });
-  const base = realpathSync(mkdtempSync(join(parent, 'native-owner-')));
+  const base = physicalTemp('native-owner-', parent);
   if (!process.env.AGENT_TESTS_NATIVE_EVIDENCE_DIR) made.push(base);
   const root = join(base, 'repo'); mkdirSync(root);
   for (const [name, body] of Object.entries({ '.gitignore': 'node_modules/\n.local/\n', 'package.json': '{"name":"native-fixture","type":"module"}', ...files })) writeFileSync(join(root, name), body);
@@ -82,7 +83,7 @@ describe('native durable candidate diagnostics', () => {
       'a.test.mjs': `import{test,describe,expect,afterAll}from'vitest';import value from'fixture-alias';describe('nested',()=>{test('A',()=>{expect(globalThis.fixtureSetup).toBe(true);expect(value).toBe(7);${fail ? "expect('actual-value').toBe('expected-value')" : ''}});test.skip('skip',()=>{});test.todo('todo');${fail ? "afterAll(()=>{throw Error('separate teardown failure')});" : ''}});`,
       'b.test.mjs': `import{test}from'vitest';test('B',async()=>{${held}});`,
       'value.mjs': 'export default 7;', 'setup.mjs': 'globalThis.fixtureSetup=true;',
-      'vitest.config.mjs': `import{BaseSequencer}from'vitest/node';export default{resolve:{alias:{'fixture-alias':new URL('./value.mjs',import.meta.url).pathname}},test:{pool:'forks',isolate:true,setupFiles:['./setup.mjs'],sequence:{sequencer:class extends BaseSequencer{async sort(specs){return specs.sort((a,b)=>a.moduleId.localeCompare(b.moduleId))}}},reporters:[['json',{outputFile:new URL('../redirected.json',import.meta.url).pathname}]],outputFile:{json:new URL('../redirected-config.json',import.meta.url).pathname}}};`,
+      'vitest.config.mjs': `import{BaseSequencer}from'vitest/node';import{fileURLToPath}from'node:url';export default{resolve:{alias:{'fixture-alias':fileURLToPath(new URL('./value.mjs',import.meta.url))}},test:{pool:'forks',isolate:true,setupFiles:['./setup.mjs'],sequence:{sequencer:class extends BaseSequencer{async sort(specs){return specs.sort((a,b)=>a.moduleId.localeCompare(b.moduleId))}}},reporters:[['json',{outputFile:fileURLToPath(new URL('../redirected.json',import.meta.url))}]],outputFile:{json:fileURLToPath(new URL('../redirected-config.json',import.meta.url))}}};`,
     }, true);
     const c = controlled(f, 'vitest', ['a.test.mjs', 'b.test.mjs']);
     try {
