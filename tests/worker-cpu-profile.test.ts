@@ -3,12 +3,16 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { Session } from 'node:inspector/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { makeTree } from './helpers/tree.ts';
+import { makeTree as makeTemporaryTree } from './helpers/tree.ts';
+
+// OS temp roots can have symlink ancestry (for example /var on macOS). These
+// fixtures require a physical parent; the explicit alias-refusal case stays below.
+const makeTree = (files: Record<string, string> = {}) => realpathSync.native(makeTemporaryTree(files));
 
 const helper = new URL('../scripts/worker-cpu-profile.mjs', import.meta.url).href;
 const vitest = import.meta.resolve('vitest');
