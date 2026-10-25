@@ -14,7 +14,17 @@ Once published to the hartye-plugins marketplace:
     /plugin install agent-tests@hartye-plugins
 
 Then run the `tests-setup` skill. It copies a managed runtime outside the plugin cache and installs its
-dependencies. Node.js 24 or newer is required. Codex installation is documented once the Codex packaging lands.
+dependencies. Node.js 24 or newer is required.
+
+On this host, Codex CLI 0.162.1 supports the existing `.claude-plugin/plugin.json` manifest and native installation:
+
+    codex plugin marketplace upgrade hartye-plugins --json
+    codex plugin add agent-tests@hartye-plugins --json
+    codex plugin list --marketplace hartye-plugins --json
+
+Inspect the returned version, then run `tests-setup` from the installed plugin. This host check establishes packaging
+support; it does not establish another host's installation or end-to-end skill behavior. Restart the conversation
+when needed to discover updated skills.
 
 ## Skills
 
@@ -65,7 +75,7 @@ Skills run the CLI through the checked launcher, never from PATH:
 
 | Command | Output |
 |---|---|
-| `capabilities` | Name, version, commands |
+| `capabilities` | Name, version, standalone CLI `commands`; checked launcher adds `launcherCommands` from its helper dispatch map |
 | `risk-draft [--write]` | A draft risk map; `--write` creates `.testing/risk.yml` if absent |
 | `scan` | Evidence report as JSON (`agent-tests/evidence@1`) |
 | `report [--max-files n] [--max-per-rule n]` | The same evidence as ranked, capped Markdown: project findings first, then a table of the most suspect test files with the rules that fired |
@@ -81,9 +91,18 @@ The managed launcher also exports one browser-safe Playbot evidence module:
 
     node "<plugin-root>/scripts/run-managed.js" playbot-export --out <game-vendor-directory>
     node "<plugin-root>/scripts/run-managed.js" playbot-export --out <game-vendor-directory> --verify
+    node "<plugin-root>/scripts/run-managed.js" playbot-export --out <game-vendor-directory> --verify --require-current
 
 The three-file pin contains the actual module, its TypeScript declaration, final digests, producer version and source fingerprint.
-Verification is read-only. Export updates only that owned set and refuses foreign output files.
+Verification is read-only. It authenticates the three-file inventory and its declared payload digests, then compares
+both module and declaration bytes with the actual producer (normalizing CRLF). Matching payloads with different
+producer version or whole-runtime fingerprint return `valid:true`, `current:false` and explicit `drift` with
+`bytesIdentical:true`. This does not authenticate a historical producer or endorse metadata edits. Changed payloads,
+corrupt pins and malformed inventories fail. Strict release verification (`--verify --require-current`, or API
+`requireCurrent:true`) also rejects identity drift. Exact identity returns `current:true` without drift.
+API verification without a source returns `current:null`, proving pin integrity without producer equivalence;
+strict mode requires a source. Export explicitly refreshes the owned pin to the exact current producer and refuses
+foreign output files. Verification never refreshes or relabels a pin.
 Games import `playbot-contract.mjs` directly; no tool process runs per bot beat.
 
 `validateConfig` checks the common run envelope against declared adapter capabilities.
@@ -108,6 +127,10 @@ are sampled, but action/refusal/fallback counters are always collected; omitted 
 Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
+
+Version 0.4.2 advertises managed helper commands and verifies byte-identical Playbot pins without rewriting
+provenance metadata. Use `--verify --require-current` for exact producer identity at release gates.
+
 
 Version 0.3 includes static audits for TypeScript and JavaScript projects using vitest, jest or Node's test runner,
 an optional Node reporter, and explicitly invoked observational candidate evidence for Node-test/Vitest. Scan and

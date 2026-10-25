@@ -124,6 +124,19 @@ For native renderer tests, use its independent PNG/glyph expectations, negative 
 coordinate/scroll/clip contracts, and capture teardown on failure. Attribute served builds and final assets using
 `<plugin-root>/references/candidate-evidence.md`; unchanged same-attempt evidence never waives required gates.
 
+### Portable Playbot evidence
+
+For a browser/headless bot adapter, explicitly export the three-file pin (module, declaration, `PLAYBOT_VERSION.json`):
+
+    node "<plugin-root>/scripts/run-managed.js" playbot-export --out "<game-vendor-directory>"
+    node "<plugin-root>/scripts/run-managed.js" playbot-export --out "<game-vendor-directory>" --verify
+    node "<plugin-root>/scripts/run-managed.js" playbot-export --out "<game-vendor-directory>" --verify --require-current
+
+Verification is read-only: both producer payloads must match. Identity-only drift is `valid:true,current:false` with
+`bytesIdentical:true`; this is not historical producer authentication. Strict release mode additionally requires the
+current producer version and fingerprint. Source-less API verification gives `current:null`, not equivalence.
+Only explicit export refreshes metadata. Games import the module directly; no tool runs per bot beat.
+
 ## 7. Audit what exists
 
 For an existing suite, load the test-audit skill instead of restructuring by hand.

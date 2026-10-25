@@ -257,6 +257,32 @@ describe('launcher contract', () => {
     'scripts/candidate-evidence.mjs': "console.log(JSON.stringify({ script: import.meta.url, args: process.argv.slice(2) }));\n",
     'scripts/playbot-export.mjs': "console.log(JSON.stringify({ script: import.meta.url, args: process.argv.slice(2) }));\n",
   });
+  it('discovers both helper routes through capabilities from the exact checked CLI without changing its commands', () => {
+    const root = observationSource(), home = makeTree();
+    writeFileSync(join(root, 'scripts/tests.mjs'), "console.log(JSON.stringify({name: 'agent-tests', version: '1.2.3', commands: ['capabilities','risk-draft','scan','report']}));\n");
+    const installed = installRuntime(root, {home, ...fakes});
+    const invoke = () => spawnSync(process.execPath, [join(root, 'scripts/run-managed.js'), 'capabilities'], {encoding: 'utf8', env: {...process.env, AGENT_TESTS_HOME: home}});
+    const result = invoke();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({name: 'agent-tests', version: '1.2.3', commands: ['capabilities','risk-draft','scan','report'], launcherCommands: ['candidate-evidence','playbot-export']});
+    for (const command of JSON.parse(result.stdout).launcherCommands) {
+      const dispatched = spawnSync(process.execPath, [join(root, 'scripts/run-managed.js'), command, '--probe'], {encoding: 'utf8', env: {...process.env, AGENT_TESTS_HOME: home}});
+      expect(dispatched.status, dispatched.stderr).toBe(0);
+      expect(JSON.parse(dispatched.stdout)).toEqual({script: pathToFileURL(join(installed.root, `scripts/${command}.mjs`)).href, args: ['--probe']});
+    }
+    writeFileSync(join(installed.root, 'scripts/playbot-export.mjs'), "console.log('must-not-run');\n");
+    const tampered = invoke();
+    expect(tampered.status).toBe(1); expect(tampered.stdout).toBe('');
+    expect(errorOf(tampered.stderr).code).toBe('E_RUNTIME_MISSING');
+  });
+  it('preserves failed capabilities output, error and exit status from the checked CLI', () => {
+    const root = observationSource(), home = makeTree();
+    writeFileSync(join(root, 'scripts/tests.mjs'), "process.stdout.write('partial\\n'); console.error(JSON.stringify({error:{code:'E_USAGE',message:'unknown flag'}})); process.exitCode=2;\n");
+    installRuntime(root, {home, ...fakes});
+    const result = spawnSync(process.execPath, [join(root, 'scripts/run-managed.js'), 'capabilities', '--bogus'], {encoding: 'utf8', env: {...process.env, AGENT_TESTS_HOME: home}});
+    expect(result.status).toBe(2); expect(result.stdout).toBe('partial\n');
+    expect(errorOf(result.stderr)).toEqual({code: 'E_USAGE', message: 'unknown flag'});
+  });
   it('dispatches explicit observation to the exact checked managed script while other CLI routes stay unchanged', () => {
     const root = observationSource(), home = makeTree(), installed = installRuntime(root, { home, ...fakes });
     const invoke = (...args: string[]) => spawnSync(process.execPath, [join(root, 'scripts/run-managed.js'), ...args], { encoding: 'utf8', env: { ...process.env, AGENT_TESTS_HOME: home } });
