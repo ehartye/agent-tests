@@ -27,24 +27,27 @@ function metadata(path) {
   for (const name of ['sourceFingerprint','sha256','typesSha256']) assert(/^[a-f0-9]{64}$/.test(pin[name]), 'Invalid Playbot pin digest');
   return pin;
 }
-export function verifyPlaybotPin(output, {source} = {}) {
+export function verifyPlaybotPin(output, {source, requireCurrent = false} = {}) {
   output = resolve(output);
   const files = inventory(output);
   assert(files !== null && same(files.map(row => row.name), NAMES), 'Incomplete Playbot pin inventory');
   const pin = metadata(output);
   assert(sha(readFileSync(join(output, MODULE))) === pin.sha256, 'Playbot module digest mismatch');
   assert(sha(readFileSync(join(output, TYPES))) === pin.typesSha256, 'Playbot declaration digest mismatch');
-  let current = null;
+  assert(!requireCurrent || source !== undefined, 'requireCurrent requires a producer source');
+  let current = null, drift;
   if (source !== undefined) {
     const producer = describeSource(source);
-    assert(pin.version === producer.version && pin.sourceFingerprint === producer.fingerprint, 'Playbot source identity mismatch');
     const actual = readFileSync(join(producer.source, 'scripts', MODULE), 'utf8').replaceAll('\r\n', '\n');
     assert(sha(Buffer.from(actual)) === pin.sha256, 'Pin does not match the actual producer module digest');
     const declarations = readFileSync(join(producer.source, 'scripts', TYPES), 'utf8').replaceAll('\r\n', '\n');
     assert(sha(Buffer.from(declarations)) === pin.typesSha256, 'Pin does not match the actual producer declaration digest');
-    current = true;
+    assert(describeSource(producer.source).fingerprint === producer.fingerprint, 'Producer source changed during pin verification');
+    current = pin.version === producer.version && pin.sourceFingerprint === producer.fingerprint;
+    assert(!requireCurrent || current, 'Playbot source identity mismatch');
+    if (!current) drift = {pinVersion: pin.version, producerVersion: producer.version, pinSourceFingerprint: pin.sourceFingerprint, producerSourceFingerprint: producer.fingerprint, bytesIdentical: true};
   }
-  return {valid: true, current, pin};
+  return {valid: true, current, pin, ...(drift ? {drift} : {})};
 }
 
 /** Explicit export owns module, declarations and metadata. Read-only verification never repairs them. */
@@ -58,7 +61,7 @@ export function exportPlaybot(source, output) {
   if (before?.length) metadata(output); // Refuse replacing an unrelated or unsupported pair.
   if (same(before, expected)) {
     assert(describeSource(producer.source).fingerprint === producer.fingerprint, 'Producer source changed during pin check');
-    return {changed: false, output, ...verifyPlaybotPin(output, {source: producer.source})};
+    return {changed: false, output, ...verifyPlaybotPin(output, {source: producer.source, requireCurrent: true})};
   }
   const parent = dirname(output); mkdirSync(parent, {recursive: true}); directory(parent);
   const stage = mkdtempSync(join(realpathSync(parent), '.playbot-export-')), backup = stage + '.previous';
@@ -76,7 +79,7 @@ export function exportPlaybot(source, output) {
     assert(same(inventory(output), before), 'Existing Playbot pin changed during export');
     if (before !== null) { renameSync(output, backup); movedOld = true; }
     renameSync(stage, output); published = true;
-    result = verifyPlaybotPin(output, {source: producer.source});
+    result = verifyPlaybotPin(output, {source: producer.source, requireCurrent: true});
   } catch (error) {
     if (published) { renameSync(output, stage); published = false; }
     if (movedOld && existsSync(backup)) { renameSync(backup, output); movedOld = false; }
@@ -95,11 +98,21 @@ export function exportPlaybot(source, output) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const args = process.argv.slice(2), outIndex = args.indexOf('--out'), verify = args.includes('--verify');
-    assert(outIndex >= 0 && args[outIndex + 1] && !args[outIndex + 1].startsWith('--'), 'Usage: playbot-export --out <directory> [--verify]');
-    assert(args.length === (verify ? 3 : 2) && args.every((arg, index) => index === outIndex + 1 || ['--out','--verify'].includes(arg)), 'Unknown Playbot export arguments');
+    const args = process.argv.slice(2), options = new Map();
+    for (let index = 0; index < args.length; index++) {
+      const arg = args[index];
+      assert(['--out', '--verify', '--require-current'].includes(arg) && !options.has(arg), 'Unknown or duplicate Playbot export arguments');
+      if (arg === '--out') {
+        const value = args[++index];
+        assert(value && !value.startsWith('--'), 'Usage: playbot-export --out <directory> [--verify [--require-current]]');
+        options.set(arg, value);
+      } else options.set(arg, true);
+    }
+    assert(options.has('--out'), 'Usage: playbot-export --out <directory> [--verify [--require-current]]');
+    const verify = options.has('--verify'), requireCurrent = options.has('--require-current');
+    assert(!requireCurrent || verify, '--require-current requires --verify');
     const source = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-    console.log(JSON.stringify(verify ? verifyPlaybotPin(args[outIndex + 1], {source}) : exportPlaybot(source, args[outIndex + 1])));
+    console.log(JSON.stringify(verify ? verifyPlaybotPin(options.get('--out'), {source, requireCurrent}) : exportPlaybot(source, options.get('--out'))));
   } catch (error) {
     console.error(JSON.stringify({error: {code: 'E_PLAYBOT_PIN', message: error.message}})); process.exitCode = 1;
   }

@@ -14,6 +14,8 @@ const SKILLS = join(ROOT, 'skills');
 const REQUIRED = ['tests-setup', 'test-audit', 'test-strategy'];
 const CLI_COMMANDS: readonly string[] = COMMANDS;
 const CLI_FLAGS = ['root', 'write', 'max-files', 'max-per-rule'];
+// Helper commands are checked by the launcher's executable dispatch tests, not src/cli.ts's COMMANDS.
+const HELPER_FLAGS: Record<string, string[]> = {'playbot-export': ['out', 'verify', 'require-current']};
 const SETUP_FLAGS = ['check', 'json'];
 
 const skillNames = readdirSync(SKILLS, { withFileTypes: true })
@@ -100,14 +102,15 @@ describe('skills', () => {
       expect(text).not.toMatch(/\$[1-9]|\$ARGUMENTS/);
     });
 
-    it('only calls CLI commands that exist', () => {
+    it('only calls CLI commands or checked launcher helpers that exist', () => {
       const called = [...body.matchAll(/run-managed\.js" ([a-z-]+)/g)].map(match => match[1]);
-      for (const command of called) expect(CLI_COMMANDS).toContain(command);
+      for (const command of called) expect([...CLI_COMMANDS, ...Object.keys(HELPER_FLAGS)]).toContain(command);
     });
 
     it('only names options the scripts accept', () => {
       for (const example of examples(body)) {
-        const allowed = example.script === 'setup' ? SETUP_FLAGS : CLI_FLAGS;
+        const helper = example.text.match(/run-managed\.js" ([a-z-]+)/)?.[1];
+        const allowed = example.script === 'setup' ? SETUP_FLAGS : helper && HELPER_FLAGS[helper] || CLI_FLAGS;
         for (const match of example.text.matchAll(/(?<![\w-])--([a-z][a-z-]*)/g)) expect(allowed, `--${match[1]} in: ${example.text}`).toContain(match[1]);
       }
     });
