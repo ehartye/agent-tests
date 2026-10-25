@@ -60,6 +60,7 @@ on this machine.
 | `references/architecture-cost.md` | Advisory investigation of architecture that makes tests costly, including complete generated-asset inputs and final verification ownership |
 | `references/node-profiling.md` | Optional Node 24+ reporter, per-file and overall duration, provenance limits and repeatable lane experiments |
 | `references/candidate-evidence.md` | Explicit checked observation of Node-test/Vitest children, content/path/index identities, native counts and honest reuse limits |
+| `references/mutation-evidence.md` | Read-only mutation verdicts, exact native assertion scope, frozen judging, raw restoration and honest partial composition |
 
 ## Risk map
 
@@ -80,12 +81,17 @@ Skills run the CLI through the checked launcher, never from PATH:
 | `scan` | Evidence report as JSON (`agent-tests/evidence@1`) |
 | `report [--max-files n] [--max-per-rule n]` | The same evidence as ranked, capped Markdown: project findings first, then a table of the most suspect test files with the rules that fired |
 
-Every failure is one JSON line on stderr (`{"error":{"code","message","hint"}}`) with exit code 2 for a usage error and 1
-otherwise. A broken runtime is reported the same way (`E_RUNTIME_BROKEN`), so an agent never has to read a stack trace.
+Standalone CLI failures are one JSON line on stderr (`{"error":{"code","message","hint"}}`), with exit code 2 for a
+usage error and 1 otherwise. Helpers have their documented evidence contracts; mutation integrity refusal exits 2.
+A broken runtime is reported as JSON too (`E_RUNTIME_BROKEN`), so an agent never has to read a stack trace.
 
 The checked launcher also accepts `candidate-evidence observe node-test|vitest` and `candidate-evidence check` as an
 explicit standalone helper. Observation runs project tests; scan/report stay static. See the [portable usage and
 input-scope limits](references/candidate-evidence.md) before recording or checking a receipt.
+
+`mutation-verdict classify --input <absolute-bundle.json>` is a separate read-only helper for acquired mutation
+evidence. It does not launch tests or change source. A valid diagnostic exit can be `unclassified`; it never means
+candidate success. See [mutation evidence and native qualification limits](references/mutation-evidence.md).
 
 The managed launcher also exports one browser-safe Playbot evidence module:
 
@@ -127,6 +133,10 @@ are sampled, but action/refusal/fallback counters are always collected; omitted 
 Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
+
+Version 0.7.0 adds the read-only mutation evidence helper, bounded exact-version native reporter adapters and
+reviewed builtin assertion profiles. It verifies raw source/restoration, independent judging and declared input
+identity, and keeps historical mutation counts separate from strict results. See the linked qualification limits.
 
 Version 0.6.1 centralizes physical test-fixture allocation and converts fixture file URLs correctly for space paths.
 The original 0.6.0 tag retains failed Windows/macOS fixture checks; public helpers and refusal behavior are unchanged.
@@ -202,6 +212,12 @@ The [APcademy Government case study](docs/case-studies/apcademy-government.md) r
 and remaining execution-scope limitations that motivated component subjects and build-gate evidence.
 
     npm ci
+
+Before the first `npm test`, install the standalone exact-version native qualification dependencies with
+`npm ci --prefix tests/fixtures/mutation-native` and `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`. See the
+[fixture setup instructions](tests/fixtures/mutation-native/README.md) for PowerShell. These are dev-only dependencies;
+the managed runtime installs with `--omit=dev` and needs neither framework nor a browser to read mutation evidence.
+
     npm test
     npm run typecheck
 

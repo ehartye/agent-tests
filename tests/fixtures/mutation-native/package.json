@@ -1,0 +1,11 @@
+{
+  "name": "agent-tests-mutation-native-qualification",
+  "private": true,
+  "type": "module",
+  "description": "Dev-only exact native versions for mutation evidence qualification; not a root workspace or managed runtime dependency.",
+  "engines": { "node": ">=24" },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "vitest": "5.0.5"
+  }
+}

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveRuntime } from './managed-runtime.js';
 
 const source = join(dirname(fileURLToPath(import.meta.url)), '..');
-const helpers = new Map([['candidate-evidence', 'candidate-evidence.mjs'], ['playbot-export', 'playbot-export.mjs']]);
+const helpers = new Map([['candidate-evidence', 'candidate-evidence.mjs'], ['playbot-export', 'playbot-export.mjs'], ['mutation-verdict', 'mutation-verdict-cli.mjs']]);
 try {
   const runtime = resolveRuntime(source);
   const args = process.argv.slice(2);

@@ -1,0 +1,2 @@
+import { defineConfig } from '@playwright/test';
+export default defineConfig({ testDir: '.', testMatch: process.env.MUTATION_NATIVE_CONTROL === 'syntax' ? 'syntax.playwright.case.mjs' : 'controls.playwright.case.mjs', reporter: [['./capture-playwright.mjs']], workers: 1, fullyParallel: false, retries: 0, repeatEach: 1, timeout: 200, globalTimeout: process.env.MUTATION_NATIVE_CONTROL === 'global-timeout' ? 800 : 12000, outputDir: process.env.MUTATION_NATIVE_ATTACHMENTS });

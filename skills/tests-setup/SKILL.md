@@ -28,7 +28,7 @@ Done when the JSON reports `"ok": true` and `cliVersion` equals `pluginVersion`.
 3. Run the check again and confirm `"ok": true`.
 4. Smoke test: `node "<plugin-root>/scripts/run-managed.js" capabilities` prints JSON with `"name":"agent-tests"`.
    Its `commands` belong to the standalone CLI; `launcherCommands` lists checked helpers, including
-   `candidate-evidence` and `playbot-export`. Both lists require the exact matching managed runtime.
+   `candidate-evidence`, `playbot-export` and `mutation-verdict`. Both lists require the exact matching managed runtime.
 
 ## When it fails
 

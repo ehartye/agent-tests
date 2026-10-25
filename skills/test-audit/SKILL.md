@@ -110,6 +110,8 @@ Never recommend deleting a critical-tier test without naming its replacement.
 
 ## Output
 
+When mutation evidence supports a keep/rewrite decision, follow the [read-only mutation evidence contract](../../references/mutation-evidence.md). Preserve native baseline, assertion scope, frozen judging and exact restoration; exit code alone proves no kill. Do not expand a selected mutation diagnostic into whole-suite acceptance.
+
 1. A table: `File | Tier | Verdict | Why (finding rule and evidence) | Agent tokens | Churn`.
    List only files that are not trivially kept, and add one line with the count of files kept unopened.
    Order it by review priority: expensive and low value first. Show the cost columns separately. The default `weights`
