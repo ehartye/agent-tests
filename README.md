@@ -128,6 +128,12 @@ Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
 
+Version 0.6.0 adds read-only `candidate-evidence progress --attempt PATH`, immutable before-spawn identity
+and sealed native owner progress for new candidate receipts. Node observations use TAP; Vitest 5.0.3 uses
+its public reporter API with an owned JSON destination. Other Vitest versions retain terminal observation
+with unsupported owner progress. Argument admission is now strict per action. Legacy receipts remain
+parseable subject to source/toolchain identity; progress never authorizes acceptance, reuse or cleanup.
+
 Version 0.5.1 resolves temporary fixture parents to physical paths before profiling, including macOS temp aliases.
 The opt-in helper and its nonphysical-parent refusal are unchanged.
 
