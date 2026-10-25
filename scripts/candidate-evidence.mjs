@@ -106,7 +106,10 @@ function capturedSummary(saved, directory) {
 function validate(saved, directory, current, currentToolchain, candidate) {
   const reasons = [];
   if (![schema, 'agent-tests/candidate-evidence@1'].includes(saved?.schema) || !['node-test', 'vitest'].includes(saved?.command?.mode) || !saved.before?.files || !saved.child) return { ok: false, state: 'rejected', reasons: ['Malformed or unsupported receipt'] };
-  if (saved.schema === schema) reasons.push(...progressProblems(saved, directory));
+  if (saved.schema === schema) {
+    if (!validChildClosure(saved.child)) reasons.push('Malformed terminal child closure');
+    reasons.push(...progressProblems(saved, directory));
+  }
   if (saved.child.exitCode !== 0 || saved.child.signal !== null || saved.child.spawnError !== null) reasons.push('Observed child did not exit successfully without signal/spawn error');
   if (saved.child.timedOut) reasons.push('Observed child exceeded its explicit timeout');
   if (candidate !== saved.before.head.sha || candidate !== current?.head?.sha) reasons.push('Candidate SHA differs from receipt/current source; dirty capture cannot be remapped to a later commit');
@@ -150,12 +153,23 @@ function progressProblems(saved, directory, terminalGate = true) {
   } catch (error) { reasons.push(`Progress native reconciliation unavailable: ${error.message}`); }
   return reasons;
 }
+function validChildClosure(child) {
+  const text = value => typeof value === 'string' && value.length > 0 && Buffer.byteLength(value) <= 4096;
+  const time = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+  if (!child || typeof child !== 'object' || Array.isArray(child)) return false;
+  if (!(Number.isSafeInteger(child.exitCode) || child.exitCode === null) || !(child.signal === null || text(child.signal)) || typeof child.timedOut !== 'boolean') return false;
+  if (child.spawnError !== null && (!child.spawnError || typeof child.spawnError !== 'object' || Array.isArray(child.spawnError) || !(child.spawnError.code === null || text(child.spawnError.code)) || !text(child.spawnError.message))) return false;
+  if (!time(child.startedAt) || !time(child.endedAt) || Date.parse(child.endedAt) < Date.parse(child.startedAt) || !Number.isFinite(child.wallMs) || child.wallMs < 0) return false;
+  return child.exitCode !== null || child.signal !== null || child.spawnError !== null;
+}
 function queryProgress(directory) {
-  const p = readProgress(directory), problems = [...p.problems]; let terminal = null, nativeReport = null, progressGateReasons = [];
+  const p = readProgress(directory), problems = [...p.problems]; let terminal = null, nativeReport = null, progressGateReasons = [], childClosed = false;
   if (existsSync(join(directory, 'receipt.json'))) {
     try {
       terminal = JSON.parse(physicalFile(directory, 'receipt.json').toString('utf8'));
-      if (terminal.schema !== schema || !terminal.child) throw Error('Malformed terminal observation');
+      if (terminal.schema !== schema) throw Error('Malformed terminal observation');
+      if (!validChildClosure(terminal.child)) throw Error('Malformed terminal child closure');
+      childClosed = true;
       problems.push(...progressProblems(terminal, directory, false));
       progressGateReasons = progressProblems(terminal, directory);
       if (terminal.report?.sha256) {
@@ -169,8 +183,8 @@ function queryProgress(directory) {
   }
   const capability = p.start?.progress ?? null, child = terminal?.child ?? null;
   let state = 'unknown';
-  if (child?.timedOut || child?.signal || p.records.some(r => r.kind === 'run-ended' && r.state === 'interrupted')) state = 'interrupted';
-  else if (!problems.length && !progressGateReasons.length && capability?.capability === 'qualified' && child && child.exitCode !== null && !child.spawnError && nativeReport?.usable && p.sealed) state = 'completed';
+  if (childClosed && (child.timedOut || child.signal || p.records.some(r => r.kind === 'run-ended' && r.state === 'interrupted'))) state = 'interrupted';
+  else if (!problems.length && !progressGateReasons.length && capability?.capability === 'qualified' && childClosed && child.exitCode !== null && !child.spawnError && nativeReport?.usable && p.sealed) state = 'completed';
   return { schema: 'agent-tests/candidate-progress-query@1', ...p, problems, progressGateReasons, state, capability, attemptId: p.start?.attemptId ?? null, selectedArgs: p.start?.command?.selectedArgs ?? null, nativeDiscovery: p.owners.map(o => ({ id: o.id, file: o.file })), child, nativeReport, checkVerdict: terminal?.validation ?? null };
 }
 async function execute(root, args, directory, timeoutMs, binding) {

@@ -126,7 +126,7 @@ describe('native durable candidate diagnostics', () => {
   }, 30000);
   it('inherits public JsonReporter initialization and coverage while ignoring injected destinations', async () => {
     const f = fixture({ 'owner.test.mjs': '' }, true); mkdirSync(f.out);
-    const binding = startAttempt(f.out, { command: { cwd: f.root }, progress: { capability: 'qualified' } });
+    const binding = startAttempt(f.out, { before: { root: f.root, head: { sha: f.sha }, files: {} }, toolchainBefore: { node: process.version, executable: process.execPath, helpers: {} }, command: { executable: process.execPath, cwd: f.root, mode: 'vitest', args: [], selectedArgs: [], concurrency: 1, resourceDeclaration: 'serial/unreviewed' }, progress: { capability: 'qualified', adapter: 'vitest-5.0.3', version: '5.0.3' }, limitations: [] });
     const keys = ['AGENT_TESTS_PROGRESS_DIRECTORY', 'AGENT_TESTS_PROGRESS_ATTEMPT', 'AGENT_TESTS_PROGRESS_START'];
     const previous = keys.map(k => process.env[k]);
     Object.assign(process.env, { AGENT_TESTS_PROGRESS_DIRECTORY: f.out, AGENT_TESTS_PROGRESS_ATTEMPT: binding.attemptId, AGENT_TESTS_PROGRESS_START: binding.startSha256 });
@@ -276,7 +276,7 @@ describe('native durable candidate diagnostics', () => {
     const binding = { attemptId: saved.attemptId, startSha256: createHash('sha256').update(bytes).digest('hex') };
     rmSync(join(f.out, 'progress-inventory.json')); rmSync(join(f.out, 'progress'), { recursive: true }); mkdirSync(join(f.out, 'progress'));
     const writer = openProgressWriter({ directory: f.out, ...binding });
-    if (kind === 'silent') writer.append('run-ended', { state: 'passed' });
+    if (kind === 'silent') writer.append('run-ended', originalRecords.find(record => record.kind === 'run-ended'));
     else {
       for (const record of originalRecords) if (kind !== 'missing-run-end' || record.kind !== 'run-ended') writer.append(record.kind, record);
       if (kind === 'reporter-failed') writer.append('reporter-failed', { message: 'controlled projection failure' });
@@ -292,6 +292,17 @@ describe('native durable candidate diagnostics', () => {
     const r = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, script, 'observe', 'node-test', '--root', f.root, '--out', f.out, '--', 'owner.mjs'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
     expect(r.status).toBe(1); expect(r.stderr).toMatch(/controlled start publication failure/);
     expect(existsSync(join(f.out, 'stdout.log'))).toBe(false); expect(existsSync(join(f.out, 'receipt.json'))).toBe(false);
+  });
+  it('rejects missing or wrongly typed terminal child closure instead of fabricating completion/interruption', () => {
+    const f = fixture({ 'owner.mjs': "import{test}from'node:test';test('native',()=>{});" });
+    expect(run(['observe', 'node-test', '--root', f.root, '--out', f.out, '--', 'owner.mjs']).status).toBe(0);
+    const saved = json(f.out), original = saved.child;
+    for (const child of [{}, null, { ...original, exitCode: undefined }, { ...original, exitCode: '0' }, { ...original, signal: 7 }, { ...original, timedOut: 'false' }, { ...original, spawnError: {} }, { ...original, startedAt: null }, { ...original, endedAt: 'yesterday' }, { ...original, wallMs: -1 }, { ...original, exitCode: null, signal: null, spawnError: null }]) {
+      writeFileSync(join(f.out, 'receipt.json'), JSON.stringify({ ...saved, child }));
+      const r = progress(f.out); expect(r.status, JSON.stringify(child)).toBe(1); const p = JSON.parse(r.stdout);
+      expect(p.problems.join(' ')).toMatch(/child|closure/i); expect(['completed', 'interrupted']).not.toContain(p.state);
+    }
+    writeFileSync(join(f.out, 'receipt.json'), JSON.stringify(saved)); expect(JSON.parse(progress(f.out).stdout).state).toBe('completed');
   });
 });
 
