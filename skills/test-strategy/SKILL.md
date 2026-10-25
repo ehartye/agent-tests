@@ -127,6 +127,12 @@ determinism, coverage, legacy code, agent-written tests).
 For native renderer tests, use its independent PNG/glyph expectations, negative controls, declared control IDs and
 coordinate/scroll/clip contracts, and capture teardown on failure. Attribute served builds and final assets using
 `<plugin-root>/references/candidate-evidence.md`; unchanged same-attempt evidence never waives required gates.
+For native/browser owners, also read `<plugin-root>/references/architecture-cost.md` for file-owned transport with fresh
+case contexts, effective startup/base/continuation/finalization budgets and retry admission at the real CLI. Apply craft's
+bounded evaluation and causal allocation/paint/continuous-scroll controls; use candidate-evidence's partial-attempt and
+mutation limits. For explicitly opted-in worker CPU diagnostics, read `<plugin-root>/references/node-profiling.md` for
+awaited Inspector hooks that append to the actual config/setup; a complete profile never makes a failed test green.
+These operational recipes remain advisory; tiny CPU-only tests need no browser lifecycle machinery.
 
 ### Portable Playbot evidence
 

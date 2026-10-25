@@ -128,6 +128,10 @@ Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
 
+Version 0.5.0 adds an explicitly selected Inspector worker CPU profiling helper, weighted summaries and
+setup-preserving recipes. Native correctness, profile completion and cleanup remain separate evidence.
+Reachable operational advice covers bounded browser reuse, evaluated data, retry/budget admission and causal paint.
+
 Version 0.4.4 preserves publication triggers and platform obligations in CI advice. Mixed publication/validation
 findings identify the actual suite step, respect event conditions and distinguish configured work from execution
 and billing. Dry runs and similarly named scripts are not treated as publication.

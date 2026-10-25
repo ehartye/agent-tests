@@ -57,6 +57,10 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    with Time, Risk, Complexity, Best practice and Maintainability; label estimates and name replacement coverage.
    Use its browser phase timing, metadata-port and earned-campaign guidance before proposing reuse or retirement.
    For served builds/final assets and same-attempt owner evidence, read `<plugin-root>/references/candidate-evidence.md`.
+   Apply architecture-cost's file-owned transport/fresh-context, effective-budget and real retry-CLI admission guidance
+   only to relevant native owners. Use craft's bounded evaluation, allocation/paint/scroll controls and candidate-evidence's
+   partial-attempt/mutation limits; these are consumer advice, not newly detected runtime facts. For explicit worker CPU
+   diagnostics, read `<plugin-root>/references/node-profiling.md` and keep profile completion separate from native success.
    Missing risk tiers prevent file verdicts, but do not prevent this structural advice. Do not change product architecture.
 6. **Judge** each remaining file with the rubric, then write the verdict table.
 

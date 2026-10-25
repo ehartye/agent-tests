@@ -57,6 +57,32 @@ If startup dominates, propose runner-owned browser reuse within each worker with
 context/browser teardown. Do not introduce a cross-process browser broker; verify isolation and measure the complete
 replacement before claiming savings. This is advisory, not a scanner-detected runtime property.
 
+For a file of serial native cases, the project can own one server/browser transport and lease a new context/game for
+each case. Before acquisition, admit the expected GPU/backend/DPR and a unique attempt path. Reset storage, input and
+clock for each lease; clean a partially allocated case after setup failure as well as after assertions. The file owner
+closes the actual final browser/server and port in `finally`, preserving primary and cleanup errors separately.
+Standalone cases still close what they allocate; a reused transport is not a reason to turn `close()` into a no-op.
+Prove case isolation and failure cleanup before measuring complete-file cost. An already batched census needs no new
+per-panel browser start; tiny CPU-only owners need none of this browser advice. Unknown cleanup stays unknown.
+
+For a long campaign, inventory every effective simulation/work/wall limiter: startup, base work, optional checks, each
+continuation and finalization, including outer command and inner test caps. Name the source/sample identity and uncertainty
+behind any estimate. A game-owned declarative budget should drive all actual limiters and reject conflicting caps before
+server/browser allocation. For example, a reviewed 180s base plus 20s startup and 30s finalization conflicts with an inner
+120s base cap even if the outer command allows 300s. Correct admission first; do not auto-extend an active run. A genuine
+policy stall with compatible caps needs state/progress evidence and a game-policy repair, not another budget-only campaign.
+This is advice for the consumer's real entrypoint; Tests does not ship campaign preflight or a limiter service.
+
+Retry policy belongs to the actual browser entrypoint. A `--boot-retries=0|1` policy must preserve the initial result/error,
+every attempt's exact Chromium argv and distinct output paths. Verify the real CLI dispatch admits both equals and separated
+forms and refuses empty, malformed, repeated and mixed duplicates before any server/browser acquisition. A helper parser test
+alone proves no dispatch behavior. Keep failed partial attempts and independently identify retry outcomes; retry is not repair.
+
+When equivalent physical input is established, one `mouse.click()` can avoid repeated hooks around separate move/down/up calls.
+Keep tracing enabled, all original iterations, settled-render checks and the existing deadline. Verify pointer movement, hover,
+button and event-order semantics at the consumer seam before substitution. The historical 150-change, 55.8s admission under a
+60s limit is one successful execution, not a controlled saving; do not claim a speedup from it.
+
 When already approved, use one earned campaign in the edit lane instead of replaying its prefix for each checkpoint.
 Retain checkpoint assertions, provenance and failure evidence; a saved fixture does not prove the prefix was earned.
 Give independent branches cheaper seam owners and name the coverage each replaces. Keep full and release gates until
