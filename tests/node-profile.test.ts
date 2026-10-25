@@ -2,12 +2,20 @@
  * @subject scripts/node-profile.mjs
  */
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { makeTree } from './helpers/tree.ts';
 
 const reporter = new URL('../scripts/node-profile.mjs', import.meta.url).href;
 
 describe('Node profiling reporter', () => {
+  it('has no candidate progress side effects even with inherited reserved transport', () => {
+    const root = makeTree({ 'pass.test.mjs': "import{test}from'node:test';test('pass',()=>{});" });
+    const r = spawnSync(process.execPath, ['--test', `--test-reporter=${reporter}`, 'pass.test.mjs'], { cwd: root, encoding: 'utf8', windowsHide: true, env: { ...process.env, AGENT_TESTS_PROGRESS_DIRECTORY: root, AGENT_TESTS_PROGRESS_ATTEMPT: 'invalid', AGENT_TESTS_PROGRESS_START: 'invalid' } });
+    expect(r.status, r.stderr).toBe(0); expect(JSON.parse(r.stdout).complete).toBe(true);
+    expect(existsSync(join(root, 'progress'))).toBe(false); expect(existsSync(join(root, 'attempt-start.json'))).toBe(false);
+  });
   it('measures file lifetimes separately from nested test durations and retains failed runs', () => {
     const root = makeTree({
       'pass.test.mjs': "import {test} from 'node:test'; import assert from 'node:assert/strict'; test('parent',async t=>{await t.test('child',()=>assert.ok(true));}); test.skip('skip',()=>{});",

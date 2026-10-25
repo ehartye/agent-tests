@@ -35,8 +35,14 @@ This uses the documented custom reporter and per-file/overall summary events in
 For before/after source-byte and index evidence around one newly executed native command, use the checked
 managed [candidate evidence recorder](candidate-evidence.md). It supports Node-test and Vitest, refuses cached
 reruns/report replay and reports declared scope limits. It does not authorize test reuse or integration.
-That recorder currently uses `spec`; the direct TAP recommendation above does not change its output or add progressive
-owner records. Child completion also does not prove descendant cleanup.
+That recorder uses native TAP plus a candidate-only wrapper around the unchanged profiling reporter. It also writes
+bound native owner progress and supports read-only `candidate-evidence progress --attempt PATH`. Direct node-profile
+still produces only its existing `node-profile@1` JSON, even when candidate transport environment variables are present.
+Node isolated file-summary boundaries establish ended owners; definition-file fallback rows are provenance only.
+Explicit isolation none retains terminal behavior with owner progress unavailable. Missing native `entryFile` leaves
+error attribution unscoped. Human TAP details are proven prompt for synchronized serial order, with no promise for
+every parallel output ordering. Child completion and owner end do not prove descendant cleanup. See the candidate
+reference for exact diagnostic states, integrity bounds and final acceptance gates.
 
 ## Retain an opt-in worker CPU profile
 
