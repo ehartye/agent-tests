@@ -305,4 +305,3 @@ describe('native durable candidate diagnostics', () => {
     writeFileSync(join(f.out, 'receipt.json'), JSON.stringify(saved)); expect(JSON.parse(progress(f.out).stdout).state).toBe('completed');
   });
 });
-

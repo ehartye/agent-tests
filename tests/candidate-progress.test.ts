@@ -74,6 +74,21 @@ describe('immutable candidate progress', () => {
     expect(projected).toMatchObject({ expected: 3, actual: null, truncated: true });
     expect(JSON.stringify(projected)).not.toMatch(/secret|engine/);
   });
+  it.each(['deep', 'cycle', 'scalar'])('propagates nested %s cause truncation to aggregate details', kind => {
+    const primary: { message: string; cause?: unknown } = { message: 'primary' };
+    if (kind === 'cycle') primary.cause = primary;
+    else if (kind === 'scalar') primary.cause = 'nested detail'.repeat(1000);
+    else {
+      let cursor = primary;
+      for (let depth = 0; depth < 6; depth++) { const cause = { message: `cause ${depth}` }; cursor.cause = cause; cursor = cause; }
+    }
+    const details = boundedDetails(); details.error({ scope: 'case', id: 'native-case' }, primary);
+    const result = details.result();
+    expect(result.errors[0].error).toMatchObject({ message: 'primary', truncated: true });
+    expect(result).toMatchObject({ truncated: true, omittedErrors: 0 });
+    if (kind !== 'scalar') expect(JSON.stringify(result)).toContain('[cause omitted]');
+    const f = fixture(); f.writer.append('native-error', result); expect(readProgress(f.directory).problems).toEqual([]);
+  });
   it('serializes overlapping callers and refuses a second writer or replaced write directory', async () => {
     const f = fixture(); await Promise.all(Array.from({ length: 64 }, () => Promise.resolve().then(() => f.writer.append('native-error', nativeError()))));
     expect(readProgress(f.directory).records.map((r: any) => r.sequence)).toEqual(Array.from({ length: 64 }, (_, i) => i + 1));

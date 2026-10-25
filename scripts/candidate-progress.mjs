@@ -237,7 +237,10 @@ export function projectError(error, seen = new Set(), depth = 0) {
     else if (value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) projected[key] = value;
     else if (value !== undefined) { projected[key] = null; projected.truncated = true; }
   }
-  if (error.cause !== undefined) projected.cause = projectError(error.cause, seen, depth + 1);
+  if (error.cause !== undefined) {
+    projected.cause = projectError(error.cause, seen, depth + 1);
+    if (projected.cause?.truncated) projected.truncated = true;
+  }
   return projected;
 }
 export function boundedDetails() {
