@@ -1,17 +1,17 @@
 /** @lane merge
  * @subject scripts/candidate-progress.mjs
  */
-import fs, { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import fs, { mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startAttempt, openProgressWriter, sealProgress, readProgress, projectError, boundedDetails } from '../scripts/candidate-progress.mjs';
+import { physicalTemp } from './helpers/physical-temp.ts';
 const made: string[] = [];
 afterEach(() => { for (const p of made.splice(0)) rmSync(p, { recursive: true, force: true }); });
 function fixture(mode: 'node-test' | 'vitest' = 'node-test') {
-  const directory = mkdtempSync(join(tmpdir(), 'tests-progress-')); made.push(directory);
+  const directory = physicalTemp('tests-progress-'); made.push(directory);
   const facts = { before: { root: directory, head: { sha: '1'.repeat(40) }, files: {} }, toolchainBefore: { node: process.version, executable: process.execPath, helpers: { 'candidate-progress.mjs': '2'.repeat(64) } }, command: { executable: process.execPath, cwd: directory, mode, args: ['a.mjs'], selectedArgs: ['a.mjs'], concurrency: 1, resourceDeclaration: 'serial/unreviewed' }, progress: { capability: 'qualified', adapter: mode === 'vitest' ? 'vitest-5.0.3' : 'node-events', version: mode === 'vitest' ? '5.0.3' : process.version }, limitations: [] };
   const binding = startAttempt(directory, facts);
   const writer = openProgressWriter({ directory, ...binding });
@@ -27,6 +27,13 @@ function raw(f: ReturnType<typeof fixture>, sequence: number, changes: object) {
   writeFileSync(path, JSON.stringify({ ...value, ...changes }));
 }
 describe('immutable candidate progress', () => {
+  it('allocates fixture directories with physical paths even through an aliased parent', () => {
+    const parent = physicalTemp('tests-progress-parent-'); made.push(parent);
+    const target = join(parent, 'target'), alias = join(parent, 'alias'); mkdirSync(target);
+    symlinkSync(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const directory = physicalTemp('owned-', alias);
+    expect(directory).toBe(realpathSync.native(directory)); expect(directory.startsWith(target)).toBe(true);
+  });
   it('binds ordered facts to immutable start bytes and seals a contiguous inventory', () => {
     const f = fixture(); f.writer.append('owner-discovered', { owner: { id: 'a', file: 'a.mjs' } });
     f.writer.append('owner-ended', ownerEnd());
@@ -61,7 +68,7 @@ describe('immutable candidate progress', () => {
     expect(readProgress(f.directory).problems).toEqual([]);
     writeFileSync(join(f.directory, 'progress/00000001.json'), '{}');
     expect(() => f.writer.append('run-ended', {})).toThrow();
-    const outside = mkdtempSync(join(tmpdir(), 'tests-progress-outside-')); made.push(outside);
+    const outside = physicalTemp('tests-progress-outside-'); made.push(outside);
     const g = fixture(); rmSync(join(g.directory, 'progress'), { recursive: true });
     symlinkSync(outside, join(g.directory, 'progress'), process.platform === 'win32' ? 'junction' : 'dir');
     expect(readProgress(g.directory).problems.join(' ')).toMatch(/symbolic|contain|link/i);
@@ -93,7 +100,7 @@ describe('immutable candidate progress', () => {
     const f = fixture(); await Promise.all(Array.from({ length: 64 }, () => Promise.resolve().then(() => f.writer.append('native-error', nativeError()))));
     expect(readProgress(f.directory).records.map((r: any) => r.sequence)).toEqual(Array.from({ length: 64 }, (_, i) => i + 1));
     expect(() => openProgressWriter({ directory: f.directory, ...f.binding })).toThrow(/writer/);
-    const outside = mkdtempSync(join(tmpdir(), 'tests-progress-write-')); made.push(outside);
+    const outside = physicalTemp('tests-progress-write-'); made.push(outside);
     rmSync(join(f.directory, 'progress'), { recursive: true }); symlinkSync(outside, join(f.directory, 'progress'), process.platform === 'win32' ? 'junction' : 'dir');
     expect(() => f.writer.append('run-ended', {})).toThrow(/link/i); expect(readdirSync(outside)).toEqual([]);
   });

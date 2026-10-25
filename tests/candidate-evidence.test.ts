@@ -5,11 +5,11 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { physicalTemp } from './helpers/physical-temp.ts';
 
 const checkout = fileURLToPath(new URL('../', import.meta.url));
 const script = join(checkout, 'scripts/candidate-evidence.mjs');
@@ -20,7 +20,7 @@ function git(root: string, ...args: string[]) {
   expect(result.status, result.stderr).toBe(0); return result.stdout.trim();
 }
 function fixture(body = "import {test} from 'node:test';test('pass',()=>{});test.skip('skip',()=>{});") {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'agent-tests-candidate-'))); made.push(base);
+  const base = physicalTemp('agent-tests-candidate-'); made.push(base);
   const root = join(base, 'repo'); mkdirSync(root);
   writeFileSync(join(root, '.gitignore'), 'node_modules/\nassets/\n.local/\n');
   writeFileSync(join(root, 'package.json'), '{"name":"fixture","type":"module","private":true}\n');
