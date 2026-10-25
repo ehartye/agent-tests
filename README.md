@@ -128,6 +128,9 @@ Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
 
+Version 0.6.1 centralizes physical test-fixture allocation and converts fixture file URLs correctly for space paths.
+The original 0.6.0 tag retains failed Windows/macOS fixture checks; public helpers and refusal behavior are unchanged.
+
 Version 0.6.0 adds read-only `candidate-evidence progress --attempt PATH`, immutable before-spawn identity
 and sealed native owner progress for new candidate receipts. Node observations use TAP; Vitest 5.0.3 uses
 its public reporter API with an owned JSON destination. Other Vitest versions retain terminal observation
