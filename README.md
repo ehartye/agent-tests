@@ -38,8 +38,8 @@ when needed to discover updated skills.
 
 1. Redundant coverage: test files sharing a subject, repeated seed sweeps, duplicate titles.
 2. Compat, legacy and fallback tests, judged against who actually consumes the code.
-3. Tests that break beside a second worktree: fixed ports, fixed temp or database paths, absolute paths, reads of `.git`.
-4. Tests not tied to a risk tier or lane, and critical areas nobody tests.
+3. Tests that break beside a second worktree or from another working directory: fixed ports, fixed or timestamp-named temp or database paths (`worktree.timestamp-tmp-path`), absolute paths, reads of `.git`, writes under `process.cwd()` (`worktree.cwd-write`) and repository files located from it (`worktree.cwd-locate`). These are review hints, not verdicts; file-system pollution is a minority cause of flakiness in the measured studies.
+4. Tests not tied to a risk tier or lane, tests with a subject no risk-map area covers (`wiring.unmapped-subject`), and critical areas nobody tests.
 5. Tests that run too often: full suites in hooks or builds, watch-mode test scripts, CI on every push, Windows and macOS matrices on the push path.
 
 The CLI gathers evidence and never judges. The skill's rubric turns evidence into verdicts: keep, demote, merge, rewrite,
@@ -60,6 +60,7 @@ on this machine.
 | `references/architecture-cost.md` | Advisory investigation of architecture that makes tests costly, including complete generated-asset inputs and final verification ownership |
 | `references/node-profiling.md` | Optional Node 24+ reporter, per-file and overall duration, provenance limits and repeatable lane experiments |
 | `references/candidate-evidence.md` | Explicit checked observation of Node-test/Vitest children, content/path/index identities, native counts and honest reuse limits |
+| `references/scan-rules.md` | What the newer and changed scan rules mean, the remedy to recommend and a planted example of each: `worktree.timestamp-tmp-path`, `worktree.cwd-write`, `worktree.cwd-locate`, `wiring.unmapped-subject`, `shim.title-marker`, `redundancy.shared-subject` and `wiring.drift` |
 | `references/mutation-evidence.md` | Read-only mutation verdicts, exact native assertion scope, frozen judging, raw restoration and honest partial composition |
 
 ## Risk map
