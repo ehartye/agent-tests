@@ -12,6 +12,8 @@ const DEFAULT_MAX_PER_RULE = 30;
 const MAX_EVIDENCE = 160;
 const MAX_UNPARSED_LISTED = 10;
 const MAX_RULES_PER_ROW = 4;
+/** Only the first rows of the table spell out their shared title words. */
+const MAX_OVERLAP_ROWS = 5;
 
 /** Wiring rules in the order the audit should read them; other wiring rules follow. */
 const WIRING_ORDER = ['wiring.uncovered-critical', 'wiring.drift', 'wiring.no-risk-map'];
@@ -60,12 +62,24 @@ function ruleCounts(file: TestFileRecord): Array<[string, number]> {
 const isUnparsed = (file: TestFileRecord): boolean => file.flags.includes('unparsed');
 const hasOpaqueRegistration = (file: TestFileRecord): boolean => file.findings.some(finding => finding.rule === 'wiring.opaque-test-registration');
 
-function rulesCell(file: TestFileRecord): string {
+/** The largest title-word overlap carried by the file's findings; 0 when it has none. */
+const overlapOf = (file: TestFileRecord): number => Math.max(0, ...file.findings.map(finding => finding.overlap ?? 0));
+
+/** The shared-title-words part of the best overlap finding's evidence (it ends at the first semicolon), or undefined. */
+function overlapEvidence(file: TestFileRecord): string | undefined {
+  const best = [...file.findings].sort((a, b) => (b.overlap ?? 0) - (a.overlap ?? 0))[0];
+  if (!best?.overlap) return undefined;
+  const head = best.evidence.split(';')[0] ?? '';
+  return head ? flat(head) : undefined;
+}
+
+function rulesCell(file: TestFileRecord, showOverlap = false): string {
   const counts = ruleCounts(file);
   if (counts.length === 0) return '-';
   const shown = counts.slice(0, MAX_RULES_PER_ROW).map(([rule, count]) => (count > 1 ? `${rule} x${count}` : rule));
   if (counts.length > MAX_RULES_PER_ROW) shown.push(`+${counts.length - MAX_RULES_PER_ROW} more`);
-  return cell(shown.join(', '));
+  const evidence = showOverlap ? overlapEvidence(file) : undefined;
+  return cell(evidence ? `${shown.join(', ')} (${evidence})` : shown.join(', '));
 }
 
 /** Unparsed files first (their structure is unknown), then the breadth of evidence, its volume, the file's size, and the path. */
@@ -77,6 +91,7 @@ function rankFiles(files: TestFileRecord[]): TestFileRecord[] {
         Number(isUnparsed(b.file)) - Number(isUnparsed(a.file)) ||
         Number(hasOpaqueRegistration(b.file)) - Number(hasOpaqueRegistration(a.file)) ||
         b.distinct - a.distinct ||
+        overlapOf(b.file) - overlapOf(a.file) ||
         b.file.findings.length - a.file.findings.length ||
         b.file.cost.agent - a.file.cost.agent ||
         compare(a.file.file, b.file.file),
@@ -123,7 +138,7 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
   out.push(
     '',
     '**How to read this.** Findings are evidence, not verdicts: judge each one against the risk map and the test itself.',
-    'Files are ranked with unparsed files first, then opaque registration candidates, then by distinct finding rules, total findings and agent tokens.',
+    'Files are ranked with unparsed files first, then opaque registration candidates, then by distinct finding rules, the largest title-word overlap with a same-subject file, total findings and agent tokens.',
     'Agent is the estimated tokens in the file. Churn/edits counts edits that touched the test without the code it covers, over all edits that modified it; n/a means no git history or no resolvable subject.',
     'Wait time and CI minutes need a timed run and are not in this report.',
     'Flags: tautological, snapshot-only, mock-only, no-direct-assertions (possibly assertions in a helper), unparsed.',
@@ -147,12 +162,12 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
   if (ranked.length === 0) out.push('None.');
   else {
     out.push('| File | Tier | Lane | Tests | Asserts | Flags | Agent tokens | Churn/edits | Rules |', '|---|---|---|---|---|---|---|---|---|');
-    for (const file of shown) {
+    for (const [index, file] of shown.entries()) {
       const tier = file.tier ?? (report.riskMapPresent ? 'untiered' : 'no map');
       const structure = isUnparsed(file) ? ['?', '?'] : [`${file.tests}${hasOpaqueRegistration(file) ? '+?' : ''}`, String(file.assertions)];
       const churn = file.cost.churn !== null && file.cost.edits !== null ? `${file.cost.churn}/${file.cost.edits}` : 'n/a';
       out.push(
-        `| ${cell(file.file)} | ${tier} | ${file.tags.lane ?? '-'} | ${structure[0]} | ${structure[1]} | ${cell(file.flags.join(', ')) || '-'} | ${file.cost.agent} | ${churn} | ${rulesCell(file)} |`,
+        `| ${cell(file.file)} | ${tier} | ${file.tags.lane ?? '-'} | ${structure[0]} | ${structure[1]} | ${cell(file.flags.join(', ')) || '-'} | ${file.cost.agent} | ${churn} | ${rulesCell(file, index < MAX_OVERLAP_ROWS)} |`,
       );
     }
   }

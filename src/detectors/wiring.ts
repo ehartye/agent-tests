@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { IGNORED_DIRS, isSupportPath, isTestPath, readEntries } from '../discover.ts';
 import { globToRegExp } from '../paths.ts';
 import { RISK_MAP_PATH, tierFor } from '../riskmap.ts';
 import type { Finding, LaneName, RiskMap, Tier } from '../schema.ts';
@@ -51,8 +53,40 @@ function untieredFinding(file: WiringFile): Finding {
   };
 }
 
+/**
+ * A review hint for a test that has some subjects in a risk-map area and some in none. The unmapped subjects were dropped
+ * from the tier decision (the test keeps the highest tier among its mapped subjects), so this names them for the owner.
+ */
+export function unmappedSubjectFinding(rel: string, unmapped: string[], mappedArea: string): Finding {
+  return {
+    category: 'wiring',
+    rule: 'wiring.unmapped-subject',
+    file: rel,
+    message: `Test exercises code that matches no risk-map area (${subjectEvidence(unmapped)}) although other subjects map to ${mappedArea}. The tier ignores the unmapped code. Add an area for it if it matters.`,
+    evidence: `${subjectEvidence(unmapped)}; mapped area: ${mappedArea}`,
+  };
+}
+
+/**
+ * The files a directory holds that the risk map is expected to classify: nested directories are walked, but ignored output
+ * directories, dot directories, test files, test support files and probe artifacts are skipped. Sorted, repo-relative.
+ */
+export function classifiableFiles(root: string, dir: string): string[] {
+  const found: string[] = [];
+  const visit = (rel: string): void => {
+    for (const entry of readEntries(join(root, rel))) {
+      const path = `${rel}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (!IGNORED_DIRS.has(entry.name) && !entry.name.startsWith('.')) visit(path);
+      } else if (entry.isFile() && !entry.name.startsWith('__probe__') && !isTestPath(path) && !isSupportPath(path)) found.push(path);
+    }
+  };
+  visit(dir);
+  return found.sort();
+}
+
 /** Tests not tied to a risk tier or lane, lane/tier mismatches, critical areas nobody tests, and directories the map has never seen. */
-export function detectWiring(map: RiskMap | null, files: WiringFile[], candidateDirs: string[]): Finding[] {
+export function detectWiring(map: RiskMap | null, files: WiringFile[], candidateDirs: string[], filesIn?: (dir: string) => string[]): Finding[] {
   if (!map) {
     return [
       {
@@ -91,18 +125,23 @@ export function detectWiring(map: RiskMap | null, files: WiringFile[], candidate
       });
     }
   }
-  // A catch-all such as src/** would make every directory look classified, so drift probes the map without them.
-  const probeMap: RiskMap = { ...map, areas: map.areas.filter(area => !CATCH_ALL.test(area.path)) };
+  // A catch-all such as src/** would make every directory below it look classified, so drift probes without the catch-alls that
+  // are strict ancestors of the directory. A catch-all that names the directory itself (`Source/**` for `Source`) is an explicit
+  // area for it and stays. When a directory has no area of its own, its files are classified one by one with the same
+  // first-match rule `tierFor` applies, so a directory whose files are all covered by narrower areas is not drift.
   for (const dir of candidateDirs) {
-    if (!tierFor(probeMap, `${dir}/__probe__.ts`)) {
-      findings.push({
-        category: 'wiring',
-        rule: 'wiring.drift',
-        file: dir,
-        message: 'Directory matches no risk-map area. Add it with a tier.',
-        evidence: '',
-      });
-    }
+    const probeMap: RiskMap = { ...map, areas: map.areas.filter(area => !(CATCH_ALL.test(area.path) && dir.startsWith(`${area.path.slice(0, -3)}/`))) };
+    if (tierFor(probeMap, `${dir}/__probe__.ts`)) continue;
+    const dirFiles = filesIn?.(dir) ?? [];
+    const unclassified = dirFiles.filter(path => !tierFor(probeMap, path));
+    if (dirFiles.length > 0 && unclassified.length === 0) continue;
+    findings.push({
+      category: 'wiring',
+      rule: 'wiring.drift',
+      file: dir,
+      message: unclassified.length > 0 ? 'Directory has files that match no risk-map area. Add them with a tier.' : 'Directory matches no risk-map area. Add it with a tier.',
+      evidence: unclassified.length > 0 ? subjectEvidence(unclassified) : '',
+    });
   }
   return findings;
 }

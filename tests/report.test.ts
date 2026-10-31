@@ -77,8 +77,7 @@ describe('renderMarkdown on the fixtures', () => {
   it('ranks the file with the most distinct rules first and shows its rules', () => {
     const rows = tableRows(bloated);
     expect(rows[0]).toContain('tests/net/server.test.ts');
-    expect(rows[0]).toContain('worktree.fixed-port');
-    expect(rows[0]).toContain('worktree.absolute-path, worktree.dot-git-dir, worktree.fixed-db-file, worktree.fixed-port, +2 more');
+    expect(rows[0]).toContain('worktree.absolute-path, worktree.cwd-locate, worktree.dot-git-dir, worktree.fixed-db-file, +3 more');
     expect(section(bloated, 'Test files')).toContain('(top 10 of 10, most evidence first)');
   });
 
@@ -390,5 +389,36 @@ describe('renderMarkdown shape', () => {
   it('is deterministic', () => {
     const scanned = scan(join(FIXTURES, 'bloated'), { commitLimit: 1 });
     expect(renderMarkdown(scanned)).toBe(renderMarkdown(scanned));
+  });
+});
+
+describe('title overlap ranking', () => {
+  const rules = ['redundancy.shared-subject', 'redundancy.duplicate-title'];
+  const withRules = (file: string, overlap?: number, evidence = ''): TestFileRecord =>
+    record(file, {
+      findings: rules.map(rule => finding({
+        category: 'redundancy', rule, file,
+        evidence: rule === 'redundancy.shared-subject' ? evidence : 'x',
+        ...(rule === 'redundancy.shared-subject' && overlap ? { overlap } : {}),
+      })),
+    });
+
+  it('ranks the file with title overlap above a subject-only file with the same rules', () => {
+    const markdown = renderMarkdown(report({ files: [
+      withRules('tests/a-subject-only.test.ts'),
+      withRules('tests/z-overlap.test.ts', 5, 'shared title words with tests/b.test.ts (5): alpha, beta, delta, gamma, omega; core: tests/b.test.ts'),
+    ] }));
+    const table = section(markdown, 'Test files');
+    expect(table.indexOf('z-overlap')).toBeGreaterThan(-1);
+    expect(table.indexOf('z-overlap')).toBeLessThan(table.indexOf('a-subject-only'));
+    expect(table).toContain('shared title words with tests/b.test.ts (5): alpha, beta, delta, gamma, omega');
+  });
+
+  it('ranks by the largest overlap and still puts more distinct rules first', () => {
+    const more = record('tests/m.test.ts', { findings: [...rules, 'redundancy.hub-subject'].map(rule => finding({ category: 'redundancy', rule, file: 'tests/m.test.ts' })) });
+    const markdown = renderMarkdown(report({ files: [withRules('tests/two.test.ts', 2), withRules('tests/six.test.ts', 6), more] }));
+    const table = section(markdown, 'Test files');
+    expect(table.indexOf('m.test.ts')).toBeLessThan(table.indexOf('six.test.ts'));
+    expect(table.indexOf('six.test.ts')).toBeLessThan(table.indexOf('two.test.ts'));
   });
 });

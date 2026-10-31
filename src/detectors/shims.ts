@@ -1,8 +1,30 @@
 import type { ParsedFile } from '../parse.ts';
 import type { Finding } from '../schema.ts';
 
-const TITLE_MARKER =
-  /\b(?:legacy|back(?:wards?)?[- ]?compat(?:ibility|ible)?|compat(?:ibility)?|deprecat(?:ed|es|e|ion)|fall-?backs?|polyfills?|shims?|migrat(?:e|es|ed|ing|ion) from|old[- ]format)\b/i;
+/** Old data, formats or interfaces that a title can call legacy; "legacy" next to anything else usually describes current behaviour. */
+const OLD_LAYER_NOUN =
+  String.raw`(?:formats?|files?|configs?|configurations?|json|schemas?|loaders?|readers?|parsers?|payloads?|apis?|v\d+|projects?|data|inputs?|outputs?|sockets?|saves?|documents?|provenance|ownership|alias(?:es)?|adapters?|importers?|imports?|modes?|wrappers?|options?|flags?|settings?|paths?)`;
+/**
+ * Title-only markers of a compatibility layer. Bare "fallback" and "compat" are left out: titles use them for current
+ * behaviour (a fallback glyph, a compat shorthand option). Each alternative must name the old thing being kept.
+ */
+const TITLE_MARKER = new RegExp(
+  [
+    String.raw`\blegacy(?:\s+[\w-]+){0,2}\s+${OLD_LAYER_NOUN}\b`,
+    String.raw`\b(?:accepts?|loads?|reads?|imports?|parses?|supports?|upgrades?|migrates?)\s+(?:\w+\s+)?legacy\b`,
+    String.raw`\blegacy\b[^,;]*\b(?:migrat(?:e|es|ed|ing|ion)|upgrad(?:e|es|ed|ing))\b`,
+    String.raw`\bback(?:wards?)?[- ]?compat(?:ibility|ible)?\b`,
+    String.raw`\bcompat(?:ibility)?\s+(?:layers?|shims?|modes?|paths?|wrappers?|adapters?|aliases|with\s+(?:old|older|legacy|previous|prior))\b`,
+    String.raw`\bdeprecat(?:ed|es|e|ion)\b`,
+    String.raw`\bfall(?:s|ing)?[- ]?backs?\s+(?:to\s+)?(?:the\s+|an?\s+)?(?:old|older|legacy|previous|prior|v\d+)\b`,
+    String.raw`\bfall-?back\s+(?:shims?|layers?|adapters?)\b`,
+    String.raw`\bpolyfills?\b`,
+    String.raw`\bshims?\b`,
+    String.raw`\bmigrat(?:e|es|ed|ing|ion) from\b`,
+    String.raw`\bold[- ]format\b`,
+  ].join('|'),
+  'i',
+);
 const PATH_MARKER = /(?:^|[/._-])(?:legacy|compat|deprecated|shims?|polyfills?|fallbacks?)(?:[/._-]|$)/i;
 /** A specifier is project code, not a package, when it is relative or starts with a common alias. */
 const PROJECT_SPECIFIER = /^(?:\.|@\/|~\/|#|src\/)/;

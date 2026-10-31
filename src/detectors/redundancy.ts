@@ -18,6 +18,16 @@ const MAX_FOCUSED_SUBJECTS = 3;
 /** A subject imported by more than this many test files is shared infrastructure, not duplicated coverage. */
 const MAX_CLUSTER = 10;
 
+/** A cluster ranks as real overlap only when its files share at least this many non-trivial title words. */
+const MIN_SHARED_WORDS = 2;
+const STOPWORDS = new Set(
+  'the and for with when that this from into onto than then are was were has have had its not but any all each only also can will would should shall does did via per out off over under without within returns return given test tests works work case cases'.split(' '),
+);
+
+/** Lowercased words of a test title, minus short words, numbers and stopwords. */
+const titleTokens = (title: string): string[] =>
+  (title.toLowerCase().match(/[a-z][a-z0-9]*/g) ?? []).filter(word => word.length >= 3 && !STOPWORDS.has(word));
+
 const stem = (rel: string): string =>
   (rel.split('/').pop() ?? rel)
     .replace(/\.(?:test|spec)\.[cm]?[jt]sx?$/, '')
@@ -65,15 +75,50 @@ export function detectRedundancy(files: RedundancyInput[]): { clusters: Cluster[
       sharedBy.set(member, [...(sharedBy.get(member) ?? []), `${subject}: ${sorted.filter(other => other !== member).join(', ')}`]);
     }
   }
+  const byRel = new Map(files.map(file => [file.rel, file]));
+  const titleWords = new Map<string, Set<string>>();
+  const wordsOf = (rel: string): Set<string> => {
+    const cached = titleWords.get(rel);
+    if (cached) return cached;
+    const words = new Set<string>();
+    for (const test of byRel.get(rel)?.parsed.tests ?? []) for (const word of titleTokens(test.name)) words.add(word);
+    titleWords.set(rel, words);
+    return words;
+  };
+  const sharedFindings: Array<{ finding: Finding; overlap: number }> = [];
   for (const [file, shared] of [...sharedBy].sort(([a], [b]) => (a < b ? -1 : 1))) {
-    findings.push({
-      category: 'redundancy',
-      rule: 'redundancy.shared-subject',
-      file,
-      message: `This file shares ${shared.length} subject${shared.length === 1 ? '' : 's'} with other test files. Check whether they assert the same behavior.`,
-      evidence: shared.join('; ').slice(0, 300),
+    // Title words this file has in common with another file of one of its clusters. Subject overlap alone says little; title overlap says the tests talk about the same behavior.
+    const own = wordsOf(file);
+    let best: { other: string; words: string[] } | undefined;
+    for (const cluster of clusters) {
+      if (cluster.files.length > MAX_CLUSTER || !cluster.files.includes(file)) continue;
+      for (const other of cluster.files) {
+        if (other === file) continue;
+        const theirs = wordsOf(other);
+        const pair = [...own].filter(word => theirs.has(word));
+        // Judged per pair of files: a union across a whole cluster would make any big cluster look redundant.
+        if (pair.length < MIN_SHARED_WORDS) continue;
+        if (!best || pair.length > best.words.length || (pair.length === best.words.length && other < best.other)) best = { other, words: pair.sort() };
+      }
+    }
+    const words = best?.words ?? [];
+    const overlap = words.length;
+    const subjects = shared.join('; ');
+    sharedFindings.push({
+      overlap,
+      finding: {
+        category: 'redundancy',
+        rule: 'redundancy.shared-subject',
+        file,
+        message: `This file shares ${shared.length} subject${shared.length === 1 ? '' : 's'} with other test files. Check whether they assert the same behavior.`,
+        evidence: (overlap > 0 ? `shared title words with ${best?.other} (${words.length}): ${words.slice(0, 8).join(', ')}${words.length > 8 ? ', ...' : ''}; ${subjects}` : subjects).slice(0, 300),
+        ...(overlap > 0 ? { overlap } : {}),
+      },
     });
   }
+  // Real title overlap first, most words first; files that share only a subject follow. The sort is stable, so ties stay in path order.
+  sharedFindings.sort((a, b) => b.overlap - a.overlap);
+  for (const entry of sharedFindings) findings.push(entry.finding);
   for (const hub of hubs) {
     findings.push({
       category: 'redundancy',

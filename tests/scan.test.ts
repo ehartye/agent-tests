@@ -263,3 +263,34 @@ describe('scan details', () => {
     expect(scan(root).files[0]).toMatchObject({ tier: 'low', area: 'src/**' });
   });
 });
+
+describe('wiring.unmapped-subject in a scan', () => {
+  const project = () =>
+    makeTree({
+      '.testing/risk.yml': serializeRiskMap({ ...defaultRiskMap(), areas: [{ path: 'src/db/**', tier: 'critical' }] }),
+      'src/db/store.ts': 'export const store = 1;\n',
+      'src/misc/x.ts': 'export const x = 1;\n',
+      'src/other/y.ts': 'export const y = 1;\n',
+      'tests/mixed.test.ts': "import { it, expect } from 'vitest';\nimport { store } from '../src/db/store.ts';\nimport { x } from '../src/misc/x.ts';\nit('a', () => { expect(store + x).toBe(2); });\n",
+      'tests/orphan.test.ts': "import { it, expect } from 'vitest';\nimport { y } from '../src/other/y.ts';\nit('b', () => { expect(y).toBe(1); });\n",
+    });
+
+  it('flags the unmapped subject of a partly mapped test and keeps its tier', () => {
+    const report = scan(project(), { commitLimit: 1 });
+    const mixed = report.files.find(file => file.file === 'tests/mixed.test.ts')!;
+    expect(mixed).toMatchObject({ tier: 'critical', area: 'src/db/**' });
+    const hint = mixed.findings.filter(finding => finding.rule === 'wiring.unmapped-subject');
+    expect(hint).toHaveLength(1);
+    expect(hint[0].message).toContain('src/misc/x.ts');
+    expect(hint[0].evidence).toBe('src/misc/x.ts; mapped area: src/db/**');
+    expect(mixed.findings.some(finding => finding.rule === 'wiring.untiered')).toBe(false);
+  });
+
+  it('keeps reporting a wholly unmapped test as untiered with its exact subject path, not as unmapped-subject', () => {
+    const report = scan(project(), { commitLimit: 1 });
+    const orphan = report.files.find(file => file.file === 'tests/orphan.test.ts')!;
+    expect(orphan.tier).toBeNull();
+    expect(orphan.findings.find(finding => finding.rule === 'wiring.untiered')!.evidence).toBe('src/other/y.ts');
+    expect(orphan.findings.some(finding => finding.rule === 'wiring.unmapped-subject')).toBe(false);
+  });
+});

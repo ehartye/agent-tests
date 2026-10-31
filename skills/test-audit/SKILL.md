@@ -1,6 +1,6 @@
 ---
 name: test-audit
-description: Audit a project's test suite for necessity and efficiency - redundant coverage, compat and fallback shim tests, worktree-hostile tests, tests not tied to a risk tier or tagged for the wrong lane, and tests that run too often - and return a verdict per test file.
+description: Audit a project's test suite for necessity and efficiency - redundant coverage, compat and fallback shim tests, worktree-hostile and working-directory tests, tests not tied to a risk tier or tagged for the wrong lane, and tests that run too often - and return a verdict per test file.
 when_to_use: Use when an existing test suite or its CI feels too big, slow or redundant ("tests take forever", "too many tests", "is this overkill"), when architectural decisions or generated-asset pipelines make testing costly, before pruning tests, or when asked to audit testing structure.
 ---
 # test-audit
@@ -36,8 +36,14 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    - The report opens with a header and category counts. Project findings (CI, hooks, scripts, agent instructions,
      risk-map gaps) follow, then a table of test files.
    - The table ranks unparsed files first, then possible opaque registrations (inventory may be incomplete), then files
-     with the most distinct finding rules. Read the first two directly. The Rules column shows which rules fired. Several `redundancy.shared-subject`
-     findings are weak evidence; one `worktree.*` or `shim.*` rule on a real hazard is strong.
+     with the most distinct finding rules. Read the first two directly. The Rules column shows which rules fired. A `redundancy.shared-subject`
+     finding that lists shared title words (and a numeric `overlap` in the scan JSON) is stronger and ranks first among
+     ties; one that shares only a subject is weak, and several of those together stay weak. One `worktree.*` or `shim.*`
+     rule on a real hazard is strong. Every rule is a review hint, not a verdict.
+   - Per-rule meaning, remedy and an example are in `<plugin-root>/references/scan-rules.md`: the new
+     `worktree.timestamp-tmp-path`, `worktree.cwd-write`, `worktree.cwd-locate` and `wiring.unmapped-subject`, and the
+     changed `shim.title-marker` (title-only; bare "fallback" or "compat" no longer match), `redundancy.shared-subject`
+     and `wiring.drift` (a bare directory covered by a `folder/**` area or its descendants' areas is not reported).
    - This version never runs the tests, so wait time and CI minutes are absent. Agent cost is estimated tokens in the
      file. Churn/edits is edits that touched the test without the code it covers, over all edits that modified it;
      `n/a` means no git history (a shallow clone has none) or no resolvable subject.
@@ -89,8 +95,14 @@ Ask in this order. Stop at the first question that settles it.
    For native renderers, apply its nonempty PNG/glyph oracles, causal negative controls, declared control geometry and
    capture teardown checks. Static findings cannot certify those runtime properties; inspect the native evidence.
 5. **Is it safe beside another worktree?** Fixed ports, fixed temp or database paths, absolute paths, reads of `.git`
-   and writes under the home directory break parallel runs. Fix the hazard with a `rewrite`; do not delete or
-   quarantine the test for it.
+   and writes under the home directory break parallel runs. So do temp names built from a timestamp
+   (`worktree.timestamp-tmp-path`: use `mkdtemp(join(tmpdir(), 'name-'))`, whose prefix must end in a separator, and
+   clean up), writes under `process.cwd()` (`worktree.cwd-write`) and repository files located from it
+   (`worktree.cwd-locate`: build the path from `import.meta.url` or the repository root). Fix the hazard with a
+   `rewrite`; do not delete or quarantine the test for it. File-system pollution is a minority cause of flakiness in
+   the measured studies, so do not call such a test flaky on this evidence alone.
+   A `wiring.unmapped-subject` finding means a subject sits outside every risk-map area while the tier follows the
+   mapped ones: recommend an area or an `@risk` tag.
 6. **Does it run at the right frequency?** Compare its tier to its lane tag. Critical tests belong in the edit or merge
    lane, low-tier tests in scheduled or release. A full suite in a hook or on every push is a frequency problem for the
    project, not for one file.

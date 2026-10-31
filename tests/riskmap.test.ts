@@ -72,3 +72,16 @@ describe('tierFor', () => {
     expect(tierFor(map, 'src/ui/button.ts')).toBeNull();
   });
 });
+
+describe('folder/** areas at the project root', () => {
+  const map = { ...defaultRiskMap(), areas: ['Source', 'Content', 'Config', 'Art'].map(dir => ({ path: `${dir}/**`, tier: 'standard' as const })) };
+
+  it('matches a file under each folder with the same glob rules as every other area', () => {
+    for (const dir of ['Source', 'Content', 'Config', 'Art']) expect(tierFor(map, `${dir}/deep/file.ts`)).toEqual({ tier: 'standard', area: `${dir}/**` });
+  });
+
+  it('survives a serialize and load round trip', () => {
+    const root = makeTree({ [RISK_MAP_PATH]: serializeRiskMap(map) });
+    expect(loadRiskMap(root)?.areas.map(area => area.path)).toEqual(['Source/**', 'Content/**', 'Config/**', 'Art/**']);
+  });
+});

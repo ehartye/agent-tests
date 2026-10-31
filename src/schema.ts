@@ -41,6 +41,8 @@ export const Finding = z.object({
   message: z.string().min(1),
   evidence: z.string(),
   note: z.string().optional(),
+  /** Shared title words with the closest other file (redundancy.shared-subject only); absent when the files share only a subject. */
+  overlap: z.number().int().positive().optional(),
 });
 export type Finding = z.infer<typeof Finding>;
 
