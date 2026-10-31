@@ -59,3 +59,12 @@ describe('EvidenceReport', () => {
     expect(EvidenceReport.safeParse(report).success).toBe(true);
   });
 });
+
+describe('Finding overlap', () => {
+  const base = { category: 'redundancy', rule: 'redundancy.shared-subject', file: 'tests/a.test.ts', message: 'm', evidence: 'e' };
+  it('accepts a finding with or without the optional overlap and rejects a non-positive one', () => {
+    expect(Finding.safeParse(base).success).toBe(true);
+    expect(Finding.safeParse({ ...base, overlap: 5 }).success).toBe(true);
+    expect(Finding.safeParse({ ...base, overlap: 0 }).success).toBe(false);
+  });
+});

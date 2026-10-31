@@ -199,3 +199,77 @@ describe('detectWorktreeHazards tuning', () => {
     });
   });
 });
+
+describe('detectWorktreeHazards process.cwd() and timestamp rules', () => {
+  const run = (...text: string[]) => detectWorktreeHazards('t.test.ts', text);
+
+  describe('timestamp-tmp-path', () => {
+    it('flags a name built from a timestamp under tmpdir() or /tmp', () => {
+      expect(rules(run('const db = join(tmpdir(), `x-${Date.now()}.db`);'))).toEqual(['worktree.timestamp-tmp-path']);
+      expect(rules(run("const moved = join(tmpdir(), 'sprite-set-moved-' + Date.now());"))).toEqual(['worktree.timestamp-tmp-path']);
+      expect(rules(run('const p = join(os.tmpdir(), `ref-${Date.now()}.png`);'))).toEqual(['worktree.timestamp-tmp-path']);
+      expect(rules(run('const p = `/tmp/run-${process.pid}.log`;'))).toEqual(['worktree.timestamp-tmp-path']);
+    });
+
+    it('flags a separator-ended name joined to a timestamp', () => {
+      expect(rules(run("const dir = 'name-' + Date.now();"))).toEqual(['worktree.timestamp-tmp-path']);
+    });
+
+    it('accepts a path built from a mkdtemp directory', () => {
+      expect(run('const dir = mkdtempSync(join(tmpdir(), `x-${Date.now()}-`));')).toEqual([]);
+      expect(run('const dir = mkdtempSync(', '  join(tmpdir(), `x-${Date.now()}-`),', ');')).toEqual([]);
+      expect(run("const dir = mkdtempSync(join(tmpdir(), 'x-'));", "const db = join(dir, 'y-' + Date.now());")).toEqual([]);
+      expect(run("const dir = mkdtempSync(join(tmpdir(), 'x-'));", 'const other = 1;', "const db = join(dir, 'y-' + Date.now());")).toEqual([]);
+    });
+
+    it('accepts a name that also carries a random part', () => {
+      expect(run('const db = join(tmpdir(), `t-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);')).toEqual([]);
+      expect(run('const db = join(tmpdir(), `t-${randomUUID()}.db`);')).toEqual([]);
+    });
+
+    it('accepts a clock read that is not a name', () => {
+      expect(run('const started = Date.now();')).toEqual([]);
+      expect(run('expect(Date.now() - started).toBeLessThan(3000);')).toEqual([]);
+      expect(run('const dir = join(tmpdir(), name);')).toEqual([]);
+    });
+
+    it('quotes the line as evidence', () => {
+      const [finding] = run('const db = join(tmpdir(), `x-${Date.now()}.db`);');
+      expect(finding?.evidence).toBe('const db = join(tmpdir(), `x-${Date.now()}.db`);');
+    });
+  });
+
+  describe('cwd-write', () => {
+    it('flags writes under the working directory', () => {
+      expect(rules(run("writeFileSync(join(process.cwd(), 'out.txt'), 'x');"))).toEqual(['worktree.cwd-write']);
+      expect(rules(run("mkdirSync(join(process.cwd(), 'assets', 'tmp'), { recursive: true });"))).toEqual(['worktree.cwd-write']);
+      expect(rules(run("rmSync(path.resolve(process.cwd(), 'out'), { recursive: true });"))).toEqual(['worktree.cwd-write']);
+    });
+
+    it('flags a copy or move only when the working directory is the destination', () => {
+      expect(rules(run("copyFileSync(join(src, 'a.txt'), join(process.cwd(), 'a.txt'));"))).toEqual(['worktree.cwd-write']);
+      expect(rules(run("copyFileSync(join(process.cwd(), 'scripts', f), join(root, f));"))).toEqual(['worktree.cwd-locate']);
+      expect(rules(run("writeFileSync(file, `x${process.cwd()}`);"))).toEqual([]);
+    });
+
+    it('accepts a working directory that is only passed along or read', () => {
+      expect(run("writeFileSync(join(dir, 'out.txt'), 'x');")).toEqual([]);
+      expect(run('const child = spawn(cmd, args, { cwd: process.cwd() });')).toEqual([]);
+    });
+  });
+
+  describe('cwd-locate', () => {
+    it('flags repository files located from the working directory', () => {
+      expect(rules(run("const cli = join(process.cwd(), 'scripts', 'x.mjs');"))).toEqual(['worktree.cwd-locate']);
+      expect(rules(run("const cli = path.resolve(process.cwd(), 'scripts/sprite.js');"))).toEqual(['worktree.cwd-locate']);
+      expect(rules(run("const cli = process.cwd() + '/scripts/sprite.js';"))).toEqual(['worktree.cwd-locate']);
+      expect(rules(run("const cli = resolve('scripts/sprite.js');"))).toEqual(['worktree.cwd-locate']);
+    });
+
+    it('leaves a write to cwd-write and accepts paths from the test file', () => {
+      expect(rules(run("writeFileSync(join(process.cwd(), 'out.txt'), 'x');"))).not.toContain('worktree.cwd-locate');
+      expect(run("const cli = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'x.mjs');")).toEqual([]);
+      expect(run('const cwd = process.cwd();')).toEqual([]);
+    });
+  });
+});

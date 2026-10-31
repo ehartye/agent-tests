@@ -33,6 +33,49 @@ describe('detectRedundancy', () => {
     expect(findings.filter(finding => finding.rule === 'redundancy.shared-subject').map(finding => finding.file)).toEqual(['tests/x.test.ts', 'tests/y.test.ts']);
   });
 
+  describe('shared-subject title overlap', () => {
+    const sharedFindings = (inputs: ReturnType<typeof file>[]) => detectRedundancy(inputs).findings.filter(finding => finding.rule === 'redundancy.shared-subject');
+
+    it('ranks clusters with shared title words above clusters that share only a subject', () => {
+      const findings = sharedFindings([
+        // Sorted first by path, but shares only the subject: a stopword-only or unrelated title overlap does not count.
+        file('tests/a1.test.ts', ['src/plain.ts'], "it('renders the header', () => {});"),
+        file('tests/a2.test.ts', ['src/plain.ts'], "it('parses a number', () => {});"),
+        file('tests/a3.test.ts', ['src/plain.ts'], "it('closes the socket', () => {});"),
+        file('tests/z1.test.ts', ['src/store.ts'], "it('saves a pending order and reloads it', () => {});"),
+        file('tests/z2.test.ts', ['src/store.ts'], "it('reloads a saved pending order after restart', () => {});"),
+      ]);
+      expect(findings.map(finding => finding.file)).toEqual(['tests/z1.test.ts', 'tests/z2.test.ts', 'tests/a1.test.ts', 'tests/a2.test.ts', 'tests/a3.test.ts']);
+      expect(findings[0]?.evidence).toContain('shared title words with tests/z2.test.ts (3): order, pending, reloads');
+      expect(findings[0]?.evidence).toContain('src/store.ts: tests/z2.test.ts');
+      expect(findings[2]?.evidence).toBe('src/plain.ts: tests/a2.test.ts, tests/a3.test.ts');
+    });
+
+    it('orders by the number of shared words and does not count a single shared word', () => {
+      const findings = sharedFindings([
+        file('tests/a.test.ts', ['src/one.ts'], "it('rotates cache entries', () => {});"),
+        file('tests/b.test.ts', ['src/one.ts'], "it('evicts cache entries', () => {});"),
+        file('tests/c.test.ts', ['src/two.ts'], "it('rotates cache entries daily', () => {});"),
+        file('tests/d.test.ts', ['src/two.ts'], "it('rotates cache entries hourly daily', () => {});"),
+        file('tests/e.test.ts', ['src/three.ts'], "it('draws a border', () => {});"),
+        file('tests/f.test.ts', ['src/three.ts'], "it('draws a circle', () => {});"),
+      ]);
+      expect(findings.map(finding => finding.file)).toEqual(['tests/c.test.ts', 'tests/d.test.ts', 'tests/a.test.ts', 'tests/b.test.ts', 'tests/e.test.ts', 'tests/f.test.ts']);
+      expect(findings.find(finding => finding.file === 'tests/e.test.ts')?.evidence).not.toContain('shared title words');
+    });
+
+    it('carries the overlap size as a number on the finding and leaves it off subject-only findings', () => {
+      const findings = sharedFindings([
+        file('tests/a.test.ts', ['src/one.ts'], "it('rotates cache entries daily', () => {});"),
+        file('tests/b.test.ts', ['src/one.ts'], "it('rotates cache entries hourly daily', () => {});"),
+        file('tests/e.test.ts', ['src/three.ts'], "it('draws a border', () => {});"),
+        file('tests/f.test.ts', ['src/three.ts'], "it('draws a circle', () => {});"),
+      ]);
+      expect(findings.map(finding => finding.overlap)).toEqual([4, 4, undefined, undefined]);
+      expect(findings[2]).not.toHaveProperty('overlap');
+    });
+  });
+
   it('flags a sweep repeated across files but not a short or unique one', () => {
     const sweep = 'for (let seed = 1; seed <= 30; seed++) {}';
     const { findings } = detectRedundancy([

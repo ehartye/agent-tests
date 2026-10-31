@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { detectWiring } from '../../src/detectors/wiring.ts';
-import { defaultRiskMap } from '../../src/riskmap.ts';
+import { classifiableFiles, detectWiring, unmappedSubjectFinding } from '../../src/detectors/wiring.ts';
+import { candidateDirs } from '../../src/riskdraft.ts';
+import { defaultRiskMap, loadRiskMap, serializeRiskMap, tierFor } from '../../src/riskmap.ts';
 import type { RiskMap } from '../../src/schema.ts';
+import { makeTree } from '../helpers/tree.ts';
 
 const rules = (findings: Array<{ rule: string }>): string[] => findings.map(finding => finding.rule).sort();
 
@@ -150,5 +152,114 @@ describe('detectWiring', () => {
       expect(drift(wild, ['src/x/foo'])).toEqual([]);
       expect(drift(wild, ['src/x/bar'])).toEqual(['src/x/bar']);
     });
+  });
+});
+
+describe('wiring.unmapped-subject', () => {
+  const map: RiskMap = { ...defaultRiskMap(), areas: [{ path: 'src/db/**', tier: 'critical' }] };
+
+  it('names the unmapped path and the area that did map, with the evidence quoting both', () => {
+    const finding = unmappedSubjectFinding('tests/a.test.ts', ['src/misc/x.ts'], 'src/db/**');
+    expect(finding).toMatchObject({ category: 'wiring', rule: 'wiring.unmapped-subject', file: 'tests/a.test.ts' });
+    expect(finding.message).toContain('src/misc/x.ts');
+    expect(finding.evidence).toBe('src/misc/x.ts; mapped area: src/db/**');
+  });
+
+  it('is not emitted by the file-level wiring checks, which still see the tier', () => {
+    const findings = detectWiring(map, [{ rel: 'tests/a.test.ts', tier: 'critical', tags: {}, subjects: ['src/db/s.ts', 'src/misc/x.ts'] }], []);
+    expect(rules(findings)).toEqual([]);
+  });
+});
+
+describe('bare-directory wiring.drift', () => {
+  const driftOf = (areaMap: RiskMap, dirs: string[], files: Record<string, string[]> = {}) =>
+    detectWiring(areaMap, [], dirs, dir => files[dir] ?? [])
+      .filter(finding => finding.rule === 'wiring.drift')
+      .map(finding => `${finding.file}|${finding.evidence}`);
+
+  it('does not flag a root folder that has its own folder/** area', () => {
+    const roots: RiskMap = { ...defaultRiskMap(), areas: ['Source', 'Content', 'Config', 'Art'].map(dir => ({ path: `${dir}/**`, tier: 'standard' as const })) };
+    expect(driftOf(roots, ['Art', 'Config', 'Content', 'Source'])).toEqual([]);
+  });
+
+  it('does not flag a directory whose files are all classified by narrower or overlapping areas', () => {
+    const overlap: RiskMap = {
+      ...defaultRiskMap(),
+      areas: [
+        { path: 'engine/core/**', tier: 'critical' },
+        { path: 'engine/*.json', tier: 'low' },
+        { path: 'engine/**', tier: 'standard' },
+        { path: 'bin/cli.js', tier: 'standard' },
+      ],
+    };
+    const files = { engine: ['engine/core/a.ts', 'engine/x.json'], bin: ['bin/cli.js'] };
+    expect(driftOf(overlap, ['engine', 'bin'], files)).toEqual([]);
+  });
+
+  it('classifies descendants first-match, with a catch-all ancestor never counting', () => {
+    const map: RiskMap = { ...defaultRiskMap(), areas: [{ path: 'src/auth/session/**', tier: 'critical' }, { path: 'src/**', tier: 'standard' }] };
+    expect(driftOf(map, ['src/auth'], { 'src/auth': ['src/auth/session/a.ts'] })).toEqual([]);
+    expect(driftOf(map, ['src/auth'], { 'src/auth': ['src/auth/session/a.ts', 'src/auth/orphan.ts'] })).toEqual(['src/auth|src/auth/orphan.ts']);
+  });
+
+  it('still reports a genuinely unclassified file in a partly covered directory with its exact path', () => {
+    const map: RiskMap = { ...defaultRiskMap(), areas: [{ path: 'tools/build.js', tier: 'standard' }] };
+    expect(driftOf(map, ['tools'], { tools: ['tools/build.js', 'tools/orphan.js'] })).toEqual(['tools|tools/orphan.js']);
+  });
+
+  it('keeps reporting an empty or unknown directory with no evidence', () => {
+    expect(driftOf({ ...defaultRiskMap(), areas: [] }, ['lonely'])).toEqual(['lonely|']);
+  });
+});
+
+describe('classifiableFiles', () => {
+  it('skips ignored output, dot directories, tests, support files and probe artifacts but keeps nested sources', () => {
+    const root = makeTree({
+      'engine/core/a.ts': '',
+      'engine/dist/out.js': '',
+      'engine/.cache/c.js': '',
+      'engine/a.test.ts': '',
+      'engine/fixtures/f.ts': '',
+      'engine/__probe__.ts': '',
+      'engine/README.md': '',
+    });
+    expect(classifiableFiles(root, 'engine')).toEqual(['engine/README.md', 'engine/core/a.ts']);
+  });
+
+  it('returns nothing for a missing directory', () => {
+    expect(classifiableFiles(makeTree(), 'nope')).toEqual([]);
+  });
+});
+
+describe('a fixture project with folder/** roots', () => {
+  const root = () =>
+    makeTree({
+      '.testing/risk.yml': serializeRiskMap({
+        ...defaultRiskMap(),
+        areas: [
+          { path: 'Source/**', tier: 'critical' },
+          { path: 'Content/**', tier: 'low' },
+          { path: 'Config/**', tier: 'standard' },
+          { path: 'Art/**', tier: 'low' },
+          { path: 'engine/core/**', tier: 'critical' },
+          { path: 'engine/**', tier: 'standard' },
+        ],
+      }),
+      'Source/a.ts': 'export const a = 1;\n',
+      'Content/c.ts': 'export const c = 1;\n',
+      'Config/g.ts': 'export const g = 1;\n',
+      'Art/r.ts': 'export const r = 1;\n',
+      'engine/core/e.ts': 'export const e = 1;\n',
+      'engine/dist/generated.js': 'x\n',
+      'tools/build.ts': 'export const b = 1;\n',
+    });
+
+  it('reports no bare-directory drift for the covered roots (the folder/** report did not come from the risk-map load)', () => {
+    const dir = root();
+    const map = loadRiskMap(dir);
+    expect(tierFor(map!, 'Source/a.ts')).toEqual({ tier: 'critical', area: 'Source/**' });
+    const drift = detectWiring(map, [], candidateDirs(dir), d => classifiableFiles(dir, d)).filter(finding => finding.rule === 'wiring.drift');
+    expect(drift.map(finding => finding.file)).toEqual(['tools']);
+    expect(drift[0].evidence).toBe('tools/build.ts');
   });
 });

@@ -61,6 +61,10 @@
       "file": "tests/net/server.test.ts"
     },
     {
+      "rule": "worktree.cwd-locate",
+      "file": "tests/net/server.test.ts"
+    },
+    {
       "rule": "worktree.home-dir",
       "file": "tests/net/server.test.ts"
     },

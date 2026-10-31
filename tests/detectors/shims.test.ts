@@ -50,14 +50,19 @@ describe('detectShims tuning', () => {
       'migrated from v1',
       'migrating from v1',
       'migration from v1',
-      'uses a fallback',
-      'uses fallbacks',
-      'fall-back path',
+      'falls back to the legacy parser',
+      'fall-back to previous format',
+      'fallback shim for old runtimes',
+      'keeps the legacy v1 loader shim for old files',
+      'loads legacy JSON that only has cellSize',
+      'still accepts legacy square cellSize',
+      'legacy alias groups migrate with rename',
       'backwards compatible output',
       'back-compat mode',
       'back-compatibility',
       'compat layer',
       'compatibility layer',
+      'compatibility with older files',
       'old format input',
       'legacy input',
     ]) {
@@ -72,8 +77,29 @@ describe('detectShims tuning', () => {
     }
   });
 
+  it('keeps a title that announces an old-format or shim layer', () => {
+    const found = shims('tests/a.test.ts', titled('keeps the legacy v1 loader shim for old files'));
+    expect(evidenceOf(found, 'shim.title-marker')).toEqual(['keeps the legacy v1 loader shim for old files']);
+  });
+
+  it('stays quiet on titles that describe current fallback, compat or legacy-named behaviour', () => {
+    for (const title of [
+      'uses the fallback glyph when the font lacks a character',
+      'reads the compat shorthand option',
+      'uses a fallback',
+      'uses fallbacks',
+      'fall-back path',
+      'legacy horizontal pagination keeps its topology',
+      'omitting variants keeps the legacy names, tag and tile bytes',
+      'a four-person walk atlas can exceed the legacy 100-frame grid restriction',
+      'works without IntersectionObserver through the no-IntersectionObserver path',
+    ]) {
+      expect(evidenceOf(shims('tests/a.test.ts', titled(title)), 'shim.title-marker'), title).toEqual([]);
+    }
+  });
+
   it('caps title evidence at 160 characters', () => {
-    const title = `legacy ${'x'.repeat(300)}`;
+    const title = `legacy format ${'x'.repeat(300)}`;
     const found = shims('tests/a.test.ts', titled(title));
     expect(evidenceOf(found, 'shim.title-marker')).toEqual([title.slice(0, 160)]);
   });

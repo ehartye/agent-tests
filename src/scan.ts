@@ -4,7 +4,7 @@ import { churnOf, commitFileSets } from './churn.ts';
 import { detectFrequency } from './detectors/frequency.ts';
 import { detectRedundancy } from './detectors/redundancy.ts';
 import { detectShims } from './detectors/shims.ts';
-import { detectWiring } from './detectors/wiring.ts';
+import { classifiableFiles, detectWiring, unmappedSubjectFinding } from './detectors/wiring.ts';
 import { detectWorktreeHazards } from './detectors/worktree.ts';
 import { detectRunner, discoverTestInfrastructure, discoverTests } from './discover.ts';
 import { declaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile } from './parse.ts';
@@ -23,13 +23,26 @@ const RANK: Record<Tier, number> = { critical: 3, standard: 2, low: 1 };
  * no subjects. A valid `@risk` tag overrides the tier, but `area` still names the subjects' area. An invalid `@risk` is
  * ignored when the subjects give a tier.
  */
-function tierOfFile(map: RiskMap | null, rel: string, subjects: string[], risk: string | undefined): { tier: Tier | null; area: string | null } {
-  if (!map) return { tier: null, area: null };
+function tierOfFile(
+  map: RiskMap | null,
+  rel: string,
+  subjects: string[],
+  risk: string | undefined,
+): { tier: Tier | null; area: string | null; unmapped: string[] } {
+  if (!map) return { tier: null, area: null, unmapped: [] };
   const override = Tier.safeParse(risk);
-  const hits = (subjects.length > 0 ? subjects : [rel]).map(path => tierFor(map, path)).filter((hit): hit is { tier: Tier; area: string } => hit !== null);
-  if (hits.length === 0) return { tier: override.success ? override.data : null, area: null };
+  const paths = subjects.length > 0 ? subjects : [rel];
+  const hits: { tier: Tier; area: string }[] = [];
+  const unmapped: string[] = [];
+  for (const path of paths) {
+    const hit = tierFor(map, path);
+    if (hit) hits.push(hit);
+    else unmapped.push(path);
+  }
+  if (hits.length === 0) return { tier: override.success ? override.data : null, area: null, unmapped: [] };
   const best = hits.reduce((a, b) => (RANK[b.tier] > RANK[a.tier] ? b : a));
-  return { tier: override.success ? override.data : best.tier, area: best.area };
+  // Only real subjects are reported as unmapped; the file's own path stands in when it has none.
+  return { tier: override.success ? override.data : best.tier, area: best.area, unmapped: subjects.length > 0 ? unmapped : [] };
 }
 
 function flagsOf(parsed: ParsedFile): FileFlag[] {
@@ -100,8 +113,10 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
   const loaded = loadTests(root);
 
   const records = new Map<string, TestFileRecord>();
+  const unmappedFindings: Finding[] = [];
   for (const file of loaded) {
-    const { tier, area } = tierOfFile(map, file.rel, file.subjects, file.parsed.tags.risk);
+    const { tier, area, unmapped } = tierOfFile(map, file.rel, file.subjects, file.parsed.tags.risk);
+    if (unmapped.length > 0 && area) unmappedFindings.push(unmappedSubjectFinding(file.rel, unmapped, area));
     const { churn, edits } = churnOf(file.rel, file.subjects, sets);
     records.set(file.rel, {
       file: file.rel,
@@ -154,8 +169,10 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
       map,
       [...records.values()].map(record => ({ rel: record.file, tier: record.tier, tags: record.tags, subjects: record.subjects })),
       candidateDirs(root),
+      dir => classifiableFiles(root, dir),
     ),
   );
+  attach(unmappedFindings);
   attach(detectFrequency(root, map));
 
   for (const record of records.values()) record.findings.sort(byLocation);
