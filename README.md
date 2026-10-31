@@ -135,6 +135,8 @@ Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
 
+Version 0.8.0 makes the audit scan quieter and adds hazard rules. `shim.title-marker` stays title-only but no longer matches bare fallback or compat wording; `redundancy.shared-subject` findings carry the shared title words and an optional `overlap` number that the report uses to rank ties; `worktree.timestamp-tmp-path`, `worktree.cwd-write`, `worktree.cwd-locate` and `wiring.unmapped-subject` are new review hints; and `wiring.drift` no longer reports roots that a `folder/**` area already covers. Every new rule is a review hint, not a verdict. See `references/scan-rules.md`.
+
 Version 0.7.0 adds the read-only mutation evidence helper, bounded exact-version native reporter adapters and
 reviewed builtin assertion profiles. It verifies raw source/restoration, independent judging and declared input
 identity, and keeps historical mutation counts separate from strict results. See the linked qualification limits.
