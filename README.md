@@ -61,6 +61,7 @@ on this machine.
 | `references/node-profiling.md` | Optional Node 24+ reporter, per-file and overall duration, provenance limits and repeatable lane experiments |
 | `references/candidate-evidence.md` | Explicit checked observation of Node-test/Vitest children, content/path/index identities, native counts and honest reuse limits |
 | `references/scan-rules.md` | What the newer and changed scan rules mean, the remedy to recommend and a planted example of each: `worktree.timestamp-tmp-path`, `worktree.cwd-write`, `worktree.cwd-locate`, `wiring.unmapped-subject`, `shim.title-marker`, `redundancy.shared-subject` and `wiring.drift` |
+| `references/worktree-check.md` | The opt-in `worktree-check` command: options, the three verdicts, the report fields, error codes, a runnable example, its cost and its limits |
 | `references/mutation-evidence.md` | Read-only mutation verdicts, exact native assertion scope, frozen judging, raw restoration and honest partial composition |
 
 ## Risk map
@@ -81,6 +82,7 @@ Skills run the CLI through the checked launcher, never from PATH:
 | `risk-draft [--write]` | A draft risk map; `--write` creates `.testing/risk.yml` if absent |
 | `scan` | Evidence report as JSON (`agent-tests/evidence@1`) |
 | `report [--max-files n] [--max-per-rule n]` | The same evidence as ranked, capped Markdown: project findings first, then a table of the most suspect test files with the rules that fired |
+| `worktree-check [--runs n] [--command "<cmd>"] [--timeout-seconds n] [--no-install]` | Opt-in: runs the test command alone, then in the root and a second worktree of HEAD at the same time, and prints JSON (`agent-tests/worktree-check@1`) with a verdict of `hazard-observed`, `no-hazard-observed` or `baseline-failed`. It runs the project's tests and never runs from `scan` or `report`; see [references/worktree-check.md](references/worktree-check.md) |
 
 Standalone CLI failures are one JSON line on stderr (`{"error":{"code","message","hint"}}`), with exit code 2 for a
 usage error and 1 otherwise. Helpers have their documented evidence contracts; mutation integrity refusal exits 2.
