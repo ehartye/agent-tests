@@ -123,8 +123,9 @@ The remedy is the one the static rule gives: a per-process or `mkdtemp` path (se
 
 ## Limits
 
-- It runs the committed state (HEAD), not uncommitted changes. A dirty root can behave differently from HEAD; the report's
-  `rootDirty` says whether it was dirty. Commit or stash first for a clean comparison.
+- The second checkout is a worktree of HEAD, but the baseline and the concurrent runs in the root use the root's working
+  tree as it is, uncommitted changes included. A dirty root can differ from the second checkout, so a hazard may be only
+  that difference; `rootDirty` flags it. Commit or stash first for a clean comparison.
 - The project's tests must be runnable from a fresh install of HEAD. If they need an untracked file, a built artifact,
   a secret or a local service, the second checkout fails for that reason and the verdict is `hazard-observed` without
   being a sharing hazard. Read `failureLines` before reporting.

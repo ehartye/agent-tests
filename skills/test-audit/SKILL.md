@@ -47,9 +47,9 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    - This version never runs the tests, so wait time and CI minutes are absent. Agent cost is estimated tokens in the
      file. Churn/edits is edits that touched the test without the code it covers, over all edits that modified it;
      `n/a` means no git history (a shallow clone has none) or no resolvable subject.
-   - Optional and opt-in: `worktree-check --root "<project>"` runs the tests alone and then in two worktrees at once to
+   - Optional and opt-in: `worktree-check --root "<project>"` runs the tests alone and then in the root and a second checkout at once to
      confirm a `worktree.*` hazard. It runs the project's tests, so ask the owner first; the install dominates its cost,
-     it checks committed state only, and `scan` and `report` never run it. See
+     the second checkout is HEAD while root runs use the working tree (`rootDirty` flags it), and `scan` and `report` never run it. See
      [worktree-check](../../references/worktree-check.md) for options, verdicts, errors and limits.
    - The CLI checks hooks, scripts and workflows for frequency only. Also read the CI workflow and `package.json`
      yourself: a `pretest` that repeats `test` runs the suite twice, and a workflow with no install step or cache
