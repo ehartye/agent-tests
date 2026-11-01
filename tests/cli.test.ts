@@ -67,7 +67,7 @@ describe('tests CLI', () => {
     const result = tests('capabilities');
     expect(result.status).toBe(0);
     const version = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: string }).version;
-    expect(JSON.parse(result.stdout)).toMatchObject({ name: 'agent-tests', version, commands: ['capabilities', 'risk-draft', 'scan', 'report'] });
+    expect(JSON.parse(result.stdout)).toMatchObject({ name: 'agent-tests', version, commands: ['capabilities', 'risk-draft', 'scan', 'report', 'worktree-check'] });
   });
 
   it('rejects an unknown command with E_USAGE and exit 2', () => {

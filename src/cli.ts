@@ -7,10 +7,11 @@ import { renderMarkdown } from './report.ts';
 import { draftRiskMap } from './riskdraft.ts';
 import { RISK_MAP_PATH, serializeRiskMap } from './riskmap.ts';
 import { scan } from './scan.ts';
+import { MAX_RUNS, worktreeCheck } from './worktree-check.ts';
 
-export const COMMANDS = ['capabilities', 'risk-draft', 'scan', 'report'] as const;
+export const COMMANDS = ['capabilities', 'risk-draft', 'scan', 'report', 'worktree-check'] as const;
 
-const USAGE = `Usage: tests <${COMMANDS.join('|')}> [--root <dir>] [--write] [--max-files <n>] [--max-per-rule <n>]`;
+const USAGE = `Usage: tests <${COMMANDS.join('|')}> [--root <dir>] [--write] [--max-files <n>] [--max-per-rule <n>] [--runs <n>] [--command "<cmd>"] [--timeout-seconds <n>] [--no-install]`;
 
 const HINTS: Record<string, string> = {
   E_USAGE: USAGE,
@@ -105,20 +106,43 @@ function writeNewFile(target: string, text: string): void {
   }
 }
 
-function run(args: string[]): void {
+async function run(args: string[]): Promise<void> {
   const [command, ...rest] = args;
   if (!command || !(COMMANDS as readonly string[]).includes(command)) {
     throw new CliError('E_USAGE', USAGE);
   }
-  let values: { root?: string; write?: boolean; 'max-files'?: string; 'max-per-rule'?: string };
+  let values: {
+    root?: string;
+    write?: boolean;
+    'max-files'?: string;
+    'max-per-rule'?: string;
+    runs?: string;
+    command?: string;
+    'timeout-seconds'?: string;
+    'no-install'?: boolean;
+  };
   try {
     values = parseArgs({
       args: rest,
-      options: { root: { type: 'string' }, write: { type: 'boolean' }, 'max-files': { type: 'string' }, 'max-per-rule': { type: 'string' } },
+      options: {
+        root: { type: 'string' },
+        write: { type: 'boolean' },
+        'max-files': { type: 'string' },
+        'max-per-rule': { type: 'string' },
+        runs: { type: 'string' },
+        command: { type: 'string' },
+        'timeout-seconds': { type: 'string' },
+        'no-install': { type: 'boolean' },
+      },
       strict: true,
     }).values;
   } catch (error) {
     throw new CliError('E_USAGE', (error as Error).message);
+  }
+  if (command !== 'worktree-check') {
+    for (const option of ['runs', 'command', 'timeout-seconds', 'no-install'] as const) {
+      if (values[option] !== undefined) throw new CliError('E_USAGE', `--${option} only applies to worktree-check`);
+    }
   }
   if (command === 'capabilities') {
     process.stdout.write(`${JSON.stringify({ name: 'agent-tests', version: packageVersion(), commands: COMMANDS })}\n`);
@@ -146,6 +170,22 @@ function run(args: string[]): void {
     process.stdout.write(`${JSON.stringify({ written: RISK_MAP_PATH })}\n`);
     return;
   }
+  if (command === 'worktree-check') {
+    const runs = positiveInteger('runs', values.runs);
+    if (runs !== undefined && runs > MAX_RUNS) throw new CliError('E_USAGE', `--runs must be at most ${MAX_RUNS} (got ${runs})`);
+    const timeoutSeconds = positiveInteger('timeout-seconds', values['timeout-seconds']);
+    if (values.command !== undefined && values.command.trim() === '') throw new CliError('E_USAGE', '--command needs a command');
+    const report = await worktreeCheck({
+      root,
+      ...(runs !== undefined ? { runs } : {}),
+      ...(values.command !== undefined ? { command: values.command } : {}),
+      ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+      ...(values['no-install'] ? { install: false } : {}),
+    });
+    process.stdout.write(`${JSON.stringify(report, null, 2)}
+`);
+    return;
+  }
   if (command === 'scan') {
     // scan always prints the full JSON, so the report caps do not apply to it.
     process.stdout.write(`${JSON.stringify(scan(root), null, 2)}\n`);
@@ -164,7 +204,7 @@ function run(args: string[]): void {
 export async function main(argv: string[]): Promise<void> {
   process.stdout.on('error', error => ignoreBrokenPipe(error));
   try {
-    run(argv.slice(2));
+    await run(argv.slice(2));
   } catch (error) {
     const failure = failureFor(error);
     console.error(JSON.stringify({ error: failure }));
