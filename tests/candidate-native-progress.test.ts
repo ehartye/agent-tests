@@ -222,18 +222,23 @@ describe('native durable candidate diagnostics', () => {
     const refused = invoke('progress', '--attempt', f.out); expect(refused.status).toBe(1); expect(refused.stdout).toBe(''); expect(refused.stderr).toMatch(/E_RUNTIME_MISSING/);
   });
   it('publishes completed Vitest case diagnostics while its own module is still held', async () => {
-    const f = fixture({ 'owner.test.mjs': `import{test,expect}from'vitest';test('early assertion',()=>expect('prompt actual').toBe('prompt expected'));test('held later case',async()=>{${held}});` }, true);
-    const c = controlled(f, 'vitest', ['owner.test.mjs']);
+    // The fixture's own held case runs under Vitest's default 5 s test timeout, which would end the owner
+    // (owner-ended) if the batched worker-to-main update is delayed. Give the fixture a 60 s test timeout and
+    // a 45 s held deadline, and the waits 30 s, so only the callback publication can satisfy the barrier.
+    const f = fixture({ 'owner.test.mjs': `import{test,expect}from'vitest';test('early assertion',()=>expect('prompt actual').toBe('prompt expected'));test('held later case',async()=>{${held.replace('15000', '45000')}});` }, true);
+    const c = controlled(f, 'vitest', ['owner.test.mjs', '--testTimeout=60000']);
     try {
-      await waitFor(() => existsSync(join(f.root, '.local/b-held')), c.output);
+      await waitFor(() => existsSync(join(f.root, '.local/b-held')), c.output, 30000);
       // Native worker result transport is batched; the callback publication is the evidence barrier.
-      await waitFor(() => readdirSync(join(f.out, 'progress')).filter(n => n.endsWith('.json')).some(n => json(join(f.out, 'progress'), n).kind === 'native-error'), c.output);
+      await waitFor(() => readdirSync(join(f.out, 'progress')).filter(n => n.endsWith('.json')).some(n => json(join(f.out, 'progress'), n).kind === 'native-error'), c.output, 30000);
       const p = JSON.parse(progress(f.out).stdout); expect(p.endedOwners).toEqual([]);
       expect(p.records.some((r: any) => r.kind === 'native-error' && r.errors.some((e: any) => e.scope === 'case' && e.error.message.includes('prompt actual')))).toBe(true);
+      // The record is durable before the echoed text crosses the observer's stdout pipe, so wait for the pipe too.
+      await waitFor(() => /prompt actual/.test(c.output()) && /prompt expected/.test(c.output()), c.output, 30000);
       expect(c.output()).toMatch(/prompt actual/); expect(c.output()).toMatch(/prompt expected/);
     } finally { writeFileSync(join(f.root, '.local/release'), 'yes'); await c.closed; }
     expect(await c.closed).toBe(1);
-  }, 30000);
+  }, 90000);
   it('retains real A publication when the actual recorder handle is interrupted before B ends', async () => {
     const f = fixture({
       'a.mjs': "import{test}from'node:test';test('A',()=>{});",

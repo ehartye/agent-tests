@@ -13,7 +13,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SKILLS = join(ROOT, 'skills');
 const REQUIRED = ['tests-setup', 'test-audit', 'test-strategy'];
 const CLI_COMMANDS: readonly string[] = COMMANDS;
-const CLI_FLAGS = ['root', 'write', 'max-files', 'max-per-rule'];
+const CLI_FLAGS = ['root', 'write', 'max-files', 'max-per-rule', 'runs', 'command', 'timeout-seconds', 'no-install'];
 // Helper commands are checked by the launcher's executable dispatch tests, not src/cli.ts's COMMANDS.
 const HELPER_FLAGS: Record<string, string[]> = {'playbot-export': ['out', 'verify', 'require-current']};
 const SETUP_FLAGS = ['check', 'json'];
@@ -70,7 +70,7 @@ describe('skills', () => {
   });
 
   it('reads the commands from the CLI itself', () => {
-    expect(CLI_COMMANDS).toEqual(['capabilities', 'risk-draft', 'scan', 'report']);
+    expect(CLI_COMMANDS).toEqual(['capabilities', 'risk-draft', 'scan', 'report', 'worktree-check']);
   });
 
   describe.each(skillNames)('%s', name => {
