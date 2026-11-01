@@ -5,10 +5,11 @@
  */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { tokenize } from '../src/worktree-check.ts';
+import { runCleanup, tokenize, worktreeCheck, type CleanupOps, type CleanupResult } from '../src/worktree-check.ts';
 import { physicalTemp } from './helpers/physical-temp.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -240,5 +241,94 @@ describe('tokenize', () => {
 
   it.each(['npm test | tee out', 'a && b', 'a > out', 'echo $(date)', 'node "unterminated', '   '])('refuses %j', line => {
     expect(() => tokenize(line)).toThrowError(expect.objectContaining({ code: 'E_USAGE' }));
+  });
+});
+
+describe('worktree-check cleanup hardening', () => {
+  const freshCleanup = (): CleanupResult => ({ ok: true, worktreeCreated: true, worktreeRemoved: false, branchDeleted: false, errors: [], failedSteps: [] });
+
+  it('still deletes the branch and reports the failure when removing the holder directory throws', () => {
+    const { root } = project({ 'test.js': '' });
+    const holder = join(root, '..', 'holder-dir');
+    mkdirSync(holder);
+    const worktree = join(holder, 'checkout');
+    git(root, 'worktree', 'add', '-q', '-b', 'throwaway', worktree, 'HEAD');
+    const calls: string[] = [];
+    const real: CleanupOps = {
+      removeWorktree: w => void git(root, 'worktree', 'remove', '--force', w),
+      removeDirectory: () => {
+        calls.push('removeDirectory');
+        throw new Error('EBUSY: resource busy or locked');
+      },
+      prune: () => void git(root, 'worktree', 'prune'),
+      worktreeListed: name => git(root, 'worktree', 'list', '--porcelain').includes(name),
+      branchExists: b => git(root, 'branch', '--list', b) !== '',
+      deleteBranch: b => void git(root, 'branch', '-D', b),
+    };
+    const cleanup = freshCleanup();
+    runCleanup({ root, holder, worktree, branch: 'throwaway', branchCreated: true }, cleanup, real);
+    expect(calls).toEqual(['removeDirectory']);
+    expect(git(root, 'branch', '--list', 'throwaway')).toBe('');
+    expect(cleanup.branchDeleted).toBe(true);
+    expect(cleanup.ok).toBe(false);
+    expect(cleanup.failedSteps).toEqual([{ step: 'remove holder directory', message: 'EBUSY: resource busy or locked' }]);
+    expect(cleanup.errors.join(' ')).toContain('remove holder directory: EBUSY');
+  });
+
+  it('runs every step independently when each earlier step throws', () => {
+    const order: string[] = [];
+    const boom = (step: string) => () => {
+      order.push(step);
+      throw new Error(`${step} failed`);
+    };
+    const ops: CleanupOps = {
+      removeWorktree: boom('removeWorktree'),
+      removeDirectory: boom('removeDirectory'),
+      prune: boom('prune'),
+      worktreeListed: () => true,
+      branchExists: () => true,
+      deleteBranch: boom('deleteBranch'),
+    };
+    const cleanup = freshCleanup();
+    expect(() => runCleanup({ root: 'unused', holder: join(tmpdir(), 'no-such-holder-xyz'), worktree: join(tmpdir(), 'no-such-holder-xyz', 'checkout'), branch: 'b', branchCreated: true }, cleanup, ops)).not.toThrow();
+    expect(order).toEqual(['removeWorktree', 'removeDirectory', 'prune', 'deleteBranch']);
+    expect(cleanup.failedSteps.map(entry => entry.step)).toEqual(['git worktree remove', 'remove holder directory', 'git worktree prune', 'git branch -D']);
+    expect(cleanup.ok).toBe(false);
+    expect(cleanup.branchDeleted).toBe(false);
+  });
+
+  it('does not delete a branch this run did not create', () => {
+    const deleted: string[] = [];
+    const ops: CleanupOps = {
+      removeWorktree: () => {},
+      removeDirectory: () => {},
+      prune: () => {},
+      worktreeListed: () => false,
+      branchExists: () => true,
+      deleteBranch: b => void deleted.push(b),
+    };
+    const cleanup = { ...freshCleanup(), worktreeCreated: false };
+    runCleanup({ root: 'unused', branch: 'preexisting', branchCreated: false }, cleanup, ops);
+    expect(deleted).toEqual([]);
+    expect(cleanup.branchDeleted).toBe(false);
+    expect(cleanup.ok).toBe(true);
+  });
+
+  it('keeps a pre-existing branch of the same name when the worktree add fails', async () => {
+    const { root } = project({ 'test.js': 'process.exit(0);\n' });
+    git(root, 'branch', 'preexisting-branch');
+    const before = git(root, 'rev-parse', 'preexisting-branch');
+    await expect(worktreeCheck({ root, runs: 1, install: false, command: 'node test.js', branchName: 'preexisting-branch' })).rejects.toMatchObject({ code: 'E_WORKTREE_FAILED' });
+    expect(git(root, 'rev-parse', 'preexisting-branch')).toBe(before);
+    expect(git(root, 'worktree', 'list', '--porcelain').split(/\r?\n/).filter(line => line.startsWith('worktree '))).toHaveLength(1);
+  });
+
+  it('reports an empty failedSteps list on a clean run', () => {
+    const { root } = project({ 'test.js': 'process.exit(0);\n' });
+    const result = check(root, '--no-install', '--runs', '1');
+    expect(result.status, result.stderr).toBe(0);
+    const report = reportOf(result.stdout);
+    expect(report.cleanup).toMatchObject({ ok: true, branchDeleted: true, failedSteps: [] });
+    expectNoLeftovers(root);
   });
 });

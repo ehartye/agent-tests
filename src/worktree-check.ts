@@ -23,6 +23,8 @@ export interface WorktreeCheckOptions {
   command?: string;
   timeoutSeconds?: number;
   install?: boolean;
+  /** Test seam: the throwaway branch name. Not exposed on the command line. */
+  branchName?: string;
 }
 
 interface CommandResult {
@@ -51,7 +53,97 @@ export interface WorktreeCheckReport {
   baseline: CheckoutRun;
   install: { performed: boolean; command?: string; exitCode?: number | null; durationMs?: number };
   results: Array<{ run: number; root: CheckoutRun; worktree: CheckoutRun }>;
-  cleanup: { ok: boolean; worktreeCreated: boolean; worktreeRemoved: boolean; branchDeleted: boolean; errors: string[] };
+  cleanup: CleanupResult;
+}
+
+export interface CleanupResult {
+  ok: boolean;
+  worktreeCreated: boolean;
+  worktreeRemoved: boolean;
+  branchDeleted: boolean;
+  errors: string[];
+  /** Every cleanup step that threw, with its message, even when a later step recovered. */
+  failedSteps: Array<{ step: string; message: string }>;
+}
+
+/** The side effects of cleanup, replaceable so each step's failure can be simulated. */
+export interface CleanupOps {
+  removeWorktree(worktree: string): void;
+  removeDirectory(directory: string): void;
+  prune(): void;
+  worktreeListed(name: string): boolean;
+  branchExists(branch: string): boolean;
+  deleteBranch(branch: string): void;
+}
+
+export interface CleanupTarget {
+  root: string;
+  holder?: string;
+  worktree?: string;
+  branch?: string;
+  /** True only after `git worktree add -b` succeeded in this run; a branch this run did not create is never deleted. */
+  branchCreated: boolean;
+}
+
+function defaultCleanupOps(root: string): CleanupOps {
+  return {
+    removeWorktree: worktree => void git(root, ['worktree', 'remove', '--force', worktree]),
+    removeDirectory: directory => rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
+    prune: () => void git(root, ['worktree', 'prune']),
+    worktreeListed: name => (tryGit(root, ['worktree', 'list', '--porcelain']) ?? '').includes(name),
+    branchExists: branch => Boolean(tryGit(root, ['branch', '--list', branch])),
+    deleteBranch: branch => void git(root, ['branch', '-D', branch]),
+  };
+}
+
+/**
+ * Remove the second worktree, its holder directory and the throwaway branch. Every step runs in its own try/catch so one failure
+ * (an EBUSY on Windows, say) never skips the rest; failures are recorded on `cleanup` and this function itself never throws.
+ */
+export function runCleanup(target: CleanupTarget, cleanup: CleanupResult, ops: CleanupOps = defaultCleanupOps(target.root)): void {
+  const failures = new Map<string, string>();
+  const attempt = (step: string, action: () => void): void => {
+    try {
+      action();
+    } catch (error) {
+      const stderr = (error as { stderr?: unknown } | null)?.stderr;
+      const message = String(stderr || (error as Error)?.message || error).trim();
+      failures.set(step, message);
+      cleanup.failedSteps.push({ step, message });
+    }
+  };
+  const { worktree, holder, branch } = target;
+  if (worktree && cleanup.worktreeCreated) attempt('git worktree remove', () => ops.removeWorktree(worktree));
+  if (holder) attempt('remove holder directory', () => ops.removeDirectory(holder));
+  if (worktree && cleanup.worktreeCreated) {
+    attempt('git worktree prune', () => ops.prune());
+    let listed = false;
+    try {
+      listed = ops.worktreeListed(basename(holder ?? 'checkout'));
+    } catch {
+      listed = false;
+    }
+    cleanup.worktreeRemoved = !existsSync(worktree) && !listed;
+  }
+  if (branch && target.branchCreated) {
+    let exists = true;
+    try {
+      exists = ops.branchExists(branch);
+    } catch {
+      exists = true;
+    }
+    if (exists) attempt('git branch -D', () => ops.deleteBranch(branch));
+    try {
+      cleanup.branchDeleted = !ops.branchExists(branch);
+    } catch {
+      cleanup.branchDeleted = false;
+    }
+  }
+  const holderGone = !holder || !existsSync(holder);
+  const unresolved = (step: string): boolean =>
+    failures.has(step) && !(step === 'git worktree remove' && cleanup.worktreeRemoved) && !(step === 'remove holder directory' && holderGone) && !(step === 'git branch -D' && cleanup.branchDeleted);
+  cleanup.errors = [...failures].filter(([step]) => unresolved(step)).map(([step, message]) => `${step}: ${message}`);
+  cleanup.ok = cleanup.errors.length === 0 && holderGone && (!cleanup.worktreeCreated || (cleanup.worktreeRemoved && cleanup.branchDeleted));
 }
 
 /** The environment with GIT_* removed, so a hook or wrapper cannot point git at another repository. */
@@ -300,10 +392,11 @@ export async function worktreeCheck(options: WorktreeCheckOptions): Promise<Work
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
   for (const name of signals) process.on(name, onSignal);
 
-  const cleanup: WorktreeCheckReport['cleanup'] = { ok: true, worktreeCreated: false, worktreeRemoved: false, branchDeleted: false, errors: [] };
+  const cleanup: CleanupResult = { ok: true, worktreeCreated: false, worktreeRemoved: false, branchDeleted: false, errors: [], failedSteps: [] };
   let holder: string | undefined;
   let worktree: string | undefined;
   let branch: string | undefined;
+  let branchCreated = false;
 
   const guard = (result: CommandResult, step: string): void => {
     if (runner.interrupted || result.interrupted) throw new CliError('E_INTERRUPTED', `Interrupted during ${step}`);
@@ -319,13 +412,14 @@ export async function worktreeCheck(options: WorktreeCheckOptions): Promise<Work
 
     holder = mkdtempSync(join(tmpdir(), 'agent-tests-worktree-check-'));
     worktree = join(holder, 'checkout');
-    branch = `agent-tests-worktree-check-${process.pid}-${randomBytes(4).toString('hex')}`;
+    branch = options.branchName ?? `agent-tests-worktree-check-${process.pid}-${randomBytes(4).toString('hex')}`;
     try {
       git(root, ['worktree', 'add', '-q', '-b', branch, worktree, 'HEAD']);
     } catch (error) {
       const stderr = String((error as { stderr?: unknown }).stderr ?? (error as Error).message).trim();
       throw new CliError('E_WORKTREE_FAILED', `git worktree add failed: ${stderr}`);
     }
+    branchCreated = true;
     cleanup.worktreeCreated = true;
     const other = join(worktree, prefix);
     if (!existsSync(other) || !statSync(other).isDirectory()) throw new CliError('E_WORKTREE_FAILED', `${prefix} does not exist at HEAD`);
@@ -357,40 +451,12 @@ export async function worktreeCheck(options: WorktreeCheckOptions): Promise<Work
   };
 
   const clean = async (): Promise<void> => {
-    await runner.killAll();
-    const fail = (what: string, error: unknown): void => {
-      const stderr = (error as { stderr?: unknown } | null)?.stderr;
-      cleanup.errors.push(`${what}: ${String(stderr || (error as Error)?.message || error).trim()}`);
-    };
-    if (worktree && cleanup.worktreeCreated) {
-      try {
-        git(root, ['worktree', 'remove', '--force', worktree]);
-      } catch (error) {
-        fail('git worktree remove', error);
-      }
-      try {
-        rmSync(worktree, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-      } catch (error) {
-        fail('remove worktree directory', error);
-      }
-      tryGit(root, ['worktree', 'prune']);
-      const listed = tryGit(root, ['worktree', 'list', '--porcelain']) ?? '';
-      cleanup.worktreeRemoved = !existsSync(worktree) && !listed.includes(basename(holder ?? 'checkout'));
-      if (cleanup.worktreeRemoved) cleanup.errors.length = 0;
+    try {
+      await runner.killAll();
+    } catch (error) {
+      cleanup.failedSteps.push({ step: 'kill processes', message: String((error as Error)?.message ?? error) });
     }
-    if (holder) rmSync(holder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-    if (branch) {
-      if (tryGit(root, ['branch', '--list', branch])) {
-        try {
-          git(root, ['branch', '-D', branch]);
-        } catch (error) {
-          fail('git branch -D', error);
-        }
-      }
-      cleanup.branchDeleted = tryGit(root, ['branch', '--list', branch]) === '';
-      if (cleanup.branchDeleted) cleanup.errors = cleanup.errors.filter(entry => !entry.startsWith('git branch -D'));
-    }
-    cleanup.ok = cleanup.errors.length === 0 && (!cleanup.worktreeCreated || (cleanup.worktreeRemoved && cleanup.branchDeleted));
+    runCleanup({ root, holder, worktree, branch, branchCreated }, cleanup);
   };
 
   let outcome: Omit<WorktreeCheckReport, 'cleanup'> | undefined;
