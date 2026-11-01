@@ -6,8 +6,9 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -218,7 +219,12 @@ describe('reserved native transport and exclusive output', () => {
   });
   it('refuses a missing transport and preserves absent output', () => { const f = setup('vitest'), run = f.run('before', undefined, true); expect(run.result.status).not.toBe(0); expect(run.native).toBeNull(); });
   it('never replaces an existing accepted byte record', () => { const f = setup('vitest'), original = Buffer.from([0xff, 0xfe, 13, 10]); const run = f.run('before', transport => writeFileSync(transport.output, original)); expect(readFileSync(run.output)).toEqual(original); });
-  it('refuses output symlinks without touching their target', () => {
+  it('refuses output symlinks without touching their target', ctx => {
+    // Probe a throwaway symlink first so an account without the symlink privilege skips before the run.
+    const probeDirectory = mkdtempSync(join(tmpdir(), 'symlink-probe-'));
+    try { symlinkSync(join(probeDirectory, 'probe-target'), join(probeDirectory, 'probe-link'), 'file'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') ctx.skip('symlink creation refused (EPERM)'); throw error; }
+    finally { rmSync(probeDirectory, { recursive: true, force: true }); }
     const f = setup('vitest'), target = join(f.directory, 'accepted.bin'), original = Buffer.from('accepted\r\n'); writeFileSync(target, original);
     const run = f.run('before', transport => symlinkSync(target, transport.output, 'file')); expect(readFileSync(target)).toEqual(original); expect(run.result.status).not.toBe(0);
   });
