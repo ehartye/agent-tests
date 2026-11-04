@@ -7,8 +7,8 @@ export interface ReportOptions {
   maxPerRule?: number;
 }
 
-const DEFAULT_MAX_FILES = 40;
-const DEFAULT_MAX_PER_RULE = 30;
+export const DEFAULT_MAX_FILES = 40;
+export const DEFAULT_MAX_PER_RULE = 30;
 const MAX_EVIDENCE = 160;
 const MAX_UNPARSED_LISTED = 10;
 const MAX_RULES_PER_ROW = 4;

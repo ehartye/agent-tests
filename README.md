@@ -81,13 +81,19 @@ Skills run the CLI through the checked launcher, never from PATH:
 |---|---|
 | `capabilities` | Name, version, standalone CLI `commands`; checked launcher adds `launcherCommands` from its helper dispatch map |
 | `risk-draft [--write]` | A draft risk map; `--write` creates `.testing/risk.yml` if absent |
-| `scan` | Evidence report as JSON (`agent-tests/evidence@1`) |
-| `report [--max-files n] [--max-per-rule n]` | The same evidence as ranked, capped Markdown: project findings first, then a table of the most suspect test files with the rules that fired |
+| `scan [--out <new-file>]` | Evidence report as JSON (`agent-tests/evidence@1`); `--out` saves an artifact with producer identity and prints a byte/hash receipt |
+| `report [--max-files n] [--max-per-rule n] [--out <new-file>]` | The same evidence as ranked, capped Markdown; `--out` saves a citable artifact with producer identity and prints a byte/hash receipt |
 | `worktree-check [--runs n] [--command "<cmd>"] [--timeout-seconds n] [--no-install]` | Opt-in: runs the test command alone, then in the root and a second worktree of HEAD at the same time, and prints JSON (`agent-tests/worktree-check@1`) with a verdict of `hazard-observed`, `no-hazard-observed` or `baseline-failed`. It runs the project's tests and never runs from `scan` or `report`; see [references/worktree-check.md](references/worktree-check.md) |
 
 Standalone CLI failures are one JSON line on stderr (`{"error":{"code","message","hint"}}`), with exit code 2 for a
 usage error and 1 otherwise. Helpers have their documented evidence contracts; mutation integrity refusal exits 2.
 A broken runtime is reported as JSON too (`E_RUNTIME_BROKEN`), so an agent never has to read a stack trace.
+
+Keep a static audit with `node "<plugin-root>/scripts/run-managed.js" report --root "<project>" --out "docs/evidence/audit.md"`.
+The parent directory must already exist; relative output paths are relative to `--root`, not the shell directory.
+Existing destinations are never replaced. Without `--out`, stdout is unchanged. See [saved audit artifacts](references/audit-output.md)
+for JSON output, atomic publication, producer identity and limits. The checked launcher remains version-matched;
+cite the artifact and its receipt instead of treating an absolute plugin-cache path as a durable identity.
 
 The checked launcher also accepts `candidate-evidence observe node-test|vitest` and `candidate-evidence check` as an
 explicit standalone helper. Observation runs project tests; scan/report stay static. See the [portable usage and
@@ -137,6 +143,8 @@ are sampled, but action/refusal/fallback counters are always collected; omitted 
 Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
+
+Version 0.10.0 adds opt-in `scan`/`report --out` with immutable file publication, producer identity and exact-byte receipts. Existing stdout and checked-launcher behavior remain unchanged; see [saved audit artifacts](references/audit-output.md).
 
 Version 0.9.0 adds the opt-in `worktree-check` command, which runs a project's test command once alone and then in the root checkout and a second git worktree of HEAD at the same time and reports whether a failure appeared only in the concurrent runs (`hazard-observed`, `no-hazard-observed` or `baseline-failed`), always removing the second worktree and its branch. It never runs from `scan` or `report`. The output-symlink test now skips with a reason when symlinks are refused, and the held `candidate-native-progress` case is less likely to time out under load. See `references/worktree-check.md`.
 
