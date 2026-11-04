@@ -38,8 +38,8 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
      `--write`, edit `.testing/risk.yml` to apply the answers, and rerun `report` to validate it; an `E_RISKMAP` error
      names the bad field. Reuse decisions already confirmed in the session.
    - Present: read it. Treat `phase`, `consumers` and `areas` as the owner's decisions.
-3. **Evidence.** `node "<plugin-root>/scripts/run-managed.js" report --root "<project>"` prints a ranked Markdown view
-   (add `--max-files <n>` for a longer table); `scan` prints the full JSON.
+3. **Evidence.** `node "<plugin-root>/scripts/run-managed.js" report --root "<project>"` prints ranked Markdown (`--max-files <n>` extends the table); `scan` prints full JSON.
+   For requested saved evidence, use `--out <new-file>` and cite its identity/receipt; [saved audit artifacts](../../references/audit-output.md) defines parent-directory and no-overwrite requirements.
    - The report opens with a header and category counts. Project findings (CI, hooks, scripts, agent instructions,
      risk-map gaps) follow, then a table of test files.
    - The table ranks unparsed files first, then possible opaque registrations (inventory may be incomplete), then files

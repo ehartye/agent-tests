@@ -3,6 +3,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { CliError } from './errors.ts';
+import { admitOutput, auditArtifact, publishAudit } from './audit-output.ts';
 import { renderMarkdown } from './report.ts';
 import { draftRiskMap } from './riskdraft.ts';
 import { RISK_MAP_PATH, serializeRiskMap } from './riskmap.ts';
@@ -11,7 +12,7 @@ import { MAX_RUNS, worktreeCheck } from './worktree-check.ts';
 
 export const COMMANDS = ['capabilities', 'risk-draft', 'scan', 'report', 'worktree-check'] as const;
 
-const USAGE = `Usage: tests <${COMMANDS.join('|')}> [--root <dir>] [--write] [--max-files <n>] [--max-per-rule <n>] [--runs <n>] [--command "<cmd>"] [--timeout-seconds <n>] [--no-install]`;
+const USAGE = `Usage: tests <${COMMANDS.join('|')}> [--root <dir>] [--out <new-file> (scan/report only)] [--write] [--max-files <n>] [--max-per-rule <n>] [--runs <n>] [--command "<cmd>"] [--timeout-seconds <n>] [--no-install]`;
 
 const HINTS: Record<string, string> = {
   E_USAGE: USAGE,
@@ -113,6 +114,7 @@ async function run(args: string[]): Promise<void> {
   }
   let values: {
     root?: string;
+    out?: string;
     write?: boolean;
     'max-files'?: string;
     'max-per-rule'?: string;
@@ -126,6 +128,7 @@ async function run(args: string[]): Promise<void> {
       args: rest,
       options: {
         root: { type: 'string' },
+        out: { type: 'string' },
         write: { type: 'boolean' },
         'max-files': { type: 'string' },
         'max-per-rule': { type: 'string' },
@@ -144,6 +147,7 @@ async function run(args: string[]): Promise<void> {
       if (values[option] !== undefined) throw new CliError('E_USAGE', `--${option} only applies to worktree-check`);
     }
   }
+  if (values.out !== undefined && command !== 'scan' && command !== 'report') throw new CliError('E_USAGE', '--out only applies to scan and report');
   if (command === 'capabilities') {
     process.stdout.write(`${JSON.stringify({ name: 'agent-tests', version: packageVersion(), commands: COMMANDS })}\n`);
     return;
@@ -159,6 +163,7 @@ async function run(args: string[]): Promise<void> {
   }
   if (!rootStat) throw new CliError('E_USAGE', `Root does not exist: ${root}`);
   if (!rootStat.isDirectory()) throw new CliError('E_USAGE', `Root is not a directory: ${root}`);
+  const output = values.out === undefined ? undefined : admitOutput(root, values.out);
 
   if (command === 'risk-draft') {
     const text = serializeRiskMap(draftRiskMap(root));
@@ -188,17 +193,18 @@ async function run(args: string[]): Promise<void> {
   }
   if (command === 'scan') {
     // scan always prints the full JSON, so the report caps do not apply to it.
-    process.stdout.write(`${JSON.stringify(scan(root), null, 2)}\n`);
+    const evidence = scan(root);
+    process.stdout.write(output ? `${JSON.stringify(publishAudit(output, auditArtifact(evidence, 'scan')))}\n` : `${JSON.stringify(evidence, null, 2)}\n`);
     return;
   }
   const maxFiles = positiveInteger('max-files', values['max-files']);
   const maxPerRule = positiveInteger('max-per-rule', values['max-per-rule']);
-  process.stdout.write(
-    renderMarkdown(scan(root), {
+  const evidence = scan(root);
+  const reportOptions = {
       ...(maxFiles !== undefined ? { maxFiles } : {}),
       ...(maxPerRule !== undefined ? { maxPerRule } : {}),
-    }),
-  );
+    };
+  process.stdout.write(output ? `${JSON.stringify(publishAudit(output, auditArtifact(evidence, 'report', reportOptions)))}\n` : renderMarkdown(evidence, reportOptions));
 }
 
 export async function main(argv: string[]): Promise<void> {
