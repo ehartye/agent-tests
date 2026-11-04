@@ -1,14 +1,21 @@
 ---
 name: test-audit
-description: Audit a project's test suite for necessity and efficiency - redundant coverage, compat and fallback shim tests, worktree-hostile and working-directory tests (confirmed by the opt-in worktree-check command), tests not tied to a risk tier or tagged for the wrong lane, and tests that run too often - and return a verdict per test file.
+description: Audit test necessity and efficiency through a bounded manual source review or managed inventory - redundant coverage, preservation obligations, worktree hazards, risk tiers and execution frequency. Return evidence-based verdicts within the inspected scope.
 when_to_use: Use when an existing test suite or its CI feels too big, slow or redundant ("tests take forever", "too many tests", "is this overkill"), when architectural decisions or generated-asset pipelines make testing costly, before pruning tests, or when asked to audit testing structure.
 ---
 # test-audit
 
-The goal is efficiency: protection per unit of cost. A slow test that guards data loss is worth keeping;
-a fast test that repeats three others is waste. Speed alone never decides a verdict.
+The goal is efficiency: protection per unit of cost. Speed alone never decides a verdict.
 
 The CLI gathers evidence and never judges. You judge, using the rubric below. The audit phase is read-only.
+
+## Choose the evidence route
+
+For selected source, tests, risks or existing evidence, use the [manual source-only route](../../references/source-only-audit.md). No managed CLI, setup check or install is needed.
+Use its scope and output limits with the rubric below; skip the managed steps. Native project checks are separate evidence.
+For managed inventory, scan/report, risk-draft or any launcher helper, follow the managed steps and check readiness.
+If a requested managed command is unavailable, report that exact condition; a manual fallback is visibly partial and
+does not fulfill a request for managed output. Never bypass the checked launcher with cached or source CLI files.
 
 An audit-only request ends with findings. If the owner also authorized applying or shipping improvements, finish
 the audit and continue the approved work under the development workflow; do not add another approval pause or
@@ -19,7 +26,7 @@ coverage. Deliver the measured change, its verification and any precise remainin
 up from this skill's directory). In Codex, resolve it from the SKILL.md file you loaded, not from the current directory.
 Quote the project path (`"<project>"`) so a Windows path with spaces survives.
 
-## Steps
+## Managed steps
 
 1. **Runtime.** `node "<plugin-root>/scripts/setup.js" --check --json`. If `ok` is false, load the tests-setup skill.
 2. **Risk map.** Look for `.testing/risk.yml` in the project.
@@ -126,6 +133,7 @@ Never recommend deleting a critical-tier test without naming its replacement.
 
 ## Output
 
+Manual audits use the source-only reference's output limits; the managed unopened-keep counts and suite totals below do not apply.
 When mutation evidence supports a keep/rewrite decision, follow the [read-only mutation evidence contract](../../references/mutation-evidence.md). Preserve native baseline, assertion scope, frozen judging and exact restoration; exit code alone proves no kill. Do not expand a selected mutation diagnostic into whole-suite acceptance.
 
 1. A table: `File | Tier | Verdict | Why (finding rule and evidence) | Agent tokens | Churn`.
