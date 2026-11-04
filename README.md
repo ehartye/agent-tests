@@ -13,8 +13,9 @@ Once published to the hartye-plugins marketplace:
     /plugin marketplace add ehartye/hartye-claude-plugins
     /plugin install agent-tests@hartye-plugins
 
-Then run the `tests-setup` skill. It copies a managed runtime outside the plugin cache and installs its
-dependencies. Node.js 24 or newer is required.
+Before managed commands, run the `tests-setup` skill. It copies a managed runtime outside the plugin cache and installs
+its dependencies. Node.js 24 or newer is required for those commands. A bounded manual source-only audit needs no
+managed setup; see [source-only audit](references/source-only-audit.md) for inspected-scope and evidence limits.
 
 On this host, Codex CLI 0.162.1 supports the existing `.claude-plugin/plugin.json` manifest and native installation:
 
@@ -22,7 +23,7 @@ On this host, Codex CLI 0.162.1 supports the existing `.claude-plugin/plugin.jso
     codex plugin add agent-tests@hartye-plugins --json
     codex plugin list --marketplace hartye-plugins --json
 
-Inspect the returned version, then run `tests-setup` from the installed plugin. This host check establishes packaging
+Inspect the returned version, then run `tests-setup` before managed commands. This host check establishes packaging
 support; it does not establish another host's installation or end-to-end skill behavior. Restart the conversation
 when needed to discover updated skills.
 

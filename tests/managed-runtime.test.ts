@@ -243,10 +243,15 @@ describe('launcher contract', () => {
     expect(error.hint).not.toContain('tests-setup skill');
   });
 
-  it('run-managed.js reports a missing runtime as E_RUNTIME_MISSING and exit 1', () => {
-    const result = run('run-managed.js', ['capabilities'], makeTree());
+  it.each(['capabilities', 'report', 'scan', 'risk-draft', 'worktree-check', 'candidate-evidence', 'playbot-export', 'mutation-verdict'])('missing runtime refuses %s without producing evidence or installing', command => {
+    const home = makeTree({ 'sentinel.txt': 'unrelated owned fixture' });
+    const result = run('run-managed.js', [command], home);
     expect(result.status).toBe(1);
     expect(errorOf(result.stderr).code).toBe('E_RUNTIME_MISSING');
+    expect(errorOf(result.stderr).message).toContain('Managed CLI');
+    expect(result.stdout).toBe('');
+    expect(readdirSync(home)).toEqual(['sentinel.txt']);
+    expect(readFileSync(join(home, 'sentinel.txt'), 'utf8')).toBe('unrelated owned fixture');
   });
 
   const observationSource = () => source({
