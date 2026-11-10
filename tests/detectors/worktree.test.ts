@@ -133,6 +133,26 @@ describe('detectWorktreeHazards tuning', () => {
       expect(run(...code, 'const db = `${runDir}/run.sqlite`;')).toEqual([]);
     });
 
+    it.each([
+      ['a made directory named in a string literal', 'tmp', "const db = new Database('tmp.sqlite');"],
+      ['a made directory used for another argument, not joined to the file', 'tmp', "copyFileSync(join(tmp, 'seed'), 'shared.sqlite');"],
+      ['a made directory whose name is the first segment of a fixed path', 'data', "const db = 'data/app.db';"],
+      ['a made directory joined to a different call than the file', 'tmp', "const db = [join(tmp, 'a'), join(root, 'x.sqlite')];"],
+      ['a made directory only closing a nested join', 'tmp', "const db = join(join(tmp, 'a'), 'x.sqlite');"],
+    ])('stays flagged for %s', (_label, made, line) => {
+      const setup = [`const ${made} = mkdtempSync(join(tmpdir(), 'run-'));`, 'const a = 1;', 'const b = 2;'];
+      expect(rules(run(...setup, line))).toEqual(['worktree.fixed-db-file']);
+    });
+
+    it('goes quiet only when the made directory is an argument of the join that holds the file name', () => {
+      const setup = ["const tmp = mkdtempSync(join(tmpdir(), 'run-'));", 'const a = 1;', 'const b = 2;'];
+      expect(run(...setup, "const db = join(tmp, 'x.sqlite');")).toEqual([]);
+      expect(run(...setup, "const db = path.join(tmp, 'sub', 'x.sqlite');")).toEqual([]);
+      expect(run(...setup, "const db = resolve(root, tmp, 'x.db');")).toEqual([]);
+      const [mixed] = run(...setup, "const db = join(dir, tmp, 'x.sqlite');");
+      expect(mixed).toBeUndefined();
+    });
+
     it('keeps flagging fixed names, whatever the file made', () => {
       const made = ["const runDir = mkdtempSync(join(tmpdir(), 'run-'));", 'const a = 1;', 'const b = 2;'];
       expect(rules(run(...made, "const db = 'test.sqlite';"))).toEqual(['worktree.fixed-db-file']);

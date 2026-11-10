@@ -7,8 +7,9 @@ interface Rule {
   /** Qualifies a finding that is kept but not settled; it flows into Finding.note. Return undefined for no note. */
   note?: (code: string, match: RegExpExecArray, madeDirs: ReadonlySet<string>) => string | undefined;
   /**
-   * Finds an identifier assigned from mkdtemp (capture group 1). Once a file has assigned one, a match on a
-   * later line that mentions it stays quiet: the path sits inside a directory unique to the run.
+   * Finds an identifier assigned from mkdtemp (capture group 1). Once a file has assigned one, a match whose file
+   * name is joined to it (an argument of the same join or resolve call) stays quiet: the path sits inside a
+   * directory unique to the run. The identifier merely appearing elsewhere on the line does not count.
    */
   madeDir?: RegExp;
   /** When this matches the line or the line before it, the rule stays quiet (the fix is already in place). */
@@ -63,17 +64,14 @@ function joinedIdentifiers(code: string, match: RegExpExecArray): string[] {
     .filter(arg => /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(arg) && !FIXED_LOCATIONS.has(arg));
 }
 
-/** Whether the line uses one of the identifiers as a whole word. */
-function mentionsAny(code: string, names: ReadonlySet<string>): boolean {
-  for (const name of names) {
-    if (new RegExp(String.raw`(?<![\w$])${name.replace(/\$/g, String.raw`\$`)}(?![\w$])`).test(code)) return true;
-  }
-  return false;
+/** A made directory is tracked by its bare name, so `this.runDir` is the same directory as `runDir`. */
+function dirKey(name: string): string {
+  return name.replace(/^this\./, '');
 }
 
 /** A finding on a file joined to a directory held in an identifier the file never assigned from mkdtemp stays, qualified. */
 function unresolvedDirNote(code: string, match: RegExpExecArray, madeDirs: ReadonlySet<string>): string | undefined {
-  const untraced = joinedIdentifiers(code, match).filter(name => !madeDirs.has(name));
+  const untraced = joinedIdentifiers(code, match).filter(name => !madeDirs.has(dirKey(name)));
   if (untraced.length === 0) return undefined;
   return `Path uniqueness unresolved: ${untraced.join(', ')} is not assigned from mkdtemp in this file, so the path may be shared; confirm the caller passes a per-run directory.`;
 }
@@ -228,7 +226,7 @@ export function detectWorktreeHazards(file: string, lines: string[]): Finding[] 
         if (rule.unless?.test(code)) continue;
         let match = rule.pattern.exec(code);
         if (!match && rule.weak && !madeQuiet.has(rule.rule)) match = rule.weak.exec(code);
-        if (match && rule.madeDir && mentionsAny(code, madeDirs)) continue;
+        if (match && rule.madeDir && joinedIdentifiers(code, match).some(name => madeDirs.has(dirKey(name)))) continue;
         if (match) {
           const note = rule.note?.(code, match, madeDirs);
           findings.push({
