@@ -5,10 +5,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { auditArtifact } from '../src/audit-output.ts';
+import { failureFor } from '../src/cli.ts';
+import { extractPythonFactsWith } from '../src/python/facts.ts';
 import { loadPythonParser } from '../src/python/parser.ts';
 import { pythonTargetsOfRun } from '../src/python/workflow.ts';
 import { renderMarkdown } from '../src/report.ts';
-import { scan, scanProject } from '../src/scan.ts';
+import { MAX_PYTHON_FILE_BYTES, scan, scanProject } from '../src/scan.ts';
 import { EvidenceReport, type TestFileRecord } from '../src/schema.ts';
 import { makeTree } from './helpers/tree.ts';
 
@@ -131,6 +133,7 @@ describe('Python tags, lanes and subjects', () => {
 
 describe('a Python-only repo', () => {
   const test = py('def test_x():', '    assert 1');
+  const testCase = py('import unittest', '', 'class T(unittest.TestCase):', '    def test_x(self):', '        self.assertTrue(1)');
   const cases: Array<{ name: string; files: Record<string, string>; runner: string }> = [
     { name: 'importing pytest', files: { 'tests/test_x.py': py('import pytest', '', 'def test_x():', '    assert 1') }, runner: 'pytest' },
     { name: 'importing unittest only', files: { 'tests/test_x.py': py('import unittest', '', 'class T(unittest.TestCase):', '    def test_x(self):', '        self.assertTrue(1)') }, runner: 'unittest' },
@@ -139,8 +142,14 @@ describe('a Python-only repo', () => {
     { name: 'a tox.ini with a pytest section', files: { 'tests/test_x.py': test, 'tox.ini': '[testenv]\n[pytest]\naddopts = -q\n' }, runner: 'pytest' },
     { name: 'a setup.cfg with a tool:pytest section', files: { 'tests/test_x.py': test, 'setup.cfg': '[tool:pytest]\naddopts = -q\n' }, runner: 'pytest' },
     { name: 'a pyproject.toml mentioning pytest', files: { 'tests/test_x.py': test, 'pyproject.toml': '[tool.pytest.ini_options]\naddopts = "-q"\n' }, runner: 'pytest' },
-    { name: 'a tox.ini without a pytest section', files: { 'tests/test_x.py': test, 'tox.ini': '[testenv]\ncommands = python -m unittest\n' }, runner: 'unknown' },
-    { name: 'nothing that names a runner', files: { 'tests/test_x.py': test }, runner: 'unknown' },
+    // Without a config, conftest or import, the style of the tests decides: TestCase-derived means unittest, plain functions only pytest collects.
+    { name: 'a tox.ini without a pytest section and a TestCase test', files: { 'tests/test_x.py': testCase, 'tox.ini': '[testenv]\ncommands = python -m unittest\n' }, runner: 'unittest' },
+    { name: 'plain test functions and no signal (inferred)', files: { 'tests/test_x.py': test }, runner: 'pytest' },
+    { name: 'a plain Test class and no signal (inferred)', files: { 'tests/test_x.py': py('class TestX:', '    def test_x(self):', '        assert 1') }, runner: 'pytest' },
+    { name: 'a TestCase test and a plain function together', files: { 'tests/test_x.py': py('import unittest', '', 'class T(unittest.TestCase):', '    def test_a(self):', '        self.assertTrue(1)', '', 'def test_b():', '    assert 1') }, runner: 'unittest' },
+    { name: 'an unittest import and no tests', files: { 'tests/test_x.py': py('import unittest', 'x = 1') }, runner: 'unittest' },
+    { name: 'a file with no tests and no signal', files: { 'tests/test_x.py': 'x = 1\n' }, runner: 'unknown' },
+    { name: 'only a file with a syntax error', files: { 'tests/test_x.py': 'def test_x(:\n' }, runner: 'unknown' },
   ];
 
   it.each(cases)('is inventoried and complete with $name', async ({ files, runner }) => {
@@ -381,5 +390,31 @@ describe('scoped coverage of Python areas, on variants of the python-mixed fixtu
     const evidence = await scanProject(variant({ add: PYTHON_FILES }), { commitLimit: 1 });
     expect(evidence.inventory!.notes).toContain(CONFIG_NOTE);
     expect(evidence.inventory!.noteScopes).toContainEqual({ text: CONFIG_NOTE, scope: 'all' });
+  });
+});
+
+describe('Python parser load failures and file size', () => {
+  const test = py('def test_x():', '    assert 1');
+
+  it('reports a parser that cannot load as a broken runtime, in one ASCII line with the repair hint', async () => {
+    vi.mocked(loadPythonParser).mockRejectedValueOnce(new Error("Cannot find module 'tree-sitter-python' ü\nRequire stack:\n- /x/y.js"));
+    const error = await scanProject(makeTree({ 'tests/test_x.py': test }), { commitLimit: 1 }).then(() => null, (cause: unknown) => cause);
+    expect(error).toMatchObject({ code: 'E_RUNTIME_BROKEN', message: "Cannot find module 'tree-sitter-python' ?", hint: 'Run the tests-setup skill to repair the managed runtime' });
+    // The CLI prints this error as {"error":{code,message,hint}} and exits 1.
+    expect(failureFor(error, {})).toEqual({ code: 'E_RUNTIME_BROKEN', message: "Cannot find module 'tree-sitter-python' ?", hint: 'Run the tests-setup skill to repair the managed runtime' });
+  });
+
+  it('lists a Python file over the size cap as unparsed without reading it, and scans the rest', async () => {
+    const big = `# @lane merge\n${'#'.repeat(MAX_PYTHON_FILE_BYTES)}\n`;
+    expect(Buffer.byteLength(big)).toBeGreaterThan(MAX_PYTHON_FILE_BYTES);
+    const parse = await loadPythonParser();
+    const reader = vi.fn((source: string) => extractPythonFactsWith(parse, source));
+    const evidence = await scanProject(makeTree({ 'tests/test_big.py': big, 'tests/test_ok.py': test }), { commitLimit: 1, python: reader });
+    expect(reader).toHaveBeenCalledTimes(1);
+    expect(reader).toHaveBeenCalledWith(test);
+    const record = evidence.files.find(file => file.file === 'tests/test_big.py')!;
+    expect({ language: record.language, tests: record.tests, assertions: record.assertions, flags: record.flags, tags: record.tags, subjects: record.subjects }).toEqual({ language: 'python', tests: 0, assertions: 0, flags: ['unparsed'], tags: {}, subjects: [] });
+    expect(evidence.files.find(file => file.file === 'tests/test_ok.py')!.flags).toEqual([]);
+    expect(evidence.inventory!.languages.find(entry => entry.language === 'Python')).toMatchObject({ files: 2, status: 'supported' });
   });
 });

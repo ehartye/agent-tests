@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { churnOf, commitFileSets } from './churn.ts';
 import { detectFrequency } from './detectors/frequency.ts';
@@ -13,7 +13,17 @@ import type { PythonFacts, PythonOpaque } from './python/facts.ts';
 import { createPythonSubjectResolver, facadeScope, mergeScopes, opaqueScope, PYTHON_NOTES } from './python/subjects.ts';
 import { workflowPythonFiles } from './python/workflow.ts';
 import { loadRiskMap, tierFor } from './riskmap.ts';
+import { CliError } from './errors.ts';
 import { EVIDENCE_SCHEMA, LaneName, Tier, type EvidenceReport, type FileFlag, type Finding, type Inventory, type NoteScope, type RiskMap, type TestFileRecord } from './schema.ts';
+
+/**
+ * A Python test file larger than this many bytes is neither read nor parsed: parsing time grows with size (a 10 MB generated literal
+ * took seconds), and such a file is data or generated code, not a test a reviewer would audit. It is listed with the `unparsed` flag,
+ * like a file with a syntax error, with no tests, assertions, subjects or tags.
+ */
+export const MAX_PYTHON_FILE_BYTES = 2_000_000;
+
+const RUNTIME_BROKEN_HINT = 'Run the tests-setup skill to repair the managed runtime';
 
 /** Reads the facts of one Python source text by syntax only. */
 export type PythonReader = (source: string) => PythonFacts;
@@ -143,7 +153,8 @@ function loadTests(root: string): LoadedFile[] {
 
 interface LoadedPythonFile {
   rel: string;
-  text: string;
+  /** The file's size in bytes, for the agent-token estimate. */
+  bytes: number;
   /** The facts of a file that parsed cleanly; null when it could not be read or parsed, so it is flagged `unparsed`. */
   facts: PythonFacts | null;
   subjects: string[];
@@ -179,14 +190,18 @@ function pythonLaneOf(facts: PythonFacts): LaneName | undefined {
 function loadPythonTests(root: string, rels: readonly string[], candidates: readonly string[], read: PythonReader): LoadedPythonFile[] {
   const resolveSubjectsOf = createPythonSubjectResolver(root);
   const load = (rel: string): LoadedPythonFile => {
-    let text = '';
+    let bytes = 0;
     let facts: PythonFacts | null = null;
     let tags: PythonFacts['tags'] = {};
     try {
-      text = readFileSync(join(root, rel), 'utf8');
-      const read_ = read(text.replace(/^\uFEFF/, ''));
-      tags = read_.tags;
-      if (!read_.hasError) facts = read_;
+      bytes = statSync(join(root, rel)).size;
+      if (bytes <= MAX_PYTHON_FILE_BYTES) {
+        const text = readFileSync(join(root, rel), 'utf8');
+        bytes = Buffer.byteLength(text);
+        const read_ = read(text.replace(/^\uFEFF/, ''));
+        tags = read_.tags;
+        if (!read_.hasError) facts = read_;
+      }
     } catch {
       // Unreadable or unparsable: the file stays listed, flagged unparsed.
     }
@@ -195,7 +210,7 @@ function loadPythonTests(root: string, rels: readonly string[], candidates: read
     const resolved = facts ? resolveSubjectsOf(rel, facts) : { subjects: [], facades: [] };
     return {
       rel,
-      text,
+      bytes,
       facts,
       subjects: [...new Set([...resolved.subjects, ...declared])].sort(),
       facades: resolved.facades,
@@ -281,9 +296,15 @@ export async function scanProject(rootInput: string, options: ScanOptions = {}):
   const candidates = workflowCandidates(root, census);
   let read = options.python;
   if (!read && (candidates.length > 0 || census.groups.some(group => group.language === 'Python'))) {
-    const [{ loadPythonParser }, { extractPythonFactsWith }] = await Promise.all([import('./python/parser.ts'), import('./python/facts.ts')]);
-    const parse = await loadPythonParser();
-    read = source => extractPythonFactsWith(parse, source);
+    try {
+      const [{ loadPythonParser }, { extractPythonFactsWith }] = await Promise.all([import('./python/parser.ts'), import('./python/facts.ts')]);
+      const parse = await loadPythonParser();
+      read = source => extractPythonFactsWith(parse, source);
+    } catch (error) {
+      // The parser itself cannot load (a missing package or WASM): the runtime is broken, which is not a syntax error in a Python file.
+      const first = (error instanceof Error ? error.message : String(error)).split(/\r?\n/)[0]!.replace(/[^\x20-\x7e]/g, '?').trim();
+      throw new CliError('E_RUNTIME_BROKEN', first || 'The Python parser could not be loaded', RUNTIME_BROKEN_HINT, { cause: error });
+    }
   }
   return scanWithCensus(root, options, census, candidates, read);
 }
@@ -301,12 +322,12 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, cand
   const records = new Map<string, TestFileRecord>();
   const unmappedFindings: Finding[] = [];
   /** Tier, area and cost come from the same rules for every language: subjects decide the tier, git history the churn. */
-  const placement = (rel: string, text: string, subjects: string[], risk: string | undefined): Pick<TestFileRecord, 'tier' | 'area' | 'cost'> => {
+  const placement = (rel: string, bytes: number, subjects: string[], risk: string | undefined): Pick<TestFileRecord, 'tier' | 'area' | 'cost'> => {
     const { tier, area, unmapped } = tierOfFile(map, rel, subjects, risk);
     if (unmapped.length > 0 && area) unmappedFindings.push(unmappedSubjectFinding(rel, unmapped, area));
     const { churn, edits } = churnOf(rel, subjects, sets);
     // `wait` and `ci` stay null in this version because it never runs tests; a later `time` command fills them.
-    return { tier, area, cost: { wait: null, agent: Math.ceil(Buffer.byteLength(text) / 4), ci: null, churn, edits } };
+    return { tier, area, cost: { wait: null, agent: Math.ceil(bytes / 4), ci: null, churn, edits } };
   };
   for (const file of loaded) {
     records.set(file.rel, {
@@ -317,7 +338,7 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, cand
       ...(file.unparsed ? {} : skipFieldsOf(file.parsed)),
       subjects: file.subjects,
       tags: file.parsed.tags,
-      ...placement(file.rel, file.text, file.subjects, file.parsed.tags.risk),
+      ...placement(file.rel, Buffer.byteLength(file.text), file.subjects, file.parsed.tags.risk),
       findings: [],
     });
   }
@@ -333,7 +354,7 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, cand
       ...(file.facts ? noAssertionTestsOf(file.facts.tests) : {}),
       subjects: file.subjects,
       tags: file.tags,
-      ...placement(file.rel, file.text, file.subjects, file.tags.risk),
+      ...placement(file.rel, file.bytes, file.subjects, file.tags.risk),
       findings: [],
     });
   }
@@ -378,9 +399,12 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, cand
     }
   }
   const runner = detectRunner(root, loaded.flatMap(file => file.parsed.imports));
+  const pythonTests = python.flatMap(file => file.facts?.tests ?? []);
   const pythonRunner = detectPythonRunner(root, census.conftests.length > 0, {
-    pytest: python.some(file => file.facts?.signals.pytest),
-    unittest: python.some(file => file.facts?.signals.unittest),
+    importsPytest: python.some(file => file.facts?.signals.pytest),
+    importsUnittest: python.some(file => file.facts?.signals.unittest),
+    hasTestCaseTests: pythonTests.some(test => test.testCase),
+    hasPlainTests: pythonTests.some(test => !test.testCase),
   });
   const inventory = inventoryOf(census, runner, loaded.length, { runner: pythonRunner, files: python.length }, pythonNotesOf(root, python));
   const redundancy = detectRedundancy(loaded);

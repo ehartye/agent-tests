@@ -177,19 +177,38 @@ const PYTEST_CONFIG_FILES = ['pytest.ini', 'tox.ini', 'setup.cfg', 'pyproject.to
  */
 export const pythonFilesConfigured = (root: string): boolean => PYTEST_CONFIG_FILES.some(name => readIfPresent(join(root, name)).includes('python_files'));
 
+/** What the inventoried (cleanly parsed) Python test files show about their runner. */
+export interface PythonRunnerEvidence {
+  /** A file imports pytest. */
+  importsPytest: boolean;
+  /** A file imports unittest. */
+  importsUnittest: boolean;
+  /** Some test is a method of a unittest.TestCase subclass. */
+  hasTestCaseTests: boolean;
+  /** Some test is a module-level function or a method of a plain `Test*` class, which only pytest collects. */
+  hasPlainTests: boolean;
+}
+
 /**
- * The runner of a repo's Python tests, from files only (nothing is executed): pytest when the project root has a pytest config
- * (`pytest.ini`; a pytest section in `tox.ini` or `setup.cfg`; `pyproject.toml` mentioning pytest), a `conftest.py` exists, or an
- * inventoried file imports pytest; else unittest when one imports unittest; else unknown. Configured settings are not read.
+ * The runner of a repo's Python tests, from files only (nothing is executed), by the first rule that applies:
+ * 1. an explicit pytest signal: a pytest config at the project root (`pytest.ini`; a pytest section in `tox.ini` or `setup.cfg`;
+ *    `pyproject.toml` mentioning pytest), a `conftest.py` anywhere, or an inventoried file that imports pytest: pytest;
+ * 2. an inventoried test derived from `unittest.TestCase`: unittest;
+ * 3. any other inventoried test (a module-level function or a plain `Test*` class): pytest, inferred, because only pytest collects those;
+ * 4. an inventoried file that imports unittest: unittest;
+ * 5. otherwise unknown (only unparsed files, or files with no tests and no import).
+ * Configured settings are not read.
  */
-export function detectPythonRunner(root: string, hasConftest: boolean, imports: { pytest: boolean; unittest: boolean }): PythonRunner {
+export function detectPythonRunner(root: string, hasConftest: boolean, evidence: PythonRunnerEvidence): PythonRunner {
   const configured =
     existsSync(join(root, 'pytest.ini')) ||
     PYTEST_SECTION.test(readIfPresent(join(root, 'tox.ini'))) ||
     PYTEST_SECTION.test(readIfPresent(join(root, 'setup.cfg'))) ||
     readIfPresent(join(root, 'pyproject.toml')).includes('pytest');
-  if (configured || hasConftest || imports.pytest) return 'pytest';
-  return imports.unittest ? 'unittest' : 'unknown';
+  if (configured || hasConftest || evidence.importsPytest) return 'pytest';
+  if (evidence.hasTestCaseTests) return 'unittest';
+  if (evidence.hasPlainTests) return 'pytest';
+  return evidence.importsUnittest ? 'unittest' : 'unknown';
 }
 
 export function detectRunner(root: string, importedModules?: readonly string[]): Runner {

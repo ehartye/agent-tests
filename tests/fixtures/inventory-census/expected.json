@@ -6,7 +6,7 @@
     "languages": [
       { "language": "JavaScript", "runner": "vitest", "files": 1, "status": "supported" },
       { "language": "Go", "runner": "unknown", "files": 1, "status": "detected-unsupported" },
-      { "language": "Python", "runner": "unknown", "files": 1, "status": "supported" }
+      { "language": "Python", "runner": "pytest", "files": 1, "status": "supported" }
     ]
   },
   "coverageFindings": [

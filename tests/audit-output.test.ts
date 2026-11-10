@@ -106,8 +106,9 @@ describe('stable audit artifacts',()=>{
     expect(auditArtifact(evidence,'report').includes(warning)).toBe(warns);
     expect(JSON.parse(auditArtifact(evidence,'scan')).artifact.limits.includes(warning)).toBe(warns);
   });
-  it('keeps the warning for 10 JavaScript tests with no runner config beside one Python test',async()=>{
-    const files:Record<string,string>={'tests/test_x.py':'def test_x():\n    assert True\n'};
+  it('keeps the warning for 10 JavaScript tests with no runner config beside a Python file named like a test whose runner stays unknown',async()=>{
+    // A Python file with no tests and no import names no runner; plain test functions would infer pytest and suppress the warning.
+    const files:Record<string,string>={'tests/test_x.py':'x = 1\n'};
     for(let i=0;i<10;i++)files[`tests/t${i}.test.js`]='it("x",()=>{expect(1).toBe(1);});\n';
     const evidence=await scanProject(makeTree(files),{commitLimit:1});
     expect(evidence.runner).toBe('unknown');expect(evidence.inventory?.languages[0]).toMatchObject({language:'JavaScript',runner:'unknown',files:10,status:'supported'});

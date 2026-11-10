@@ -45,7 +45,7 @@ describe('the inventory-census fixture, through the CLI', () => {
   });
 
   it('puts the languages and the incomplete inventory in the report header', () => {
-    expect(markdown).toContain('- Languages: JavaScript (vitest, 1 files), Go (detected-unsupported, 1 files), Python (unknown, 1 files)');
+    expect(markdown).toContain('- Languages: JavaScript (vitest, 1 files), Go (detected-unsupported, 1 files), Python (pytest, 1 files)');
     const line = markdown.split('\n').find(text => text.startsWith('- Inventory incomplete:')) ?? '';
     expect(line).toContain('Go');
     expect(line).not.toContain('Python');
@@ -56,12 +56,12 @@ describe('the inventory-census fixture, through the CLI', () => {
 describe('repos where the census sees some or none of the tests', () => {
   const cases: Array<{ name: string; files: Record<string, string>; inventory: string[] | null; zeroLine: boolean; incompleteLine: boolean; warning: boolean }> = [
     {
-      name: 'a Python-only repo is inventoried: no zero-count line, but an unknown Python runner keeps the artifact warning',
+      name: 'a Python-only repo with plain test functions is inventoried as pytest: no zero-count line and no artifact warning',
       files: { 'tests/test_x.py': 'def test_x():\n    assert True\n', 'src/x.py': 'x = 1\n' },
-      inventory: ['JavaScript unknown 0 supported', 'Python unknown 1 supported'],
+      inventory: ['JavaScript unknown 0 supported', 'Python pytest 1 supported'],
       zeroLine: false,
       incompleteLine: false,
-      warning: true,
+      warning: false,
     },
     {
       name: 'tests with unconventional names get no inventory but still the zero-count line',
