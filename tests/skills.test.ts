@@ -143,6 +143,12 @@ describe('skills', () => {
     expect(check).toBeLessThan(command);
   });
 
+  it('has tests-setup stop before installing when the brief forbids installs', () => {
+    const lines = load('tests-setup').body.split('\n');
+    const pairs = lines.map((line, index) => `${line} ${lines[index + 1] ?? ''}`);
+    expect(pairs.some(pair => /forbids installs/.test(pair) && /\bstop\b/.test(pair))).toBe(true);
+  });
+
   it.each(['test-audit', 'test-strategy'])('%s preserves publication, platform obligations and current owner policy in CI advice', name => {
     const body = load(name).body;
     expect(body).toMatch(/preserve[^\n]*publication/i);
