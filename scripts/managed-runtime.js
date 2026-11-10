@@ -194,7 +194,8 @@ export function installRuntime(source, { home = managedHome(), npm = runNpm, che
         mkdirSync(dirname(join(stage, name)), { recursive: true });
         copyFileSync(join(runtime.source, name), join(stage, name));
       }
-      npm(['ci', '--omit=dev', '--no-audit', '--no-fund'], { cwd: stage, progress: true });
+      // No dependency needs an install script: the TypeScript binary ships as a platform package and the Python grammar is used as WASM, so a script could only add a native build step that fails on platforms without a prebuild.
+      npm(['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: stage, progress: true });
       check(stage);
       if (describeSource(stage).fingerprint !== runtime.fingerprint) throw new Error('Runtime source changed during installation; rerun setup');
       writeFileSync(join(stage, RECEIPT), JSON.stringify({ key: runtime.key, version: runtime.version, fingerprint: runtime.fingerprint }, null, 2));
