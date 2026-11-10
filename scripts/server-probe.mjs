@@ -8,9 +8,7 @@
 // reports `responding`, `occupied-no-http-response`, `closed` or `unreachable`. It never starts, stops
 // or signals anything, binds nothing and writes no file. It reports what answered, never who owns the
 // listener. Dependency-free (node:http only); it does not use the managed runtime.
-import { realpathSync } from 'node:fs';
 import http from 'node:http';
-import { pathToFileURL } from 'node:url';
 
 export const SCHEMA = 'agent-tests/server-probe@1';
 export const OUTCOMES = ['responding', 'occupied-no-http-response', 'unreachable', 'closed']; // precedence order
@@ -111,12 +109,17 @@ function probeFamily({ address, hostHeader, port, timeoutMs }) {
         timer = setTimeout(() => fail(null, true), timeoutMs); // the response-header bound
       });
     });
-    request.on('response', response => {
-      const header = name => (typeof response.headers[name] === 'string' ? response.headers[name] : undefined);
-      const http = { status: response.statusCode, ms: elapsed(httpStart), server: header('server'), contentType: header('content-type') };
+    // Any status line with headers counts: final replies, interim 1xx replies (100 Continue, 103 Early Hints) and 101 upgrades.
+    const answered = (status, headers) => {
+      const header = name => (typeof headers[name] === 'string' ? headers[name] : undefined);
+      const http = { status, ms: elapsed(httpStart), server: header('server'), contentType: header('content-type') };
       for (const key of Object.keys(http)) if (http[key] === undefined) delete http[key];
       finish({ outcome: 'responding', connect: connected, http });
-    });
+    };
+    request.on('response', response => answered(response.statusCode, response.headers));
+    request.on('information', info => answered(info.statusCode, info.headers ?? {}));
+    request.on('continue', () => answered(100, {}));
+    request.on('upgrade', (response, socket) => { socket.on('error', () => {}); answered(response.statusCode, response.headers); });
     request.end();
   });
 }
@@ -156,15 +159,10 @@ async function main(argv) {
   exitAfterWrite(process.stdout, `${JSON.stringify(result)}\n`, result.met ? 0 : 1);
 }
 
-function isEntryPoint() {
-  try {
-    return Boolean(process.argv[1]) && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url;
-  } catch {
-    return false;
-  }
-}
-
-if (isEntryPoint()) {
+// Run the CLI when this file is the entry module (import.meta.main) or was piped to node on stdin or --eval, where
+// node reports no main module and names it [eval1]. Staying silent there would exit 0, which reads as "closed".
+// Importing the file (a test, another script) matches neither and runs nothing.
+if (import.meta.main || /\/\[eval\d*\]$/.test(import.meta.url)) {
   main(process.argv.slice(2)).catch(error => {
     // Exit 1 means "outcome does not meet --expect"; an internal failure must not look like that.
     exitAfterWrite(process.stderr, `${JSON.stringify({ error: { code: 'E_PROBE', message: String(error?.message ?? error), hint: 'Re-run; report this if it repeats.' } })}\n`, 2);

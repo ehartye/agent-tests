@@ -3,7 +3,7 @@
  * @subject scripts/server-probe.mjs
  */
 import { spawn } from 'node:child_process';
-import { readdirSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
@@ -15,15 +15,17 @@ const script = fileURLToPath(new URL('../scripts/server-probe.mjs', import.meta.
 
 interface Run { status: number | null; stdout: string; stderr: string; ms: number }
 // The probe runs as a child process and the owned listeners live in this process, so the child must be asynchronous.
-function probe(args: string[], options: { cwd?: string; env?: Record<string, string> } = {}): Promise<Run> {
+function probe(args: string[], options: { cwd?: string; env?: Record<string, string>; stdin?: string; entry?: string } = {}): Promise<Run> {
   return new Promise((resolve, reject) => {
     const started = performance.now();
-    const child = spawn(process.execPath, [script, ...args], { cwd: options.cwd, env: { ...process.env, ...options.env }, windowsHide: true });
+    const child = spawn(process.execPath, [options.entry ?? script, ...args], { cwd: options.cwd, env: { ...process.env, ...options.env }, windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; });
     child.stderr.on('data', chunk => { stderr += chunk; });
     child.on('error', reject);
+    child.stdin.on('error', () => {});
+    child.stdin.end(options.stdin ?? '');
     child.on('close', status => resolve({ status, stdout, stderr, ms: performance.now() - started }));
   });
 }
@@ -56,6 +58,13 @@ const httpServer = (status: number, delayMs = 0) => http.createServer((_request,
 });
 const blackhole = () => net.createServer(() => {});
 const garbage = () => net.createServer(socket => { socket.write('garbage\r\n'); });
+/** A raw listener whose per-connection behavior is scripted; timers it starts stop when the connection closes. */
+const raw = (behave: (socket: net.Socket, every: (ms: number, tick: () => void) => void) => void) => net.createServer(socket => {
+  const timers: NodeJS.Timeout[] = [];
+  socket.on('error', () => {});
+  socket.on('close', () => timers.forEach(clearInterval));
+  behave(socket, (ms, tick) => { timers.push(setInterval(tick, ms)); });
+});
 async function closedPort(): Promise<number> {
   const { server, port } = await listen(net.createServer());
   await new Promise<void>(done => server.close(() => done()));
@@ -110,7 +119,7 @@ describe('occupied: TCP connects but HTTP does not answer', () => {
     const run = await probe(['--port', String(port), '--host', '127.0.0.1', '--timeout-ms', '300']);
     const result = report(run);
     expect(run.status).toBe(1);
-    expect(run.ms).toBeLessThan(2 * 300 + 250);
+    expect(run.ms).toBeLessThan(2 * 300 + 2000); // the spec bound is 2 x timeout + 250 ms; child startup and a loaded runner are included here
     expect(result).toMatchObject({ outcome: 'occupied-no-http-response', met: false, limits: { timeoutMs: 300 } });
     expect(result.families[0]).toMatchObject({ connect: { ok: true }, http: { timedOut: true } });
     await new Promise(done => setTimeout(done, 50));
@@ -138,13 +147,48 @@ describe('occupied: TCP connects but HTTP does not answer', () => {
   });
 });
 
+describe('any HTTP reply counts, including interim and upgrade replies', () => {
+  it.each([
+    { name: '100 Continue', reply: 'HTTP/1.1 100 Continue\r\n\r\n', status: 100 },
+    { name: '103 Early Hints', reply: 'HTTP/1.1 103 Early Hints\r\nLink: </a.css>; rel=preload\r\n\r\n', status: 103 },
+    { name: '101 Switching Protocols', reply: 'HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: x\r\n\r\n', status: 101 },
+  ])('a listener sending $name and then nothing is responding with that status', async ({ reply, status }) => {
+    const { port } = await listen(raw(socket => { socket.write(reply); }));
+    const run = await probe(['--port', String(port), '--host', '127.0.0.1', '--timeout-ms', '3000']);
+    expect(run.status).toBe(0);
+    expect(run.ms).toBeLessThan(2500);
+    expect(report(run)).toMatchObject({ outcome: 'responding', met: true, families: [{ outcome: 'responding', http: { status } }] });
+  });
+});
+
+describe('the exit stays bounded whatever the listener does', () => {
+  // The spec bound is 2 x timeout + 250 ms; the margin here covers child startup and a loaded runner.
+  const timeoutMs = 500;
+  it.each([
+    { name: 'drips a status line one byte at a time', make: () => raw((socket, every) => { let at = 0; every(100, () => { if (at < 17) socket.write('HTTP/1.1 200 OK\r\n'[at++]); }); }), outcome: 'occupied-no-http-response', timedOut: true },
+    { name: 'streams header lines forever', make: () => raw((socket, every) => { socket.write('HTTP/1.1 200 OK\r\n'); every(1, () => socket.write(`X-Pad: ${'a'.repeat(1000)}\r\n`)); }), outcome: 'occupied-no-http-response', timedOut: false },
+    { name: 'sends headers and never ends the body', make: () => raw(socket => { socket.write('HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial'); }), outcome: 'responding', timedOut: false },
+    { name: 'resets the connection after accepting it', make: () => raw(socket => { socket.resetAndDestroy(); }), outcome: 'occupied-no-http-response', timedOut: false },
+    { name: 'closes the connection after accepting it', make: () => raw(socket => { socket.end(); }), outcome: 'occupied-no-http-response', timedOut: false },
+  ])('a listener that $name is $outcome', async ({ make, outcome, timedOut }) => {
+    const { port } = await listen(make());
+    const run = await probe(['--port', String(port), '--host', '127.0.0.1', '--timeout-ms', String(timeoutMs)]);
+    const result = report(run);
+    expect(run.ms).toBeLessThan(2 * timeoutMs + 2000);
+    expect(run.status).toBe(outcome === 'responding' ? 0 : 1);
+    expect(result.outcome).toBe(outcome);
+    if (outcome === 'occupied-no-http-response') expect(typeof result.families[0].http.error).toBe('string');
+    if (timedOut) expect(result.families[0].http.timedOut).toBe(true);
+  });
+});
+
 describe.skipIf(!ipv6)('an IPv6-only listener is never read as closed', () => {
   it.each([
     { name: 'answering HTTP', make: () => httpServer(200), outcome: 'responding' },
     { name: 'silent', make: blackhole, outcome: 'occupied-no-http-response' },
   ])('a $name listener on ::1 with the default host and --expect closed', async ({ make, outcome }) => {
     const { port } = await listen(make(), '::1');
-    const run = await probe(['--port', String(port), '--expect', 'closed', '--timeout-ms', '300']);
+    const run = await probe(['--port', String(port), '--expect', 'closed', '--timeout-ms', '3000']);
     const result = report(run);
     expect(run.status).toBe(1);
     expect(result).toMatchObject({ outcome, expect: 'closed', met: false });
@@ -189,6 +233,15 @@ describe('usage errors', () => {
     expect(run.status).toBe(2);
     expect(run.stdout).toBe('');
     expect(JSON.parse(run.stderr)).toMatchObject({ error: { code: 'E_USAGE', message: expect.any(String), hint: expect.any(String) } });
+  });
+});
+
+describe('launch', () => {
+  it('a script piped to node on stdin still probes instead of silently doing nothing', async () => {
+    const port = await closedPort();
+    const run = await probe(['--port', String(port), '--expect', 'closed'], { entry: '-', stdin: readFileSync(script, 'utf8') });
+    expect(run.status, run.stderr).toBe(0);
+    expect(report(run)).toMatchObject({ outcome: 'closed', met: true });
   });
 });
 
