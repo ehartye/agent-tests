@@ -221,6 +221,29 @@ describe('skills', () => {
     });
   });
 
+  describe('references/inventory.md incomplete-inventory statement', () => {
+    const inventoryPath = join(ROOT, 'references', 'inventory.md');
+    const text = (path: string): string => readFileSync(path, 'utf8');
+
+    it('exists and states the incomplete rule, the status and that a missing key proves nothing', () => {
+      expect(existsSync(inventoryPath)).toBe(true);
+      const inventory = text(inventoryPath);
+      for (const word of ['inventory-incomplete', 'detected-unsupported', 'does not mean', 'third_party', 'testdata']) expect(inventory, word).toContain(word);
+    });
+
+    it('has README references-table rows for the inventory reference and the new wiring rule', () => {
+      const rows = text(join(ROOT, 'README.md')).split(/\r?\n/).filter(line => line.startsWith('|'));
+      expect(rows.some(row => row.includes('`references/inventory.md`'))).toBe(true);
+      expect(rows.find(row => row.includes('`references/scan-rules.md`'))).toContain('inventory-incomplete');
+    });
+
+    it('is documented in scan-rules, the test-audit skill and the README', () => {
+      expect(text(join(ROOT, 'references', 'scan-rules.md'))).toContain('wiring.inventory-incomplete');
+      expect(load('test-audit').body).toContain('inventory.md');
+      expect(text(join(ROOT, 'README.md'))).toContain('references/inventory.md');
+    });
+  });
+
   it.each(['test-audit', 'test-strategy'])('%s preserves publication, platform obligations and current owner policy in CI advice', name => {
     const body = load(name).body;
     expect(body).toMatch(/preserve[^\n]*publication/i);

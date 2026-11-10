@@ -197,6 +197,22 @@ the file with `@risk` to state the tier explicitly. Do not treat the tier as wro
 Example evidence: `src/misc/x.ts; mapped area: src/db/**` (a test importing `src/db/s.ts` and `src/misc/x.ts` with only
 `src/db/**` mapped).
 
+## wiring.inventory-incomplete
+
+Means: a critical risk-map area has no inventoried test, but the scan's language census found test-named files in another
+language (Python, Go and others) that it counts by file name and never reads. Coverage of the area is unknown, not absent.
+It replaces `wiring.uncovered-critical` for that area when at least one language is `detected-unsupported`, unless every
+classifiable file in the area is JavaScript or TypeScript (whose tests are inventoried). The message names the unsupported
+languages. Trade-off: in a mixed-language repository, an area with any other kind of file and no covering test reads
+"coverage unknown" even if it is genuinely untested, so it can soften a real gap. The census names, the `inventory` object
+and the exact condition are in [inventory.md](inventory.md).
+
+Recommend: open the named languages' tests and check whether they exercise the area. Do not report it as uncovered, or as
+covered, before reading them. If they do, the risk-map area is fine; the scan simply cannot see it.
+
+Example evidence: `0 inventoried test files import this area; unsupported: Python` (an area `py/pkg/**` whose tests are
+`py/tests/test_core.py`).
+
 ## shim.title-marker
 
 Title-only: it reads the test title, never the code. Bare "fallback" and bare "compat" no longer match, because titles

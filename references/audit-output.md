@@ -31,8 +31,10 @@ commit/input inventory when a reproducible project snapshot is required.
 
 There is no timestamp or output filename in the artifact. Equivalent evidence and identity at the
 same root serialize identically; changing the root spelling, Node version, source, options or
-evidence can change its hash. A saved report with an unknown runner explicitly warns that zero
-recognized static tests does not prove absence of tests. Both formats say that project tests were
+evidence can change its hash. A saved scan or report warns that zero
+recognized static tests does not prove absence of tests when no supported runner was detected: without an `inventory` when the
+runner is `unknown`; with an `inventory`, unless a language with status `supported` has a runner other than `unknown` and at least
+one inventoried file (JavaScript with runner `unknown` does not suppress it). See [inventory.md](inventory.md). Both formats say that project tests were
 not executed. New runner adapters and inferred unsupported-runner declarations are outside this change.
 
 The complete scan/report is generated before publication. The writer stages and flushes bytes in a

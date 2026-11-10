@@ -22,6 +22,8 @@ export const ALLOWED_LANES: Record<Tier, LaneName[]> = {
 const TAG_HELP = 'Add `@risk <critical|standard|low>` or `@subject <path>` at the top of the file.';
 const TIERS: readonly string[] = ['critical', 'standard', 'low'];
 const EVIDENCE_LIMIT = 160;
+/** Files the scan inventories as tests: when every classifiable file of an area is one of these kinds, its tests are all visible. */
+const JS_TS_FILE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 /** An area whose glob is one literal segment followed by `/**` (`src/**`): it assigns a tier to everything, so it hides drift. */
 const CATCH_ALL = /^[^/*?]+\/\*\*$/;
 
@@ -75,7 +77,7 @@ export function classifiableFiles(root: string, dir: string): string[] {
   const found: string[] = [];
   const visit = (rel: string): void => {
     for (const entry of readEntries(join(root, rel))) {
-      const path = `${rel}/${entry.name}`;
+      const path = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         if (!IGNORED_DIRS.has(entry.name) && !entry.name.startsWith('.')) visit(path);
       } else if (entry.isFile() && !entry.name.startsWith('__probe__') && !isTestPath(path) && !isSupportPath(path)) found.push(path);
@@ -85,8 +87,26 @@ export function classifiableFiles(root: string, dir: string): string[] {
   return found.sort();
 }
 
-/** Tests not tied to a risk tier or lane, lane/tier mismatches, critical areas nobody tests, and directories the map has never seen. */
-export function detectWiring(map: RiskMap | null, files: WiringFile[], candidateDirs: string[], filesIn?: (dir: string) => string[]): Finding[] {
+/** The classifiable files an area glob covers: the walk starts at the directory before the glob's first wildcard (or the file's own directory). */
+function areaFiles(area: string, filesIn: (dir: string) => string[]): string[] {
+  const segments = area.split('/');
+  const wild = segments.findIndex(segment => /[*?]/.test(segment));
+  const pattern = globToRegExp(area);
+  return filesIn(segments.slice(0, wild === -1 ? -1 : wild).join('/')).filter(path => pattern.test(path));
+}
+
+/**
+ * Tests not tied to a risk tier or lane, lane/tier mismatches, critical areas nobody tests, and directories the map has never seen.
+ * `unsupportedLanguages` names languages whose tests exist but are not inventoried: a critical area with no covering test is then
+ * reported as `wiring.inventory-incomplete` (coverage unknown) unless every classifiable file in it is JavaScript or TypeScript.
+ */
+export function detectWiring(
+  map: RiskMap | null,
+  files: WiringFile[],
+  candidateDirs: string[],
+  filesIn?: (dir: string) => string[],
+  unsupportedLanguages: string[] = [],
+): Finding[] {
   if (!map) {
     return [
       {
@@ -116,6 +136,17 @@ export function detectWiring(map: RiskMap | null, files: WiringFile[], candidate
     if (area.tier !== 'critical') continue;
     const pattern = globToRegExp(area.path);
     if (!files.some(file => pattern.test(file.rel) || file.subjects.some(subject => pattern.test(subject)))) {
+      if (unsupportedLanguages.length > 0 && !areaFiles(area.path, filesIn ?? (() => [])).every(path => JS_TS_FILE.test(path))) {
+        const names = unsupportedLanguages.join(', ');
+        findings.push({
+          category: 'wiring',
+          rule: 'wiring.inventory-incomplete',
+          file: area.path,
+          message: `Critical area with no test the scan can read, but tests in ${names} exist and are not inventoried, so coverage is unknown. Check those tests before treating the area as uncovered.`,
+          evidence: `0 inventoried test files import this area; unsupported: ${names}`,
+        });
+        continue;
+      }
       findings.push({
         category: 'wiring',
         rule: 'wiring.uncovered-critical',

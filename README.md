@@ -62,7 +62,8 @@ on this machine.
 | `references/architecture-cost.md` | Advisory investigation of architecture that makes tests costly, including complete generated-asset inputs and final verification ownership |
 | `references/node-profiling.md` | Optional Node 24+ reporter, per-file and overall duration, provenance limits and repeatable lane experiments |
 | `references/candidate-evidence.md` | Explicit checked observation of Node-test/Vitest children, content/path/index identities, native counts and honest reuse limits |
-| `references/scan-rules.md` | What the newer and changed scan rules mean, the remedy to recommend and a planted example of each: `worktree.timestamp-tmp-path`, `worktree.cwd-write`, `worktree.cwd-locate`, `wiring.unmapped-subject`, `shim.title-marker`, `redundancy.shared-subject` and `wiring.drift` |
+| `references/scan-rules.md` | What the newer and changed scan rules mean, the remedy to recommend and a planted example of each: `worktree.timestamp-tmp-path`, `worktree.cwd-write`, `worktree.cwd-locate`, `wiring.unmapped-subject`, `shim.title-marker`, `redundancy.shared-subject`, `wiring.drift` and `wiring.inventory-incomplete` |
+| `references/inventory.md` | What the scan can and cannot see: the language census (test-named files in other languages, counted by name only), the `inventory` object, the incomplete-inventory statement in the report, and why a missing `inventory` key does not mean the inventory is complete |
 | `references/worktree-check.md` | The opt-in `worktree-check` command: options, the three verdicts, the report fields, error codes, a runnable example, its cost and its limits |
 | `references/mutation-evidence.md` | Read-only mutation verdicts, exact native assertion scope, frozen judging, raw restoration and honest partial composition |
 
@@ -147,6 +148,8 @@ Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
 
+Version 0.13.0 reports an incomplete test inventory instead of false "uncovered critical" findings. A language census counts test-named files in Python, Go, Ruby, PowerShell, Java, Kotlin, C# and PHP by file name only; when any are found the scan JSON gains an optional `inventory` object, `report` adds `Languages` and `Inventory incomplete` lines, and a critical area with no covering test that holds a file other than JavaScript or TypeScript is reported as `wiring.inventory-incomplete` (coverage unknown) rather than `wiring.uncovered-critical`. A report that finds no tests with an unknown runner now says a zero count does not prove the project has none. JavaScript-only output is unchanged. See [test inventory](references/inventory.md).
+
 Version 0.12.0 adds `scripts/server-probe.mjs`, a dependency-free, read-only preflight for local dev servers that runs without the managed runtime. It probes a loopback port (both `127.0.0.1` and `::1` by default) with a bounded timeout and reports `responding`, `occupied-no-http-response`, `closed` or `unreachable`, so a listener that accepts TCP but never answers HTTP can be found before a browser run starts, instead of stalling Playwright's first availability request, which has no timeout. It never kills a process or claims who owns a listener. See [server readiness preflight](references/architecture-cost.md).
 
 Version 0.11.0 makes four audit-scan rules say what they found and stop flagging safe code. `no-direct-assertions` now names the tests (`noAssertionTests`), and declared skips are exempt from it. Skipped cases are reported, declared and conditional, with `ctx.skip` reasons; a Playwright-style `test.skip(cond, reason)` inside a test body is a conditional skip, not a test. `worktree.shared-tmp` no longer flags object-property data rows or absence checks, and `worktree.fixed-db-file` is quiet when the file is joined to a directory the file made with `mkdtemp`, and otherwise carries a note that path uniqueness is unresolved. The path-filter CI finding now says a `paths:` filter is a trigger, not an ownership list. See [scan rules](references/scan-rules.md).
@@ -190,7 +193,7 @@ Version 0.4.2 advertises managed helper commands and verifies byte-identical Pla
 provenance metadata. Use `--verify --require-current` for exact producer identity at release gates.
 
 
-Version 0.3 includes static audits for TypeScript and JavaScript projects using vitest, jest or Node's test runner,
+Version 0.3 includes static audits for TypeScript and JavaScript projects (the only languages whose tests are parsed) using vitest, jest or Node's test runner,
 an optional Node reporter, and explicitly invoked observational candidate evidence for Node-test/Vitest. Scan and
 report never run tests. Candidate observation does not select lanes, suppress checks or authorize integration.
 CI charges and statistical flakiness are not measured; remediation and wider runner/language support remain separate work.
@@ -208,6 +211,10 @@ It supplies evidence and validation, rather than a common game director or input
 
 ## Known limitations
 
+- Only JavaScript and TypeScript tests are parsed. Test files in Python, Go, Ruby, PowerShell, Java, Kotlin, C# and PHP are
+  counted by conventional file name but not read or inventoried: the scan reports them as an incomplete inventory, and a
+  critical area it cannot see tests for is reported as `wiring.inventory-incomplete` (coverage unknown) rather than uncovered.
+  Tests with unconventional names and inline tests are not counted at all. See [references/inventory.md](references/inventory.md).
 - Pattern detectors also match strings inside tests that are about those patterns, including this repository's own tests.
   Findings are evidence for the agent to read, not verdicts.
 - Discovery skips `.local`, `.playwright-mcp`, `test-results` and `playwright-report` so archived checkouts and generated reports do not

@@ -12,6 +12,15 @@ export function producerIdentity(source = resolve(dirname(fileURLToPath(import.m
   return { name, version, sourceFingerprint: fingerprint, node: process.versions.node };
 }
 
+/**
+ * The unknown-runner warning stays unless a supported language with a runner other than `unknown` has at least one inventoried file.
+ * Without an inventory the primary runner decides; JavaScript with runner `unknown` never suppresses it.
+ */
+const noSupportedRunner = (evidence: EvidenceReport): boolean =>
+  evidence.inventory
+    ? !evidence.inventory.languages.some(entry => entry.status === 'supported' && entry.runner !== 'unknown' && entry.files > 0)
+    : evidence.runner === 'unknown';
+
 /** Identity of the producer, not a fingerprint or snapshot of the audited project. */
 export function auditArtifact(evidence: EvidenceReport, command: 'scan' | 'report', options: ReportOptions = {}, producer = producerIdentity()): string {
   const artifact = {
@@ -19,11 +28,11 @@ export function auditArtifact(evidence: EvidenceReport, command: 'scan' | 'repor
     options: command === 'report' ? { maxFiles: options.maxFiles ?? DEFAULT_MAX_FILES, maxPerRule: options.maxPerRule ?? DEFAULT_MAX_PER_RULE } : {},
     limits: [
       'Static evidence only; project tests were not executed. Audited inputs are not an immutable snapshot.',
-      ...(evidence.runner === 'unknown' ? ['No supported runner detected; a zero static test count does not prove that the project has no tests.'] : []),
+      ...(noSupportedRunner(evidence) ? ['No supported runner detected; a zero static test count does not prove that the project has no tests.'] : []),
     ],
   };
   if (command === 'scan') return `${JSON.stringify({ ...evidence, artifact }, null, 2)}\n`;
-  const warning = evidence.runner === 'unknown' ? '> No supported runner detected; a zero static test count does not prove that the project has no tests.\n\n' : '';
+  const warning = noSupportedRunner(evidence) ? '> No supported runner detected; a zero static test count does not prove that the project has no tests.\n\n' : '';
   return renderMarkdown(evidence, options).replace('# Test audit evidence\n\n', `# Test audit evidence\n\n${warning}`)
     + `\n## Artifact identity\n\n\`\`\`json\n${JSON.stringify(artifact, null, 2)}\n\`\`\`\n`;
 }

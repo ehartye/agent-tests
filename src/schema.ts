@@ -80,6 +80,23 @@ export const Cluster = z.object({
 });
 export type Cluster = z.infer<typeof Cluster>;
 
+/**
+ * Which languages' tests the scan could see. Present only when a language other than JavaScript is detected, so a JavaScript-only
+ * report is unchanged; its absence does not mean the inventory is complete (the census sees conventional file names only).
+ */
+export const Inventory = z.object({
+  complete: z.boolean(),
+  languages: z.array(z.object({
+    language: z.string(),
+    /** The runner that reads this language's tests; `unknown` for a language the scan only counts by file name. */
+    runner: z.string(),
+    files: z.number().int().nonnegative(),
+    status: z.enum(['supported', 'detected-unsupported']),
+  })),
+  notes: z.array(z.string()),
+});
+export type Inventory = z.infer<typeof Inventory>;
+
 export const EVIDENCE_SCHEMA = 'agent-tests/evidence@1';
 
 export const EvidenceReport = z.object({
@@ -91,5 +108,6 @@ export const EvidenceReport = z.object({
   files: z.array(TestFileRecord),
   clusters: z.array(Cluster),
   projectFindings: z.array(Finding),
+  inventory: Inventory.optional(),
 });
 export type EvidenceReport = z.infer<typeof EvidenceReport>;

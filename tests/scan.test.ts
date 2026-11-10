@@ -404,3 +404,23 @@ describe('scan reports skipped cases', () => {
     expect(files.filter(file => file.skips)).toEqual([]);
   });
 });
+
+describe('incomplete inventory', () => {
+  it('adds no inventory key to a JavaScript-only repo', () => {
+    for (const name of ['clean', 'bloated']) expect('inventory' in scan(join(FIXTURES, name), { commitLimit: 1 })).toBe(false);
+  });
+
+  it('calls a C++ critical area coverage unknown when the only tests are PowerShell, and names PowerShell', () => {
+    const root = makeTree({
+      '.testing/risk.yml': serializeRiskMap({ ...defaultRiskMap(), areas: [{ path: 'Source/**', tier: 'critical' }] }),
+      'Source/Engine.cpp': 'int main() { return 0; }\n',
+      'Tests/Engine.Tests.ps1': "Describe 'engine' {}\n",
+    });
+    const report = scan(root, { commitLimit: 1 });
+    expect(EvidenceReport.safeParse(report).success).toBe(true);
+    expect(report.inventory).toMatchObject({ complete: false, languages: [{ language: 'JavaScript', files: 0 }, { language: 'PowerShell', runner: 'unknown', files: 1, status: 'detected-unsupported' }] });
+    const coverage = report.projectFindings.filter(finding => finding.rule.startsWith('wiring.uncovered') || finding.rule.startsWith('wiring.inventory'));
+    expect(coverage.map(finding => `${finding.rule}@${finding.file}`)).toEqual(['wiring.inventory-incomplete@Source/**']);
+    expect(coverage[0]!.message).toContain('PowerShell');
+  });
+});

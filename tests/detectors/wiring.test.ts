@@ -263,3 +263,57 @@ describe('a fixture project with folder/** roots', () => {
     expect(drift[0].evidence).toBe('tools/build.ts');
   });
 });
+
+describe('detectWiring with tests the scan cannot read', () => {
+  const critical = (path: string): RiskMap => ({ ...defaultRiskMap(), areas: [{ path, tier: 'critical' }] });
+  const run = (path: string, files: string[], unsupported: string[], tests: Array<{ rel: string; subjects: string[] }> = []) =>
+    detectWiring(critical(path), tests.map(test => ({ ...test, tier: 'critical' as const, tags: {} })), [], () => files, unsupported)
+      .filter(finding => finding.rule.startsWith('wiring.uncovered') || finding.rule.startsWith('wiring.inventory'));
+
+  it.each([
+    { name: 'an area of C++ files, with only PowerShell tests detected', area: 'Source/**', files: ['Source/a.cpp', 'Source/a.h'], unsupported: ['PowerShell'], rule: 'wiring.inventory-incomplete' },
+    { name: 'an area mixing TypeScript and Python files', area: 'src/**', files: ['src/a.ts', 'src/b.py'], unsupported: ['Python'], rule: 'wiring.inventory-incomplete' },
+    { name: 'an area of JS and TS files only, although Go is detected', area: 'web/**', files: ['web/a.ts', 'web/b.mjs', 'web/c.tsx'], unsupported: ['Go'], rule: 'wiring.uncovered-critical' },
+    { name: 'an area of C++ files when no unsupported language is detected', area: 'Source/**', files: ['Source/a.cpp'], unsupported: [], rule: 'wiring.uncovered-critical' },
+    { name: 'a single-file area written in Python', area: 'src/core.py', files: ['src/core.py', 'src/other.ts'], unsupported: ['Python'], rule: 'wiring.inventory-incomplete' },
+  ])('reports $rule for $name', ({ area, files, unsupported, rule }) => {
+    const findings = run(area, files, unsupported);
+    expect(findings.map(finding => `${finding.rule}@${finding.file}`)).toEqual([`${rule}@${area}`]);
+    if (rule === 'wiring.inventory-incomplete') {
+      expect(findings[0]!.message).toContain(unsupported.join(', '));
+      expect(findings[0]!.message).toContain('coverage is unknown');
+    }
+  });
+
+  it('reports nothing for an area that a supported test covers', () => {
+    expect(run('Source/**', ['Source/a.cpp'], ['PowerShell'], [{ rel: 'tests/a.test.ts', subjects: ['Source/a.cpp'] }])).toEqual([]);
+  });
+});
+
+describe('critical area globs through the real classifiableFiles, with Go detected', () => {
+  const tree = { 'main.py': '', 'src/m.py': '', 'src/a.ts': '', 'src/b.py': '', 'lib/deep/c.py': '', 'lib/deep/d.ts': '' };
+  const cases: Array<{ area: string; tests?: string[]; expected: string | null }> = [
+    { area: 'src/*.py', expected: 'wiring.inventory-incomplete' },
+    { area: 'src/*.ts', expected: 'wiring.uncovered-critical' },
+    { area: 'src/m.py', expected: 'wiring.inventory-incomplete' },
+    { area: 'main.py', expected: 'wiring.inventory-incomplete' },
+    { area: '*.py', expected: 'wiring.inventory-incomplete' },
+    { area: '**/*.py', expected: 'wiring.inventory-incomplete' },
+    { area: 'lib/**/*.ts', expected: 'wiring.uncovered-critical' },
+    { area: '**/*.ts', tests: ['src/a.test.ts'], expected: null },
+  ];
+
+  it.each(cases)('$area with tests [$tests] gives $expected', ({ area, tests = [], expected }) => {
+    const root = makeTree(tree);
+    const map: RiskMap = { ...defaultRiskMap(), areas: [{ path: area, tier: 'critical' }] };
+    const files = tests.map(rel => ({ rel, tier: 'critical' as const, tags: {}, subjects: [] }));
+    const findings = detectWiring(map, files, [], dir => classifiableFiles(root, dir), ['Go']);
+    expect(findings.map(finding => finding.rule)).toEqual(expected ? [expected] : []);
+  });
+
+  it('lists repo-relative forward-slash paths from the root and from a directory, whatever the platform separator', () => {
+    const root = makeTree(tree);
+    expect(classifiableFiles(root, '')).toEqual(['lib/deep/c.py', 'lib/deep/d.ts', 'main.py', 'src/a.ts', 'src/b.py', 'src/m.py']);
+    expect(classifiableFiles(root, 'lib')).toEqual(['lib/deep/c.py', 'lib/deep/d.ts']);
+  });
+});
