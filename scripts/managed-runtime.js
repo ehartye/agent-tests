@@ -74,7 +74,7 @@ function location(source, home) {
 export function resolveRuntime(source, { home = managedHome() } = {}) {
   const runtime = location(source, home);
   const receiptPath = join(runtime.root, RECEIPT);
-  if (!existsSync(receiptPath)) throw new Error(`Managed CLI ${runtime.version} is missing. Run the tests-setup skill (node "${join(runtime.source, 'scripts', 'setup.js')}").`);
+  if (!existsSync(receiptPath)) throw new Error(`Managed CLI ${runtime.version} is missing. Run the tests-setup skill (node "${join(runtime.source, 'scripts', 'setup.js')}"). Setup writes only under "${resolve(home)}", never in the project or the plugin, and needs registry access for npm.`);
   const receipt = readJson(receiptPath);
   if (receipt.fingerprint !== runtime.fingerprint || receipt.key !== runtime.key || describeSource(runtime.root).fingerprint !== runtime.fingerprint) {
     throw new Error(`Managed runtime modified or version mismatch at ${runtime.root}. Move this managed release aside and rerun tests-setup.`);
