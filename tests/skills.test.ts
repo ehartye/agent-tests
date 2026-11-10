@@ -134,6 +134,15 @@ describe('skills', () => {
     expect(load('tests-setup').body).toContain('scripts/setup.js');
   });
 
+  it('has test-strategy check runtime readiness before its first managed command', () => {
+    const lines = load('test-strategy').body.split('\n');
+    const check = lines.findIndex(line => line.includes('setup.js" --check --json'));
+    const command = lines.findIndex(line => /run-managed\.js" [a-z]/.test(line));
+    expect(check, 'no readiness check').toBeGreaterThanOrEqual(0);
+    expect(command, 'no managed command').toBeGreaterThanOrEqual(0);
+    expect(check).toBeLessThan(command);
+  });
+
   it.each(['test-audit', 'test-strategy'])('%s preserves publication, platform obligations and current owner policy in CI advice', name => {
     const body = load(name).body;
     expect(body).toMatch(/preserve[^\n]*publication/i);
