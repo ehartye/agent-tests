@@ -104,6 +104,8 @@ input-scope limits](references/candidate-evidence.md) before recording or checki
 evidence. It does not launch tests or change source. A valid diagnostic exit can be `unclassified`; it never means
 candidate success. See [mutation evidence and native qualification limits](references/mutation-evidence.md).
 
+`scripts/server-probe.mjs` is a directly runnable, dependency-free, read-only script (not a launcher command): `node "<plugin-root>/scripts/server-probe.mjs" --port <n> --expect closed` checks a local port before a browser server starts. See [server readiness preflight](references/architecture-cost.md).
+
 The managed launcher also exports one browser-safe Playbot evidence module:
 
     node "<plugin-root>/scripts/run-managed.js" playbot-export --out <game-vendor-directory>
@@ -144,6 +146,8 @@ are sampled, but action/refusal/fallback counters are always collected; omitted 
 Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
+
+Version 0.12.0 adds `scripts/server-probe.mjs`, a dependency-free, read-only preflight for local dev servers that runs without the managed runtime. It probes a loopback port (both `127.0.0.1` and `::1` by default) with a bounded timeout and reports `responding`, `occupied-no-http-response`, `closed` or `unreachable`, so a listener that accepts TCP but never answers HTTP can be found before a browser run starts, instead of stalling Playwright's first availability request, which has no timeout. It never kills a process or claims who owns a listener. See [server readiness preflight](references/architecture-cost.md).
 
 Version 0.11.0 makes four audit-scan rules say what they found and stop flagging safe code. `no-direct-assertions` now names the tests (`noAssertionTests`), and declared skips are exempt from it. Skipped cases are reported, declared and conditional, with `ctx.skip` reasons; a Playwright-style `test.skip(cond, reason)` inside a test body is a conditional skip, not a test. `worktree.shared-tmp` no longer flags object-property data rows or absence checks, and `worktree.fixed-db-file` is quiet when the file is joined to a directory the file made with `mkdtemp`, and otherwise carries a note that path uniqueness is unresolved. The path-filter CI finding now says a `paths:` filter is a trigger, not an ownership list. See [scan rules](references/scan-rules.md).
 

@@ -88,6 +88,37 @@ Retain checkpoint assertions, provenance and failure evidence; a saved fixture d
 Give independent branches cheaper seam owners and name the coverage each replaces. Keep full and release gates until
 replacement coverage and complete-lane timings are proven; a faster partial campaign alone does not earn retirement.
 
+### Server readiness preflight
+
+Before starting an owned server for a browser run, probe the chosen port. The probe is bounded, read-only and needs no
+managed runtime:
+
+    node "<plugin-root>/scripts/server-probe.mjs" --port <n> --expect closed
+
+It makes one TCP connect and one `GET /` per loopback family, prints one JSON line and exits 0 only when the result meets
+`--expect`. The four outcomes are `responding` (HTTP headers arrived, any status), `occupied-no-http-response` (TCP
+connected but no valid HTTP headers arrived within the timeout, or the peer dropped or reset the connection; a slow
+valid server looks the same), `closed` (connection
+refused, nothing listening) and `unreachable` (the connect timed out or failed another way). The default host
+`localhost` probes both 127.0.0.1 and ::1 and reports the most occupied family, so a silent listener on one family never
+reads as `closed`. A 1xx or 101 reply counts as `responding`. The probe never kills anything, binds nothing and does not
+claim who owns a listener.
+
+Keep `--timeout-ms` at its default of 3000 or higher for a `--expect closed` check: a closed loopback port can take about
+2 s to refuse on Windows, and a smaller timeout reads a closed port as `unreachable`. Exit codes: 0 when the outcome meets
+`--expect`, 1 when it does not, and 2 for a usage error or an internal failure (the error code, `E_USAGE` or `E_PROBE`,
+is in the JSON on stderr). Exit 2 never means "closed".
+
+Start the server on the probed port with a strict port (for example Vite `server.strictPort`, which fails instead of
+moving to another port) and `reuseExistingServer: false`, so a listener that appears late fails the start instead of
+being adopted. Never stop a listener you cannot identify; pick another port and probe that one.
+
+Why this is needed: Playwright 1.64.1, 1.65.0 and main (checked 2026-11-10) issue the first availability request of
+`webServer` without a timeout, before the `webServer.timeout` deadline starts. A listener that accepts TCP but never
+answers HTTP therefore stalls setup past `webServer.timeout`. A proposed one-second cap (Playwright pull request 40433)
+was closed unmerged. This records observed version behavior, not a root cause. Retire this advice when a supported
+upstream bound exists. It stays advisory: the probe is a preflight, not a supervisor of the run.
+
 ## Compare concrete alternatives
 
 For each material cause, record `decision -> evidence -> cost -> alternative -> replacement protection`. Prefer the
