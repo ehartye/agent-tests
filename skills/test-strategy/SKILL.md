@@ -24,8 +24,7 @@ Setup installs under the managed home (`AGENT_TESTS_HOME`, default `~/.agent-tes
 | test (stabilizing) | Release confidence | Journeys, public-surface contracts, critical-tier depth | The same, with the OS matrix nightly and release-tag runs gating the release | Only for declared consumers |
 | production | Do not break people | Regression and compat for declared consumers, post-deploy smoke | Required checks for declared obligations, with reliable reporting | Yes, for declared consumers |
 
-Ask the owner which phase the project is in. Moving to the next phase is an explicit step: fill in `consumers`,
-change `phase`.
+Ask the owner which phase the project is in. Moving to the next phase is explicit: fill in `consumers`, change `phase`.
 
 Deployment for evaluation does not establish production maturity. Record the owner's phase and compatibility
 obligations: current integrity can be critical while disposable test history has no old-format preservation promise.
@@ -112,9 +111,10 @@ Agents write most tests, so prevent bloat at the source. Add this block to the p
     - Tests must not depend on the checkout: no fixed ports (use port 0), no fixed temp paths (use mkdtemp), no
       absolute paths, no reading `.git` directly, no writes under the home directory.
     - Declare the lane in the file's first comment, before any import: `/** @lane merge */` (edit, merge, scheduled or
-      release). Tags are read only from that leading comment. If the test reaches code only through a subprocess or the
-      network, add `@subject <path>` for that code, as a path from the project root (`src/cli.ts`, not an import-style
-      `../src/cli.ts`, which is dropped). A test with no code subject gets `@risk <critical|standard|low>`.
+      release); in Python, `# @lane merge` in the leading `#` comment lines before the first statement or docstring (see
+      `<plugin-root>/references/inventory.md`). Tags are read only from that leading comment. If the test reaches code only
+      through a subprocess or the network, add `@subject <path>` for that code, as a path from the project root (`src/cli.ts`,
+      not an import-style `../src/cli.ts`, which is dropped). A test with no code subject gets `@risk <critical|standard|low>`.
     - For a bug fix, write the failing test first and watch it fail for the reported reason. For any new test, check that
       it fails when the behavior it covers is broken.
     - While editing, run only the tests for the files you changed. Run the project's merge script before pushing. Do

@@ -62,8 +62,8 @@ on this machine.
 | `references/architecture-cost.md` | Advisory investigation of architecture that makes tests costly, including complete generated-asset inputs and final verification ownership |
 | `references/node-profiling.md` | Optional Node 24+ reporter, per-file and overall duration, provenance limits and repeatable lane experiments |
 | `references/candidate-evidence.md` | Explicit checked observation of Node-test/Vitest children, content/path/index identities, native counts and honest reuse limits |
-| `references/scan-rules.md` | What the newer and changed scan rules mean, the remedy to recommend and a planted example of each: `worktree.timestamp-tmp-path`, `worktree.cwd-write`, `worktree.cwd-locate`, `wiring.unmapped-subject`, `shim.title-marker`, `redundancy.shared-subject`, `wiring.drift` and `wiring.inventory-incomplete` |
-| `references/inventory.md` | What the scan can and cannot see: the language census (test-named files in other languages, counted by name only), the `inventory` object, the incomplete-inventory statement in the report, and why a missing `inventory` key does not mean the inventory is complete |
+| `references/scan-rules.md` | What the newer and changed scan rules mean, the remedy to recommend and a planted example of each: `worktree.timestamp-tmp-path`, `worktree.cwd-write`, `worktree.cwd-locate`, `wiring.unmapped-subject`, `shim.title-marker`, `redundancy.shared-subject`, `wiring.drift`, `wiring.inventory-incomplete` and Python `wiring.opaque-test-registration` |
+| `references/inventory.md` | What the scan can and cannot see: the Python adapter (how Python tests, subjects, tags and lanes are read statically, and what stays unknown), the language census (other languages counted by name only), the `inventory` object with its scoped notes, the incomplete-inventory statement in the report, the scoped `wiring.inventory-incomplete` rule, and why a missing `inventory` key does not mean the inventory is complete |
 | `references/worktree-check.md` | The opt-in `worktree-check` command: options, the three verdicts, the report fields, error codes, a runnable example, its cost and its limits |
 | `references/mutation-evidence.md` | Read-only mutation verdicts, exact native assertion scope, frozen judging, raw restoration and honest partial composition |
 
@@ -193,7 +193,7 @@ Version 0.4.2 advertises managed helper commands and verifies byte-identical Pla
 provenance metadata. Use `--verify --require-current` for exact producer identity at release gates.
 
 
-Version 0.3 includes static audits for TypeScript and JavaScript projects (the only languages whose tests are parsed) using vitest, jest or Node's test runner,
+Version 0.3 includes static audits for TypeScript and JavaScript projects (the languages whose tests it parsed then; Python tests are parsed now, see Known limitations) using vitest, jest or Node's test runner,
 an optional Node reporter, and explicitly invoked observational candidate evidence for Node-test/Vitest. Scan and
 report never run tests. Candidate observation does not select lanes, suppress checks or authorize integration.
 CI charges and statistical flakiness are not measured; remediation and wider runner/language support remain separate work.
@@ -211,9 +211,13 @@ It supplies evidence and validation, rather than a common game director or input
 
 ## Known limitations
 
-- Only JavaScript and TypeScript tests are parsed. Test files in Python, Go, Ruby, PowerShell, Java, Kotlin, C# and PHP are
-  counted by conventional file name but not read or inventoried: the scan reports them as an incomplete inventory, and a
-  critical area it cannot see tests for is reported as `wiring.inventory-incomplete` (coverage unknown) rather than uncovered.
+- JavaScript, TypeScript and Python tests are parsed. Python is read statically with a WASM tree-sitter parser (nothing
+  executes Python), so marks registered by plugins or hooks, `pytest_generate_tests`, non-literal parametrization,
+  `load_tests` results, `collect_ignore` and pytest or unittest settings other than `python_files` stay unknown, and
+  markers that are not named edit, merge, scheduled or release (such as `slow` or `db`) are not mapped to lanes. Test files
+  in Go, Ruby, PowerShell, Java, Kotlin, C# and PHP are counted by conventional file name but not read: the scan reports
+  them as an incomplete inventory, and a critical area it cannot see tests for is reported as `wiring.inventory-incomplete`
+  (coverage unknown) rather than uncovered. A Python area is reported that way only inside the scope of a Python note.
   Tests with unconventional names and inline tests are not counted at all. See [references/inventory.md](references/inventory.md).
 - Pattern detectors also match strings inside tests that are about those patterns, including this repository's own tests.
   Findings are evidence for the agent to read, not verdicts.

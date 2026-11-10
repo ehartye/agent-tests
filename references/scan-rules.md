@@ -98,7 +98,9 @@ Recommend: build the path inside a `mkdtemp` directory and remove it in cleanup.
 A file flag, not a rule with its own finding. It is set when at least one test in the file has no assertion in its own
 body (`expect`, `assert` or another recognized form). A helper the test calls may assert for it, so the flag is a reason
 to read the test, not proof that it checks nothing. A `todo` test and a declared skip (`it.skip`, `test.skip`) are
-exempt: a stub body is a placeholder or never runs, so it is not named.
+exempt: a stub body is a placeholder or never runs, so it is not named. Python tests use the same flag (assertions are
+`assert`, `self.assert*`, `self.fail`, `pytest.raises`, `pytest.warns` and `pytest.fail`); skip and xfail marks are not
+read, so a skipped Python test with no assertion is still named.
 
 The scan JSON names the tests: `noAssertionTests` is a list of `{ name, line }` in file order that keeps every assertionless
 test of the file, each name cut to 80 characters. A file without the flag has no `noAssertionTests` key. `report` prints a
@@ -199,19 +201,46 @@ Example evidence: `src/misc/x.ts; mapped area: src/db/**` (a test importing `src
 
 ## wiring.inventory-incomplete
 
-Means: a critical risk-map area has no inventoried test, but the scan's language census found test-named files in another
-language (Python, Go and others) that it counts by file name and never reads. Coverage of the area is unknown, not absent.
-It replaces `wiring.uncovered-critical` for that area when at least one language is `detected-unsupported`, unless every
-classifiable file in the area is JavaScript or TypeScript (whose tests are inventoried). The message names the unsupported
-languages. Trade-off: in a mixed-language repository, an area with any other kind of file and no covering test reads
-"coverage unknown" even if it is genuinely untested, so it can soften a real gap. The census names, the `inventory` object
-and the exact condition are in [inventory.md](inventory.md).
+Means: a critical risk-map area has no inventoried test, but the scan cannot fully see the tests that might cover it, so
+coverage of the area is unknown, not absent. It replaces `wiring.uncovered-critical` in two cases:
 
-Recommend: open the named languages' tests and check whether they exercise the area. Do not report it as uncovered, or as
-covered, before reading them. If they do, the risk-map area is fine; the scan simply cannot see it.
+- A language the scan only counts by file name (Go, Ruby, PowerShell, Java, Kotlin, C# and PHP; status
+  `detected-unsupported`) exists, and the area holds a classifiable file that is neither JavaScript, TypeScript nor Python.
+  The message names the unsupported languages. Python is read, so a Python-only area is not softened by an unrelated
+  language. Trade-off: in a mixed-language repository, an area with any other kind of file and no covering test reads
+  "coverage unknown" even if it is genuinely untested, so it can soften a real gap.
+- The area holds Python files and lies within the scope of a Python incompleteness note (`inventory.noteScopes`): a custom
+  `python_files` setting (scope `"all"`), a facade import through a package `__init__.py` (scope: that package), or a Python
+  file with opaque registration (scope: its subjects' packages). The message quotes the note. A Python area outside every
+  note's scope stays `wiring.uncovered-critical`, so one odd file does not mute the rest of the repo.
 
-Example evidence: `0 inventoried test files import this area; unsupported: Python` (an area `py/pkg/**` whose tests are
-`py/tests/test_core.py`).
+The census names, the `inventory` object, the scope containment rule and the exact conditions are in
+[inventory.md](inventory.md).
+
+Recommend: open the tests the message points to (the named languages' tests, or the Python files the note describes) and
+check whether they exercise the area. Do not report it as uncovered, or as covered, before reading them. If they do, the
+risk-map area is fine; the scan simply cannot see it.
+
+Example evidence: `0 inventoried test files import this area; unsupported: Go` (an area `go/**` whose tests are
+`go/service_test.go`) and `0 inventoried test files import this area; Python notes: imports through a package __init__ may
+reach other modules` (an area `src/pkg/io.py` when a test imports `pkg` through its `__init__.py`).
+
+## wiring.opaque-test-registration (Python)
+
+Means: a Python test file registers tests in a way the static reader cannot see, so its count of recognized declarations
+may undercount it. The report shows `+?` on the file, as for JavaScript helpers. There are three Python triggers: a module
+that defines `load_tests` (unittest only; pytest ignores it); a module-level import whose bound name is `Test*`, `*Test` or
+`*TestCase` (an imported test class, collected in the importing module; the source module is not checked, so
+`from unittest import TestCase` also matches); and a non-literal dynamic import (`import_module(name)` or
+`__import__(name)`, whose target and subjects are unknown). The evidence is `load_tests`, the imported name, or
+`non-literal import`.
+
+Each such file also adds the opaque note to `inventory.notes` and `inventory.noteScopes`, which can turn an uncovered
+critical Python area near it into `wiring.inventory-incomplete` (see above).
+
+Recommend: open the module, read what `load_tests` returns or where the imported class is declared, and compare a native
+inventory (the runner's own collection listing, run by you or the owner; the scan never runs it) before judging the
+file's count or its coverage.
 
 ## shim.title-marker
 

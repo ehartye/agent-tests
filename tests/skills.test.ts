@@ -244,6 +244,46 @@ describe('skills', () => {
     });
   });
 
+  describe('Python adapter documentation', () => {
+    const read = (...parts: string[]): string => readFileSync(join(ROOT, ...parts), 'utf8');
+    const inventory = read('references', 'inventory.md');
+    const readme = read('README.md');
+
+    it('states the Python rules, the optional note scopes and the implementation limits in inventory.md', () => {
+      for (const word of ['noteScopes', 'supported', '# @lane', 'custom markers', 'web-tree-sitter', 'scanProject', 'collect_ignore']) expect(inventory, word).toContain(word);
+    });
+
+    it('does not describe Python as unsupported or unread any more', () => {
+      expect(inventory).not.toMatch(/Tests in other languages are not parsed/);
+      expect(inventory).not.toMatch(/"language": "Python"[^\n]*detected-unsupported/);
+    });
+
+    it('has test-strategy show the Python lane comment form and point at the reference', () => {
+      const body = load('test-strategy').body;
+      expect(body).toContain('# @lane');
+      expect(body).toContain('references/inventory.md');
+    });
+
+    it('has test-audit say Python tests are inventoried in its inventory pointer', () => {
+      const line = load('test-audit').body.split('\n').find(entry => entry.includes('references/inventory.md'));
+      expect(line, 'no inventory pointer').toBeDefined();
+      expect(line).toContain('Python');
+    });
+
+    it('has README stop saying that only JavaScript and TypeScript tests are parsed, and mention Python', () => {
+      expect(readme).not.toMatch(/only (?:JavaScript and TypeScript|TypeScript and JavaScript)[^.]*(?:tests )?(?:are |is )?parsed/i);
+      expect(readme).not.toMatch(/the only languages whose tests are parsed/i);
+      const limits = readme.split('## Known limitations')[1] ?? '';
+      expect(limits).toMatch(/Python/);
+      expect(limits).toMatch(/JavaScript, TypeScript and Python tests are parsed/);
+    });
+
+    it('documents Python opaque registration and the scoped rule in scan-rules.md', () => {
+      const rules = read('references', 'scan-rules.md');
+      for (const word of ['load_tests', 'imported test class', 'non-literal', 'noteScopes']) expect(rules, word).toContain(word);
+    });
+  });
+
   it.each(['test-audit', 'test-strategy'])('%s preserves publication, platform obligations and current owner policy in CI advice', name => {
     const body = load(name).body;
     expect(body).toMatch(/preserve[^\n]*publication/i);
