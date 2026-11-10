@@ -97,7 +97,8 @@ managed runtime:
 
 It makes one TCP connect and one `GET /` per loopback family, prints one JSON line and exits 0 only when the result meets
 `--expect`. The four outcomes are `responding` (HTTP headers arrived, any status), `occupied-no-http-response` (TCP
-connected but no valid HTTP headers within the timeout; a slow valid server looks the same), `closed` (connection
+connected but no valid HTTP headers arrived within the timeout, or the peer dropped or reset the connection; a slow
+valid server looks the same), `closed` (connection
 refused, nothing listening) and `unreachable` (the connect timed out or failed another way). The default host
 `localhost` probes both 127.0.0.1 and ::1 and reports the most occupied family, so a silent listener on one family never
 reads as `closed`. A 1xx or 101 reply counts as `responding`. The probe never kills anything, binds nothing and does not
