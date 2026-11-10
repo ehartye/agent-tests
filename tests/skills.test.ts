@@ -300,6 +300,17 @@ describe('skills', () => {
       expect(inventory).toContain('project module');
     });
 
+    it('describes the parsed-module opaque filter, the managed install flag and the note separator', () => {
+      for (const word of ['--ignore-scripts', 'module', 'level']) expect(inventory, word).toContain(word);
+      expect(inventory).not.toContain('cannot read from the source line');
+      expect(inventory).not.toMatch(/`from` clause[\s\S]{0,40}cannot read/);
+      expect(inventory).not.toMatch(/current npm versions do not run/);
+      const example = inventory.split('\n').find(line => line.includes('- Inventory incomplete:'));
+      expect(example, 'no header example').toBeDefined();
+      expect(example).toContain('; ');
+      expect(read('references', 'scan-rules.md')).not.toMatch(/source line/);
+    });
+
     it('keeps the plugin-root pointer out of the block users copy into their own instructions', () => {
       const lines = load('test-strategy').body.split('\n');
       const start = lines.findIndex(line => /^ {4}## Testing rules/.test(line));

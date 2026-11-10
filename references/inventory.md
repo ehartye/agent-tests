@@ -175,8 +175,10 @@ recognized declarations are still counted, and the count may undercount the file
   and only when `X` is a project module: an absolute module that resolves to a project file under the same package roots
   as a subject, or a relative import that resolves against the test file's directory (a bare `from . import Name` needs
   an `__init__.py` there). Stdlib and third-party sources do not count, so `from unittest import TestCase` and
-  `from django.test import TestCase` are not opaque; test and support files are project modules. A `from` clause the scan
-  cannot read from the source line is kept as opaque, since an unknown source is the incomplete side;
+  `from django.test import TestCase` are not opaque; test and support files are project modules. The `module` and the
+  number of leading dots (`level`) come from the parsed import statement, so odd spacing, backslash continuations,
+  parenthesised multi-line imports, and comments or strings beside an import do not matter. An entry that lacks `module`
+  or `level` (this should not happen) is kept as opaque, since an unknown source is the incomplete side;
 - a non-literal dynamic import: `import_module(name)` or `__import__(name)` with an argument that is not a plain string.
 
 ### Runner detection and `python_files`
@@ -294,8 +296,11 @@ When `inventory` exists, the `report` header gains up to two lines:
 
 - `- Languages: JavaScript (vitest, 10 files), Python (pytest, 111 files), Go (detected-unsupported, 4 files)`. A
   supported language shows its runner; a detected-unsupported one shows its status.
-- `- Inventory incomplete: Go detected but not inventoried. <notes>`. Only when `complete` is false. It names the
-  unsupported languages, if any, and repeats the notes (Python notes included).
+- `- Inventory incomplete: Go detected but not inventoried. <note 1>; <note 2>.` Only when `complete` is false. It
+  names the unsupported languages first, as a sentence of their own, if any. The notes (Python notes included) follow as
+  clauses: each loses one trailing period, they are joined with `; `, and the line ends with one period. For example
+  `- Inventory incomplete: Go detected but not inventoried. Those files are named like tests and were counted by file name only, never read, so their test counts and the coverage they give are unknown; imports through a package __init__ may reach other modules.`
+  The note texts in the JSON are unchanged.
 
 Separately, whenever `runner` is `unknown` and the scan found 0 test files, the header adds
 `- No supported runner detected; a zero test count does not prove the project has no tests.` This holds for every such
@@ -371,8 +376,10 @@ For a maintainer of the scan:
 - The grammar WASM ships in the `tree-sitter-python` npm package (`tree-sitter-python.wasm`), is resolved from
   `node_modules` and loaded in-process once per scan. No download, no registry call beyond `npm ci`, and no Python on the
   machine are needed.
-- `tree-sitter-python` declares an install script (`node-gyp-build`) that current npm versions do not run, and nothing
-  needs it: only the `.wasm` file is used, never a native binding.
+- `tree-sitter-python` declares an install script (`node-gyp-build`). The managed install runs
+  `npm ci --omit=dev --ignore-scripts --no-audit --no-fund`, so that script is never run: only the `.wasm` file is used,
+  never a native binding, and no compiler is ever needed. No other runtime dependency needs an install script either (the
+  TypeScript binary ships as a platform package).
 - The parser loads only when the census finds Python test-named files or a workflow names a Python file. A JavaScript-only
   scan never loads it, and its output is unchanged.
 - Programmatic use: `scan()` is synchronous and cannot load the WASM, so it throws when Python test files exist and no
