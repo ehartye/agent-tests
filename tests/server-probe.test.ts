@@ -3,6 +3,7 @@
  * @subject scripts/server-probe.mjs
  */
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -10,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { classifyConnectError, isEntryPoint, overallOutcome, parseArgs } from '../scripts/server-probe.mjs';
+import { classifyConnectError, impliesAcceptedConnection, isEntryPoint, overallOutcome, parseArgs, probeFamily } from '../scripts/server-probe.mjs';
 import { physicalTemp } from './helpers/physical-temp.ts';
 
 const script = fileURLToPath(new URL('../scripts/server-probe.mjs', import.meta.url));
@@ -232,6 +233,37 @@ describe('pure decisions', () => {
   it('parses defaults and both flag spellings', () => {
     expect(parseArgs(['--port', '5173'])).toEqual({ port: 5173, host: 'localhost', timeoutMs: 3000, expect: 'responding' });
     expect(parseArgs(['--port=5173', '--host=::1', '--timeout-ms=1', '--expect=closed'])).toEqual({ port: 5173, host: '::1', timeoutMs: 1, expect: 'closed' });
+  });
+});
+
+describe('an error before the connect event', () => {
+  // Linux and macOS can report a reset before node emits 'connect'; Windows emits 'connect' first. A fake request fixes the order.
+  const fake = (steps: (socket: EventEmitter, request: EventEmitter) => void) => () => {
+    const socket = new EventEmitter();
+    const request = Object.assign(new EventEmitter(), {
+      destroy() {},
+      end() { setImmediate(() => { request.emit('socket', socket); steps(socket, request); }); },
+    });
+    return request;
+  };
+  const failWith = (code: string) => (_socket: EventEmitter, request: EventEmitter) => request.emit('error', Object.assign(new Error(code), { code }));
+  const run = (steps: (socket: EventEmitter, request: EventEmitter) => void) => probeFamily({ address: '127.0.0.1', hostHeader: 'localhost:1', port: 1, timeoutMs: 3000, request: fake(steps) as never });
+
+  it.each(['ECONNRESET', 'ECONNABORTED', 'EPIPE'])('%s implies the connection was accepted', code => {
+    expect(impliesAcceptedConnection(code)).toBe(true);
+  });
+  it.each(['ECONNREFUSED', 'EADDRNOTAVAIL', 'EAFNOSUPPORT', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'HPE_INVALID_CONSTANT', undefined])('%s does not', code => {
+    expect(impliesAcceptedConnection(code)).toBe(false);
+  });
+
+  it.each([
+    { name: 'a reset before connect', steps: failWith('ECONNRESET'), expected: { outcome: 'occupied-no-http-response', connect: { ok: true }, http: { error: 'ECONNRESET' } } },
+    { name: 'an abort before connect', steps: failWith('ECONNABORTED'), expected: { outcome: 'occupied-no-http-response', connect: { ok: true }, http: { error: 'ECONNABORTED' } } },
+    { name: 'a reset after connect', steps: (socket: EventEmitter, request: EventEmitter) => { socket.emit('connect'); failWith('ECONNRESET')(socket, request); }, expected: { outcome: 'occupied-no-http-response', connect: { ok: true }, http: { error: 'ECONNRESET' } } },
+    { name: 'a refusal before connect', steps: failWith('ECONNREFUSED'), expected: { outcome: 'closed', connect: { ok: false, error: 'ECONNREFUSED' } } },
+    { name: 'a timeout before connect', steps: failWith('ETIMEDOUT'), expected: { outcome: 'unreachable', connect: { ok: false, error: 'ETIMEDOUT' } } },
+  ])('$name is classified from the code', async ({ steps, expected }) => {
+    expect(await run(steps)).toMatchObject(expected);
   });
 });
 

@@ -76,15 +76,29 @@ export function parseArgs(argv) {
 const elapsed = start => Math.round(performance.now() - start);
 const errorName = error => (error && (error.code || error.name)) || 'ERROR';
 
-/** One TCP connect and one header-only GET / on it (node:http, no agent). Each wait is bounded by timeoutMs. */
-function probeFamily({ address, hostHeader, port, timeoutMs }) {
+const ACCEPTED_CODES = new Set(['ECONNRESET', 'ECONNABORTED', 'EPIPE']);
+
+/**
+ * True for an error code that only a connection the peer accepted can produce: a reset, an abort or a broken pipe. A refused
+ * connection is ECONNREFUSED and an unreachable one ETIMEDOUT, EHOSTUNREACH or ENETUNREACH. Some systems (Linux, macOS) report
+ * such an error before node emits 'connect', so it cannot be told from a connect failure by its position alone.
+ */
+export function impliesAcceptedConnection(code) {
+  return ACCEPTED_CODES.has(code);
+}
+
+/**
+ * One TCP connect and one header-only GET / on it (node:http, no agent). Each wait is bounded by timeoutMs.
+ * `request` is the http.request function; tests pass a fake to fix the order of events.
+ */
+export function probeFamily({ address, hostHeader, port, timeoutMs, request: makeRequest = http.request }) {
   return new Promise(resolve => {
     const start = performance.now();
     let settled = false;
     let connected = null; // the connect evidence, once the socket is connected
     let httpStart = 0;
     let timer;
-    const request = http.request({ host: address, port, agent: false, method: 'GET', path: '/', headers: { Host: hostHeader, Connection: 'close' } });
+    const request = makeRequest({ host: address, port, agent: false, method: 'GET', path: '/', headers: { Host: hostHeader, Connection: 'close' } });
     const finish = family => {
       if (settled) return;
       settled = true;
@@ -93,6 +107,10 @@ function probeFamily({ address, hostHeader, port, timeoutMs }) {
       resolve({ address, ...family });
     };
     const fail = (error, timedOut) => {
+      if (!connected && !timedOut && impliesAcceptedConnection(error?.code)) {
+        connected = { ok: true, ms: elapsed(start) }; // the peer accepted the connection and then dropped it
+        httpStart = performance.now();
+      }
       if (!connected) {
         const connect = { ok: false, ms: elapsed(start), error: timedOut ? 'timeout' : errorName(error) };
         finish({ outcome: classifyConnectError({ code: error?.code, timedOut }), connect });
