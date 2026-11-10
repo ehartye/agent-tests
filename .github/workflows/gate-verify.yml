@@ -1,6 +1,8 @@
 # Throwaway gate verification for the Python parser dependency. Removed before merge.
 name: gate-verify
-on: workflow_dispatch
+on:
+  push:
+    branches: [feat/python-pytest-adapter]
 jobs:
   managed-install:
     strategy:
