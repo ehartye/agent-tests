@@ -273,6 +273,21 @@ describe('detectFrequency workflows', () => {
     expect(detectFrequency(linux, null)).toEqual([]);
   });
 
+  it('says a paths filter is a trigger, not an ownership list, on the push message only', () => {
+    const sentence = 'A paths filter is a trigger, not an ownership list; the scan does not map workflow steps to test files.';
+    const push = workflow("on:\n  push:\n    paths: ['src/**']\njobs:\n  t:\n    runs-on: macos-latest\n    steps: []\n");
+    const pushMessage = detectFrequency(push, null).find(finding => finding.rule === 'frequency.ci-on-push')?.message ?? '';
+    expect(pushMessage).toContain(sentence);
+    expect(pushMessage).toMatch(/^[\x20-\x7e]*$/);
+    const ignore = workflow("on:\n  push:\n    paths-ignore: ['docs/**']\njobs:\n  t:\n    runs-on: windows-latest\n    steps: []\n");
+    expect(detectFrequency(ignore, null).find(finding => finding.rule === 'frequency.ci-on-push')?.message).toContain(sentence);
+    const pull = workflow("on:\n  pull_request:\n    paths: ['src/**']\njobs:\n  t:\n    runs-on: windows-latest\n    steps: []\n");
+    const pullMessage = detectFrequency(pull, null).find(finding => finding.rule === 'frequency.ci-on-pull-request')?.message ?? '';
+    expect(pullMessage).not.toBe('');
+    expect(pullMessage).not.toContain(sentence);
+    expect(pullMessage).not.toContain('ownership list');
+  });
+
   it('reports each matrix finding once when push and pull_request both fire', () => {
     const root = workflow('on:\n  push:\n    branches: [dev]\n  pull_request:\njobs:\n  t:\n    strategy:\n      matrix:\n        os: [windows-latest]\n    runs-on: ${{ matrix.os }}\n    steps: []\n');
     expect(rules(detectFrequency(root, null))).toEqual(['frequency.ci-on-pull-request', 'frequency.ci-on-push', 'frequency.ci-os-matrix-on-push']);

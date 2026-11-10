@@ -36,6 +36,114 @@ const db2 = join(tmpdir(), `t-${randomUUID()}.db`);
 const started = Date.now();
 ```
 
+## worktree.shared-tmp
+
+Means: a fixed `/tmp/...` string literal, or a fixed name after `tmpdir(),` that is not a `mkdtemp` prefix (one ending in
+`-` or `_`). Every worktree and every parallel run builds the same path, so they share or clobber what is there. The rule
+reads one line at a time and stays quiet when `mkdtemp` is on the same or the previous line.
+
+Recommend: create the directory with `mkdtemp` (see above) and put the file inside it.
+
+Flagged:
+
+```ts
+writeFileSync('/tmp/out.log', x);
+const dir = '/tmp/work';
+mkdirSync("/tmp/fixed");
+const p = join(tmpdir(), 'fixed');
+```
+
+An array row (`'/tmp/assets',` alone on its line) and the argument line of a call split over several lines
+(`writeFileSync(`, then `'/tmp/out.log',`, then `data)`) stay flagged, and the finding is on the literal's line. Such a
+line looks the same as a write, and a silent miss on a real hazard is worse than a hit to read past.
+
+Quiet (a value that is not written, or a path only checked for absence):
+
+```ts
+{ path: '/tmp/assets' },
+expect(existsSync('/tmp/gone')).toBe(false);
+```
+
+Only an object-property data row (`key: '/tmp/x'`, alone on its line) and an absence check (`existsSync` or `exists` of
+the literal asserted false) are quiet, besides the existing `mkdtemp` cases.
+
+## worktree.fixed-db-file
+
+Means: a quoted database file name ending `.sqlite`, `.sqlite3` or `.db`, such as `'test.sqlite'` or `'data/app.db'`. Two
+worktrees, or two parallel runs, open the same file unless the path is unique per run. A name under `fixtures/` is quiet,
+as is a line with `mkdtemp` on it or on the line before.
+
+Quiet when the file sits in a directory the test file made: once the file has assigned an identifier from
+`mkdtemp` or `mkdtempSync` (also `await mkdtemp`) on an earlier line, a match is not flagged when that identifier is an
+argument of the same join, `path.join` or `resolve` call that holds the quoted file name, for example
+`new DatabaseSync(join(runDir, 'run.sqlite'))`. The identifier merely appearing elsewhere on the line, or inside a string
+literal, does not make it quiet.
+
+Qualified, not silenced, when the directory cannot be traced. `join(dir, 'x.sqlite')` where `dir` is a function parameter,
+or has no earlier assignment from `mkdtemp` in this file, is still flagged, and its `note` starts
+`Path uniqueness unresolved:` and names `dir` (the note says there is no earlier assignment because the scan reads the
+file once, top to bottom: an assignment further down, such as in a `beforeEach`, is not seen). The path may be unique
+because the caller passes a per-run directory or the assignment comes later; the scan cannot see that, so check the caller
+and the rest of the file. A bare fixed name (`'test.sqlite'`, `'data/app.db'`) is flagged with no note.
+
+Limits: a template literal containing `${...}` is never matched by this rule at all, so an untraced `${dir}/x.sqlite` gives
+no finding and no note, and a traced one is not checked either; read such paths yourself. Identifier tracing is name-based,
+not scope-aware: a `mkdtemp` assignment to `runDir` anywhere earlier in the file (a leading `this.` is ignored) counts for
+every later `runDir`, including one in another function or a parameter with the same name.
+
+Recommend: build the path inside a `mkdtemp` directory and remove it in cleanup.
+
+## no-direct-assertions
+
+A file flag, not a rule with its own finding. It is set when at least one test in the file has no assertion in its own
+body (`expect`, `assert` or another recognized form). A helper the test calls may assert for it, so the flag is a reason
+to read the test, not proof that it checks nothing. A `todo` test and a declared skip (`it.skip`, `test.skip`) are
+exempt: a stub body is a placeholder or never runs, so it is not named.
+
+The scan JSON names the tests: `noAssertionTests` is a list of `{ name, line }` in file order that keeps every assertionless
+test of the file, each name cut to 80 characters. A file without the flag has no `noAssertionTests` key. `report` prints a
+`No direct assertions` section for every flagged file, not only those in the findings table (table order first, then the
+rest by path), up to 20 files and then `+K more files (see the JSON noAssertionTests)`. Each file shows at most 5 names,
+one line each, `<file>: "does nothing" (line 12)`, then `and K more` with K the real number left.
+`it.each` rows and nested `describe` blocks attribute their assertions to the test that contains them.
+
+## Skipped cases
+
+The scan records skips in an optional `skips` field on a test file: `{ declared, conditional, reasons }`. A file without
+skips has no `skips` key.
+
+- Declared: the test is declared with `it.skip` or `test.skip`. It never runs.
+- Conditional: it is declared with `it.skipIf(cond)` or `it.runIf(cond)`, or its body skips it at run time with
+  `ctx.skip('no network')` on the context parameter (any name: `ctx`, `context`, `t`) or a destructured `skip(...)`.
+  A Playwright-style `test.skip(isCI, 'flaky on CI')` inside a test body is not a test: a `test.skip` or `it.skip` call
+  whose first argument is not a string or template literal and whose second argument is not a function counts as one
+  conditional skip. A call with a string title or a function body, `test.skip('later', () => {})`, is a declared skip.
+  Known limit: because a skip call whose second argument is not a function is read as an inline conditional skip, a
+  skipped declaration whose handler is a bare reference or call (`it.skip(name, handler)`, `test.skip(title, vi.fn())`,
+  `test.skip(title, runCase.bind(null, 1))`) is counted as a conditional skip and not as a test, and a one-argument
+  `test.skip(title)` is likewise counted as a conditional skip. A skipped test written that way is missing from the
+  declared count; read such files yourself.
+- Counts are tests, not calls. A declared skip is counted once and never also as conditional.
+- `reasons` holds the reason of each skip call, distinct, at most 3 per file and 80 characters each. A context skip
+  takes its first string argument; an inline `test.skip(cond, 'reason')` takes its second argument. The reason is recorded
+  only when it is a plain string or a template without `${...}`; a variable or a template with substitutions adds no
+  reason, and none is invented.
+
+`report` shows the totals in the header line `- Skipped cases: <n> declared, <m> conditional in <k> files` (only when
+any skip exists) and a `Skips` section with one line per file (at most 20 files, then a count of the rest) giving the
+counts and up to 3 reasons. A declared skip protects nothing today: ask whether to restore or remove it. A conditional
+skip protects only where its condition allows, so check that the condition holds in the lane that needs the test.
+
+## frequency.ci-on-push (path filter)
+
+Means: a push-triggered workflow with a `paths:` filter on an expensive runner. The finding asks for a review of overlap
+with local or PR validation.
+
+A paths filter is a trigger, not an ownership list; the scan does not map workflow steps to test files.
+
+Which tests a workflow runs, and which job owns a behavior, must be read from the workflow itself. The sentence is on
+this finding only: `frequency.ci-on-pull-request` does not parse `paths:` and its message is unchanged.
+
 ## worktree.cwd-write
 
 Means: a write call (`writeFile`, `appendFile`, `mkdir`, `rm`, `unlink`, `truncate`, `createWriteStream`, or the

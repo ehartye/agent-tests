@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { renderMarkdown } from '../src/report.ts';
 import { scan } from '../src/scan.ts';
+import { makeTree } from './helpers/tree.ts';
 import { EVIDENCE_SCHEMA, type EvidenceReport, type Finding, type TestFileRecord } from '../src/schema.ts';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -420,5 +421,112 @@ describe('title overlap ranking', () => {
     const table = section(markdown, 'Test files');
     expect(table.indexOf('m.test.ts')).toBeLessThan(table.indexOf('six.test.ts'));
     expect(table.indexOf('six.test.ts')).toBeLessThan(table.indexOf('two.test.ts'));
+  });
+});
+
+describe('renderMarkdown names tests with no direct assertions', () => {
+  it('lists each name with its line under a No direct assertions section', () => {
+    const md = renderMarkdown(report({ files: [record('tests/a.test.ts', { flags: ['no-direct-assertions'], noAssertionTests: [{ name: 'does nothing', line: 3 }] })] }));
+    expect(section(md, 'No direct assertions')).toContain('tests/a.test.ts: "does nothing" (line 3)');
+  });
+
+  it('lists at most five names per file, then how many more, for a real scan of seven bare tests', () => {
+    const source = Array.from({ length: 7 }, (_, i) => `it('bare ${i + 1}', () => { run(); });`).join('\n');
+    const md = renderMarkdown(scan(makeTree({ 'tests/a.test.ts': source }), { commitLimit: 1 }));
+    const listed = section(md, 'No direct assertions');
+    expect(listed).toContain('"bare 5" (line 5)');
+    expect(listed).not.toContain('"bare 6"');
+    expect(listed).toContain('tests/a.test.ts: and 2 more');
+  });
+
+  it('lists every flagged file, including files below the table cut', () => {
+    const files = [
+      record('tests/a.test.ts', { findings: [finding({ rule: 'worktree.fixed-port', file: 'tests/a.test.ts', line: 1 })], noAssertionTests: [{ name: 'shown', line: 1 }] }),
+      record('tests/z.test.ts', { noAssertionTests: [{ name: 'below the table', line: 2 }] }),
+    ];
+    const md = renderMarkdown(report({ files }), { maxFiles: 1 });
+    expect(tableRows(md)).toHaveLength(1);
+    const listed = section(md, 'No direct assertions');
+    expect(listed).toContain('tests/a.test.ts: "shown" (line 1)');
+    expect(listed).toContain('tests/z.test.ts: "below the table" (line 2)');
+    expect(listed.indexOf('tests/a.test.ts')).toBeLessThan(listed.indexOf('tests/z.test.ts'));
+  });
+
+  it('orders files as the table does, then the rest by path', () => {
+    const files = [
+      record('tests/b.test.ts', { noAssertionTests: [{ name: 'b', line: 1 }] }),
+      record('tests/a.test.ts', { noAssertionTests: [{ name: 'a', line: 1 }] }),
+      record('tests/c.test.ts', { findings: [finding({ rule: 'worktree.fixed-port', file: 'tests/c.test.ts', line: 1 })], noAssertionTests: [{ name: 'c', line: 1 }] }),
+    ];
+    const listed = section(renderMarkdown(report({ files }), { maxFiles: 2 }), 'No direct assertions');
+    expect([...listed.matchAll(/tests\/(\w)\.test\.ts/g)].map(match => match[1])).toEqual(['c', 'a', 'b']);
+  });
+
+  it('lists at most 20 files, then counts the rest', () => {
+    const files = Array.from({ length: 23 }, (_, i) => record(`tests/f${String(i).padStart(2, '0')}.test.ts`, { noAssertionTests: [{ name: `n${i}`, line: 1 }] }));
+    const listed = section(renderMarkdown(report({ files })), 'No direct assertions');
+    expect(listed.match(/^- tests\//gm)).toHaveLength(20);
+    expect(listed).toContain('+3 more files (see the JSON noAssertionTests)');
+  });
+
+  it('keeps a name on one line', () => {
+    const md = renderMarkdown(report({ files: [record('tests/a.test.ts', { noAssertionTests: [{ name: 'two\nlines', line: 4 }] })] }));
+    expect(section(md, 'No direct assertions')).toContain('"two lines" (line 4)');
+  });
+
+  it('omits the section when no file has names', () => {
+    expect(renderMarkdown(report({ files: [record('tests/a.test.ts', { flags: ['no-direct-assertions'] })] }))).not.toContain('## No direct assertions');
+  });
+});
+
+describe('renderMarkdown reports skipped cases', () => {
+  const skipped = (file: string, declared: number, conditional: number, reasons: string[] = []) => record(file, { skips: { declared, conditional, reasons } });
+
+  it('adds the Skipped cases header line with totals and the number of files', () => {
+    const md = renderMarkdown(report({ files: [skipped('tests/a.test.ts', 1, 3, ['no network']), skipped('tests/b.test.ts', 2, 0), record('tests/c.test.ts')] }));
+    expect(md).toContain('- Skipped cases: 3 declared, 3 conditional in 2 files');
+    expect(md.indexOf('- Skipped cases')).toBeLessThan(md.indexOf('How to read this'));
+  });
+
+  it('prints the one-file form exactly', () => {
+    expect(renderMarkdown(report({ files: [skipped('tests/a.test.ts', 1, 3, ['no network'])] }))).toContain('- Skipped cases: 1 declared, 3 conditional in 1 files');
+  });
+
+  it('leaves the header line and the section out when nothing is skipped', () => {
+    const md = renderMarkdown(report({ files: [record('tests/a.test.ts')] }));
+    expect(md).not.toContain('Skipped cases');
+    expect(md).not.toContain('## Skips');
+  });
+
+  it('lists reasons in a Skips section, at most three per file', () => {
+    const md = renderMarkdown(report({ files: [skipped('tests/a.test.ts', 0, 4, ['r1', 'r2', 'r3', 'r4'])] }));
+    const listed = section(md, 'Skips');
+    expect(listed).toContain('tests/a.test.ts');
+    for (const reason of ['r1', 'r2', 'r3']) expect(listed).toContain(reason);
+    expect(listed).not.toContain('r4');
+  });
+
+  it('lists at most 20 files and counts the rest', () => {
+    const files = Array.from({ length: 23 }, (_, i) => skipped(`tests/f${String(i).padStart(2, '0')}.test.ts`, 1, 0, [`why ${i}`]));
+    const listed = section(renderMarkdown(report({ files })), 'Skips');
+    expect(listed.match(/^- tests\//gm)).toHaveLength(20);
+    expect(listed).toContain('3 more');
+  });
+
+  it('shows a file that has skips but no reason', () => {
+    expect(section(renderMarkdown(report({ files: [skipped('tests/a.test.ts', 2, 0)] })), 'Skips')).toContain('tests/a.test.ts');
+  });
+
+  it('is unchanged for a scan of the clean fixture', () => {
+    const md = renderMarkdown(scan(join(FIXTURES, 'clean'), { commitLimit: 1 }));
+    expect(md).not.toContain('Skipped cases');
+    expect(md).not.toContain('## Skips');
+    expect(md).not.toContain('## No direct assertions');
+  });
+
+  it('names the planted test in the bloated fixture report', () => {
+    const md = renderMarkdown(scan(join(FIXTURES, 'bloated'), { commitLimit: 1 }));
+    expect(section(md, 'No direct assertions')).toContain('tests/misc/invoice.test.ts: "creates an invoice without throwing" (line 5)');
+    expect(md).not.toContain('Skipped cases');
   });
 });

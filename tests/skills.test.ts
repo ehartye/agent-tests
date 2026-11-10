@@ -155,6 +155,49 @@ describe('skills', () => {
     expect(load('test-strategy').body).toContain('managed home');
   });
 
+  describe('references/scan-rules.md', () => {
+    const rules = readFileSync(join(ROOT, 'references', 'scan-rules.md'), 'utf8');
+    const PATHS_SENTENCE = 'A paths filter is a trigger, not an ownership list; the scan does not map workflow steps to test files.';
+
+    it.each(['worktree.shared-tmp', 'worktree.fixed-db-file', 'no-direct-assertions', 'frequency.ci-on-push'])('documents %s', rule => {
+      expect(rules).toContain(rule);
+    });
+
+    it('documents the skip fields and the report sections they feed', () => {
+      for (const word of ['skips', 'noAssertionTests', 'No direct assertions', 'Skipped cases']) expect(rules).toContain(word);
+    });
+
+    it('says a paths filter is a trigger, not an ownership list', () => {
+      expect(rules).toContain(PATHS_SENTENCE);
+    });
+
+    it('describes the final behavior, not the first draft', () => {
+      expect(rules).not.toContain('at most 5 per file');
+      expect(rules).toContain('name-based');
+      expect(rules).toContain('template literal');
+      expect(rules).toContain('same join');
+      expect(rules).toContain('more files (see the JSON noAssertionTests)');
+    });
+
+    it('says the unresolved-path note means no earlier mkdtemp assignment', () => {
+      expect(rules).toContain('no earlier assignment');
+      expect(rules).not.toContain('is not assigned from `mkdtemp` in this file');
+    });
+
+    it('documents that a skip call with a bare-reference handler reads as a conditional skip', () => {
+      expect(rules).toContain('bare reference');
+      expect(rules).toContain('test.skip(title)');
+    });
+
+    it('keeps the workflow advice that says reporting may be equivalent', () => {
+      expect(load('test-audit').body).toContain('or equivalent reporting');
+    });
+
+    it('says the same in the test-audit skill', () => {
+      expect(load('test-audit').body).toContain(PATHS_SENTENCE);
+    });
+  });
+
   it.each(['test-audit', 'test-strategy'])('%s preserves publication, platform obligations and current owner policy in CI advice', name => {
     const body = load(name).body;
     expect(body).toMatch(/preserve[^\n]*publication/i);

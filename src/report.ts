@@ -12,6 +12,10 @@ export const DEFAULT_MAX_PER_RULE = 30;
 const MAX_EVIDENCE = 160;
 const MAX_UNPARSED_LISTED = 10;
 const MAX_RULES_PER_ROW = 4;
+/** The No direct assertions section names at most this many tests per file and lists this many files; the Skips section lists at most as many files. */
+const MAX_NAMED_PER_FILE = 5;
+const MAX_LISTED_FILES = 20;
+const MAX_SKIP_REASONS_PER_FILE = 3;
 /** Only the first rows of the table spell out their shared title words. */
 const MAX_OVERLAP_ROWS = 5;
 
@@ -58,6 +62,8 @@ function ruleCounts(file: TestFileRecord): Array<[string, number]> {
   for (const finding of file.findings) counts.set(finding.rule, (counts.get(finding.rule) ?? 0) + 1);
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || compare(a[0], b[0]));
 }
+
+const skipTotal = (file: TestFileRecord): number => (file.skips?.declared ?? 0) + (file.skips?.conditional ?? 0);
 
 const isUnparsed = (file: TestFileRecord): boolean => file.flags.includes('unparsed');
 const hasOpaqueRegistration = (file: TestFileRecord): boolean => file.findings.some(finding => finding.rule === 'wiring.opaque-test-registration');
@@ -135,6 +141,12 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
     if (unparsed.length > MAX_UNPARSED_LISTED) listed.push(`+${unparsed.length - MAX_UNPARSED_LISTED} more`);
     out.push(`- Unparsed files: ${unparsed.length}. The tool could not read their structure, so read them directly: ${listed.join(', ')}`);
   }
+  const skipFiles = report.files.filter(file => file.skips).sort((a, b) => skipTotal(b) - skipTotal(a) || compare(a.file, b.file));
+  if (skipFiles.length > 0) {
+    const declared = skipFiles.reduce((sum, file) => sum + file.skips!.declared, 0);
+    const conditional = skipFiles.reduce((sum, file) => sum + file.skips!.conditional, 0);
+    out.push(`- Skipped cases: ${declared} declared, ${conditional} conditional in ${skipFiles.length} files`);
+  }
   out.push(
     '',
     '**How to read this.** Findings are evidence, not verdicts: judge each one against the risk map and the test itself.',
@@ -176,6 +188,28 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
     const findings = omitted.reduce((sum, file) => sum + file.findings.length, 0);
     const none = omitted.filter(file => file.findings.length === 0).length;
     out.push('', `${omitted.length} more files omitted (${findings} findings, ${none} with none); the full data is in the JSON from the scan command.`);
+  }
+
+  // Every flagged file, not only those in the table: table order first, then the files the table cut, by path.
+  const named = [...shown, ...omitted.slice().sort((a, b) => compare(a.file, b.file))].filter(file => (file.noAssertionTests?.length ?? 0) > 0);
+  if (named.length > 0) {
+    out.push('', '## No direct assertions', '', 'These tests make no assertion of their own, and a helper they call may. Read each before treating it as empty.');
+    for (const file of named.slice(0, MAX_LISTED_FILES)) {
+      const tests = file.noAssertionTests!;
+      for (const test of tests.slice(0, MAX_NAMED_PER_FILE)) out.push(`- ${flat(file.file)}: "${flat(test.name)}" (line ${test.line})`);
+      if (tests.length > MAX_NAMED_PER_FILE) out.push(`- ${flat(file.file)}: and ${tests.length - MAX_NAMED_PER_FILE} more`);
+    }
+    if (named.length > MAX_LISTED_FILES) out.push(`- +${named.length - MAX_LISTED_FILES} more files (see the JSON noAssertionTests)`);
+  }
+
+  if (skipFiles.length > 0) {
+    out.push('', '## Skips', '', 'A declared skip never runs; a conditional skip runs only when its condition allows it. Counts are tests, and a reason is the first string in a skip call.');
+    for (const file of skipFiles.slice(0, MAX_LISTED_FILES)) {
+      const { declared, conditional, reasons } = file.skips!;
+      const why = reasons.length > 0 ? `; reasons: ${reasons.slice(0, MAX_SKIP_REASONS_PER_FILE).map(reason => `"${flat(reason)}"`).join(', ')}` : '';
+      out.push(`- ${flat(file.file)}: ${declared} declared, ${conditional} conditional${why}`);
+    }
+    if (skipFiles.length > MAX_LISTED_FILES) out.push(`- +${skipFiles.length - MAX_LISTED_FILES} more files (see the scan JSON)`);
   }
 
   if (report.clusters.length > 0) {

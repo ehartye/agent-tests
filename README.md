@@ -39,9 +39,10 @@ when needed to discover updated skills.
 
 1. Redundant coverage: test files sharing a subject, repeated seed sweeps, duplicate titles.
 2. Compat, legacy and fallback tests, judged against who actually consumes the code.
-3. Tests that break beside a second worktree or from another working directory: fixed ports, fixed or timestamp-named temp or database paths (`worktree.timestamp-tmp-path`), absolute paths, reads of `.git`, writes under `process.cwd()` (`worktree.cwd-write`) and repository files located from it (`worktree.cwd-locate`). These are review hints, not verdicts; file-system pollution is a minority cause of flakiness in the measured studies.
+3. Tests that break beside a second worktree or from another working directory: fixed ports, fixed or timestamp-named temp or database paths (`worktree.shared-tmp`, `worktree.fixed-db-file`, `worktree.timestamp-tmp-path`; a database file inside a `mkdtemp` directory the file made is quiet, one in an untraced directory is flagged with a note), absolute paths, reads of `.git`, writes under `process.cwd()` (`worktree.cwd-write`) and repository files located from it (`worktree.cwd-locate`). These are review hints, not verdicts; file-system pollution is a minority cause of flakiness in the measured studies.
 4. Tests not tied to a risk tier or lane, tests with a subject no risk-map area covers (`wiring.unmapped-subject`), and critical areas nobody tests.
 5. Tests that run too often: full suites in hooks or builds, watch-mode test scripts, CI on every push, Windows and macOS matrices on the push path.
+6. Tests that may assert nothing, named by title and line (`no-direct-assertions`), and skipped cases, declared or conditional, with their reasons. A workflow `paths:` filter is a trigger, not an ownership list; the scan does not map workflow steps to test files.
 
 The CLI gathers evidence and never judges. The skill's rubric turns evidence into verdicts: keep, demote, merge, rewrite,
 quarantine or delete.
@@ -143,6 +144,8 @@ are sampled, but action/refusal/fallback counters are always collected; omitted 
 Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
+
+Version 0.11.0 makes four audit-scan rules say what they found and stop flagging safe code. `no-direct-assertions` now names the tests (`noAssertionTests`), and declared skips are exempt from it. Skipped cases are reported, declared and conditional, with `ctx.skip` reasons; a Playwright-style `test.skip(cond, reason)` inside a test body is a conditional skip, not a test. `worktree.shared-tmp` no longer flags object-property data rows or absence checks, and `worktree.fixed-db-file` is quiet when the file is joined to a directory the file made with `mkdtemp`, and otherwise carries a note that path uniqueness is unresolved. The path-filter CI finding now says a `paths:` filter is a trigger, not an ownership list. See [scan rules](references/scan-rules.md).
 
 Version 0.10.1 puts managed-runtime readiness first in the test-strategy skill and states what setup writes: the missing-runtime message now names the managed home and says setup never writes in the project or the plugin, and the skills say a read-only review may run setup unless its brief forbids installs or network access.
 

@@ -68,6 +68,41 @@ describe('detectWorktreeHazards tuning', () => {
     it('still flags a fixed name under tmpdir()', () => {
       expect(rules(run("const dir = join(tmpdir(), 'shared');"))).toEqual(['worktree.shared-tmp']);
     });
+
+    it.each([
+      ["writeFileSync('/tmp/out.log', x);"],
+      ["const dir = '/tmp/work';"],
+      ['mkdirSync("/tmp/fixed");'],
+      ["const dir = join(tmpdir(), 'fixed');"],
+      ["'/tmp/assets',"],
+      ["spawn(cmd, { cwd: '/tmp/work' });"],
+      ["const a = cond ? '/tmp/a' : b;"],
+    ])('still flags %s', line => {
+      expect(rules(run(line))).toEqual(['worktree.shared-tmp']);
+    });
+
+    it('flags the literal line of a multi-line call argument', () => {
+      const found = run('writeFileSync(', "  '/tmp/out.log',", '  data);');
+      expect(found.map(finding => [finding.rule, finding.line])).toEqual([['worktree.shared-tmp', 2]]);
+    });
+
+    it.each([
+      ["{ path: '/tmp/assets' },"],
+      ["path: '/tmp/assets',"],
+      ['  { "path": "/tmp/assets" }'],
+      ["{ path: '/tmp/assets' }"],
+      ["expect(existsSync('/tmp/gone')).toBe(false);"],
+      ["expect(fs.existsSync('/tmp/gone')).toBeFalsy();"],
+      ["expect(existsSync('/tmp/gone')).not.toBe(true);"],
+      ["assert.ok(!existsSync('/tmp/gone'));"],
+      ["assert.equal(existsSync('/tmp/gone'), false);"],
+    ])('stays quiet for a data row or an absence check: %s', line => {
+      expect(run(line)).toEqual([]);
+    });
+
+    it('stays flagged when an existence check expects the path to be there', () => {
+      expect(rules(run("expect(existsSync('/tmp/there')).toBe(true);"))).toEqual(['worktree.shared-tmp']);
+    });
   });
 
   describe('fixed-db-file', () => {
@@ -82,6 +117,87 @@ describe('detectWorktreeHazards tuning', () => {
       expect(run("const db = 'tests/fixtures/app.sqlite';")).toEqual([]);
       expect(run("expect(extname(file)).toBe('.db');")).toEqual([]);
       expect(run("const db = ':memory:';")).toEqual([]);
+    });
+
+    it.each([
+      ["const runDir = mkdtempSync(join(tmpdir(), 'run-'));"],
+      ["const runDir = await mkdtemp(join(tmpdir(), 'run-'));"],
+      ["const runDir = fs.mkdtempSync(join(os.tmpdir(), 'run-'));"],
+      ["const runDir: string = realpathSync(mkdtempSync(join(tmpdir(), 'run-')));"],
+      ["let runDir;\nrunDir = await fsp.mkdtemp(prefix);"],
+    ])('is quiet for a file joined to a directory made by mkdtemp: %s', setup => {
+      const between = ['const other = 1;', 'const more = 2;'];
+      const code = [...setup.split('\n'), ...between];
+      expect(run(...code, "const db = new DatabaseSync(join(runDir, 'run.sqlite'));")).toEqual([]);
+      expect(run(...code, "const db = path.join(runDir, 'sub', 'run.db');")).toEqual([]);
+      expect(run(...code, 'const db = `${runDir}/run.sqlite`;')).toEqual([]);
+    });
+
+    it.each([
+      ['a made directory named in a string literal', 'tmp', "const db = new Database('tmp.sqlite');"],
+      ['a made directory used for another argument, not joined to the file', 'tmp', "copyFileSync(join(tmp, 'seed'), 'shared.sqlite');"],
+      ['a made directory whose name is the first segment of a fixed path', 'data', "const db = 'data/app.db';"],
+      ['a made directory joined to a different call than the file', 'tmp', "const db = [join(tmp, 'a'), join(root, 'x.sqlite')];"],
+      ['a made directory only closing a nested join', 'tmp', "const db = join(join(tmp, 'a'), 'x.sqlite');"],
+    ])('stays flagged for %s', (_label, made, line) => {
+      const setup = [`const ${made} = mkdtempSync(join(tmpdir(), 'run-'));`, 'const a = 1;', 'const b = 2;'];
+      expect(rules(run(...setup, line))).toEqual(['worktree.fixed-db-file']);
+    });
+
+    it('goes quiet only when the made directory is an argument of the join that holds the file name', () => {
+      const setup = ["const tmp = mkdtempSync(join(tmpdir(), 'run-'));", 'const a = 1;', 'const b = 2;'];
+      expect(run(...setup, "const db = join(tmp, 'x.sqlite');")).toEqual([]);
+      expect(run(...setup, "const db = path.join(tmp, 'sub', 'x.sqlite');")).toEqual([]);
+      expect(run(...setup, "const db = resolve(root, tmp, 'x.db');")).toEqual([]);
+      const [mixed] = run(...setup, "const db = join(dir, tmp, 'x.sqlite');");
+      expect(mixed).toBeUndefined();
+    });
+
+    it('keeps flagging fixed names, whatever the file made', () => {
+      const made = ["const runDir = mkdtempSync(join(tmpdir(), 'run-'));", 'const a = 1;', 'const b = 2;'];
+      expect(rules(run(...made, "const db = 'test.sqlite';"))).toEqual(['worktree.fixed-db-file']);
+      expect(rules(run(...made, "const db = 'data/app.db';"))).toEqual(['worktree.fixed-db-file']);
+      expect(run(...made, "const db = 'test.sqlite';")[0]?.note).toBeUndefined();
+    });
+
+    it('does not trust an identifier that is only used, not assigned from mkdtemp', () => {
+      const found = run("const dir = join(root, 'out');", 'const a = 1;', 'const b = 2;', "const db = join(dir, 'x.sqlite');");
+      expect(found.map(finding => [finding.rule, finding.line])).toEqual([['worktree.fixed-db-file', 4]]);
+      expect(found[0]?.note).toMatch(/^Path uniqueness unresolved:/);
+    });
+
+    it('qualifies a finding that joins an untraced identifier with a note naming it', () => {
+      const [parameter] = run('function open(dir: string) {', "  return new DatabaseSync(join(dir, 'x.sqlite'));", '}');
+      expect(parameter?.rule).toBe('worktree.fixed-db-file');
+      expect(parameter?.note).toMatch(/^Path uniqueness unresolved:/);
+      expect(parameter?.note).toContain('dir');
+      const [dotted] = run("const db = path.resolve(opts.dir, 'x.db');");
+      expect(dotted?.note).toMatch(/^Path uniqueness unresolved:.*opts\.dir/);
+    });
+
+    it('words the note as no earlier assignment, since only earlier lines are traced', () => {
+      const found = run(
+        'async function open(dir: string) {',
+        "  return new DatabaseSync(join(dir, 'x.sqlite'));",
+        '}',
+        'beforeEach(async () => {',
+        "  dir = await mkdtemp(join(tmpdir(), 'run-'));",
+        '});',
+      );
+      expect(found).toHaveLength(1);
+      expect(found[0]?.note).toMatch(/^Path uniqueness unresolved: dir has no earlier assignment from mkdtemp in this file/);
+      expect(found[0]?.note).not.toContain('is not assigned');
+    });
+
+    it('names an untraced identifier even when the file made some other directory', () => {
+      const [finding] = run("const runDir = mkdtempSync(join(tmpdir(), 'run-'));", 'const a = 1;', 'const b = 2;', "const db = join(dir, 'x.sqlite');");
+      expect(finding?.note).toMatch(/^Path uniqueness unresolved:.*\bdir\b/);
+    });
+
+    it('adds no note when no identifier is joined', () => {
+      expect(run("const db = join(tmpdir(), 'x.sqlite');")[0]?.note).toBeUndefined();
+      expect(run("const db = join(__dirname, 'x.sqlite');")[0]?.note).toBeUndefined();
+      expect(run("const db = 'App.SQLite';")[0]?.note).toBeUndefined();
     });
   });
 

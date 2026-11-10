@@ -382,3 +382,176 @@ describe('declaredSubjects', () => {
     expect(declaredSubjects(tree(), ['../../x', '../x.ts', join(outside, 'x.ts'), 'src', 'tests/b.test.ts', 'tests/helpers/tree.ts', 'src/missing.ts'])).toEqual([]);
   });
 });
+
+describe('parseTestFile skipped cases', () => {
+  const skipFacts = (source: string) => parseTestFile('skips.test.ts', source).tests.map(test => ({ name: test.name, skipped: test.skipped, conditional: test.conditional, bodySkip: test.bodySkip, skipReasons: test.skipReasons }));
+
+  it('records a declared skip, a conditional declaration and a plain test apart', () => {
+    const facts = skipFacts([
+      "it('plain', () => {});",
+      "it.skip('declared', () => {});",
+      "test.skip('declared too', () => {});",
+      "it.skipIf(offline)('conditional', () => {});",
+      "it.runIf(online)('also conditional', () => {});",
+    ].join('\n'));
+    expect(facts.map(fact => [fact.name, fact.skipped, fact.conditional, fact.bodySkip])).toEqual([
+      ['plain', false, false, false],
+      ['declared', true, false, false],
+      ['declared too', true, false, false],
+      ['conditional', false, true, false],
+      ['also conditional', false, true, false],
+    ]);
+  });
+
+  it('records a body that calls the context skip, whatever the first parameter is called', () => {
+    const facts = skipFacts([
+      "it('ctx', ctx => { ctx.skip('no network'); });",
+      "it('context', async (context) => { context.skip('no network'); });",
+      "it('t', function (t) { t.skip('no network'); });",
+      "it('destructured', ({ skip }) => { skip('no network'); });",
+      "it('renamed', ({ skip: bail }) => { bail('no network'); });",
+      "it('expression body', t => t.skip('no network'));",
+    ].join('\n'));
+    expect(facts.map(fact => [fact.name, fact.bodySkip, fact.skipReasons])).toEqual([
+      ['ctx', true, ['no network']],
+      ['context', true, ['no network']],
+      ['t', true, ['no network']],
+      ['destructured', true, ['no network']],
+      ['renamed', true, ['no network']],
+      ['expression body', true, ['no network']],
+    ]);
+  });
+
+  it('takes the first string-literal argument as the reason and allows none', () => {
+    const facts = skipFacts([
+      "it('bare', ctx => { ctx.skip(); });",
+      "it('condition first', ctx => { ctx.skip(isCI, 'flaky on CI'); });",
+      "it('template', ctx => { ctx.skip(`plain`); });",
+      "it('dynamic', ctx => { ctx.skip(reason); });",
+    ].join('\n'));
+    expect(facts.map(fact => [fact.name, fact.bodySkip, fact.skipReasons])).toEqual([
+      ['bare', true, []],
+      ['condition first', true, ['flaky on CI']],
+      ['template', true, ['plain']],
+      ['dynamic', true, []],
+    ]);
+  });
+
+  it('ignores skip on anything but the context, and a skip in a different test', () => {
+    const facts = skipFacts([
+      "it('other object', ctx => { other.skip('x'); ctx.log('y'); });",
+      "it('not a skip', ctx => { ctx.skipped('x'); });",
+      "it('clean', ctx => { expect(ctx).toBeDefined(); });",
+      "it('no parameter', () => { skip('x'); });",
+    ].join('\n'));
+    expect(facts.map(fact => fact.bodySkip)).toEqual([false, false, false, false]);
+  });
+
+  it('does not read the first parameter of an each callback as the context', () => {
+    const facts = skipFacts("it.each([1])('row %s', row => { row.skip('x'); });");
+    expect(facts.map(fact => fact.bodySkip)).toEqual([false]);
+  });
+
+  it('counts a test once however many skip calls its body makes', () => {
+    const facts = skipFacts("it('twice', ctx => { if (a) ctx.skip('one'); if (b) ctx.skip('two'); });");
+    expect(facts).toEqual([{ name: 'twice', skipped: false, conditional: false, bodySkip: true, skipReasons: ['one', 'two'] }]);
+  });
+
+  it('keeps a skipped stub declared-skipped', () => {
+    const facts = skipFacts("it.skip('later', () => {});");
+    expect(facts).toEqual([{ name: 'later', skipped: true, conditional: false, bodySkip: false, skipReasons: [] }]);
+  });
+});
+
+describe('parseTestFile Playwright-style conditional skips', () => {
+  it('does not parse test.skip(condition, reason) in a body as a new test and attributes it to that test', () => {
+    const parsed = parseTestFile('pw.test.ts', [
+      "test('flaky', async ({ page }) => {",
+      "  test.skip(isCI, 'flaky on CI');",
+      '  await expect(page).toHaveTitle(/x/);',
+      '});',
+    ].join('\n'));
+    expect(parsed.tests.map(test => test.name)).toEqual(['flaky']);
+    expect(parsed.titles.map(title => title.text)).toEqual(['flaky']);
+    expect(parsed.tests[0]).toMatchObject({ skipped: false, conditional: false, bodySkip: true, skipReasons: ['flaky on CI'] });
+    expect(parsed.tests[0]!.assertions).toBe(1);
+  });
+
+  it('accepts a function condition or a bare condition, and counts each test once', () => {
+    const parsed = parseTestFile('pw.test.ts', [
+      "test('a', async () => { test.skip(({ browserName }) => browserName === 'firefox', 'no firefox'); });",
+      "test('b', async () => { test.skip(process.platform === 'win32'); test.skip(true, 'never'); });",
+    ].join('\n'));
+    expect(parsed.tests.map(test => [test.name, test.bodySkip, test.skipReasons])).toEqual([
+      ['a', true, ['no firefox']],
+      ['b', true, ['never']],
+    ]);
+  });
+
+  it('treats a dynamic reason or a template reason as a skip, not as a test, and invents no reason', () => {
+    const parsed = parseTestFile('pw.test.ts', [
+      "test('a', async () => { test.skip(isCI, `flaky on ${os}`); });",
+      "test('b', async () => { test.skip(isCI, REASON); });",
+      "test('c', async () => { test.skip(isCI, `plain reason`); });",
+      "test('d', async () => { it.skip(isCI, reasons.ci); });",
+    ].join('\n'));
+    expect(parsed.tests.map(test => [test.name, test.skipped, test.bodySkip, test.skipReasons])).toEqual([
+      ['a', false, true, []],
+      ['b', false, true, []],
+      ['c', false, true, ['plain reason']],
+      ['d', false, true, []],
+    ]);
+    expect(parsed.titles.map(title => title.text)).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('counts a suite-level skip with a dynamic reason as a suite skip with no reason', () => {
+    const parsed = parseTestFile('pw.test.ts', "describe('s', () => {\n  test.skip(isCI, REASON);\n  test('a', () => {});\n});");
+    expect(parsed.tests.map(test => test.name)).toEqual(['a']);
+    expect(parsed.suiteSkips).toEqual([{}]);
+  });
+
+  it('keeps a string title, or a function second argument, as a declaration', () => {
+    const parsed = parseTestFile('pw.test.ts', "test.skip('title', 'not a reason', () => {});\ntest.skip(title, function () {});\ntest.skip(title, () => {});");
+    expect(parsed.tests.map(test => test.skipped)).toEqual([true, true, true]);
+  });
+
+  it('counts a skip outside any test as a suite skip, not as a test', () => {
+    const parsed = parseTestFile('pw.test.ts', [
+      "describe('suite', () => {",
+      "  test.skip(isCI, 'suite is slow on CI');",
+      "  test('a', () => {});",
+      '});',
+    ].join('\n'));
+    expect(parsed.tests.map(test => test.name)).toEqual(['a']);
+    expect(parsed.suiteSkips).toEqual([{ reason: 'suite is slow on CI' }]);
+  });
+
+  it('still reads test.skip(title, body) as a declaration, even with a dynamic title', () => {
+    const parsed = parseTestFile('pw.test.ts', "test.skip(title, async () => {});\nit.skip(`a ${b}`, () => {});");
+    expect(parsed.tests.map(test => test.skipped)).toEqual([true, true]);
+    expect(parsed.suiteSkips).toBeUndefined();
+  });
+});
+
+describe('parseTestFile attributes assertions to the right test', () => {
+  it('gives it.each rows and nested describe tests only their own assertions', () => {
+    const parsed = parseTestFile('attribute.test.ts', [
+      "describe('outer', () => {",
+      "  it('before', () => { run(); });",
+      "  it.each([1, 2])('row %s', value => { expect(value).toBeGreaterThan(0); });",
+      "  describe('inner', () => {",
+      "    it('nested asserts', () => { expect(1).toBe(1); expect(2).toBe(2); });",
+      "    it.each`a | b\n${1} | ${2}`('tagged %s', () => { run(); });",
+      '  });',
+      "  it('after', () => { run(); });",
+      '});',
+    ].join('\n'));
+    expect(parsed.tests.map(test => [test.name, test.assertions])).toEqual([
+      ['before', 0],
+      ['row %s', 1],
+      ['nested asserts', 2],
+      ['tagged %s', 0],
+      ['after', 0],
+    ]);
+  });
+});

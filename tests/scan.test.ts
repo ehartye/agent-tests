@@ -13,6 +13,7 @@ const expected = JSON.parse(readFileSync(join(FIXTURES, 'bloated', 'expected.jso
   findings: Array<{ rule: string; file: string }>;
   flags: Record<string, string[]>;
   clusters: Array<{ subject: string; files: string[] }>;
+  noAssertionTests: Record<string, Array<{ name: string; line: number }>>;
 };
 
 const everyFinding = (report: EvidenceReport) => [...report.files.flatMap(file => file.findings), ...report.projectFindings];
@@ -94,6 +95,10 @@ describe('scan of the clean fixture', () => {
   it('reports no findings and no flags', () => {
     expect(everyFinding(report)).toEqual([]);
     expect(report.files.flatMap(file => file.flags)).toEqual([]);
+  });
+
+  it('adds neither noAssertionTests nor skips to any record', () => {
+    for (const file of report.files) expect(Object.keys(file)).toEqual(['file', 'tests', 'assertions', 'flags', 'subjects', 'tags', 'tier', 'area', 'cost', 'findings']);
   });
 
   it('still tiers every file', () => {
@@ -292,5 +297,110 @@ describe('wiring.unmapped-subject in a scan', () => {
     expect(orphan.tier).toBeNull();
     expect(orphan.findings.find(finding => finding.rule === 'wiring.untiered')!.evidence).toBe('src/other/y.ts');
     expect(orphan.findings.some(finding => finding.rule === 'wiring.unmapped-subject')).toBe(false);
+  });
+});
+
+describe('scan names the tests with no direct assertions', () => {
+  const fileOf = (source: string) => scan(makeTree({ 'tests/a.test.ts': source }), { commitLimit: 1 }).files[0]!;
+
+  it('lists the test, its line and the flag, next to an asserting sibling', () => {
+    const file = fileOf("it('does nothing', () => {\n  run();\n});\nit('checks', () => { expect(1).toBe(2); });\n");
+    expect(file.flags).toContain('no-direct-assertions');
+    expect(file.noAssertionTests).toEqual([{ name: 'does nothing', line: 1 }]);
+    expect(file.skips).toBeUndefined();
+  });
+
+  it('has no noAssertionTests key without the flag, and no skips key without a skip', () => {
+    const file = fileOf("it('checks', () => { expect(1).toBe(2); });\nit.todo('later');\n");
+    expect(file.flags).toEqual([]);
+    expect(Object.keys(file)).not.toContain('noAssertionTests');
+    expect(Object.keys(file)).not.toContain('skips');
+  });
+
+  it('keeps every name, each cut to 80 characters, in file order', () => {
+    const long = 'x'.repeat(120);
+    const source = [...Array.from({ length: 8 }, (_, i) => `it('${i === 0 ? long : `bare ${i}`}', () => { run(); });`)].join('\n');
+    const file = fileOf(source);
+    expect(file.noAssertionTests).toHaveLength(8);
+    expect(file.noAssertionTests![0]).toEqual({ name: 'x'.repeat(80), line: 1 });
+    expect(file.noAssertionTests!.map(entry => entry.line)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it('does not name a declared skip, a todo, or a test that asserts', () => {
+    const file = fileOf("it.skip('later', () => {});\nit.todo('soon');\nit('asserts', () => { expect(1).toBe(2); });\n");
+    expect(file.flags).toEqual([]);
+    expect(file.noAssertionTests).toBeUndefined();
+  });
+
+  it('still names a conditionally declared test that asserts nothing', () => {
+    const file = fileOf("it.skipIf(offline)('checks nothing', () => { run(); });\n");
+    expect(file.noAssertionTests).toEqual([{ name: 'checks nothing', line: 1 }]);
+  });
+
+  it('survives a schema parse', () => {
+    const report = scan(makeTree({ 'tests/a.test.ts': "it('bare', () => { run(); });\nit.skip('s', () => {});\n" }), { commitLimit: 1 });
+    expect(EvidenceReport.parse(report).files[0]).toMatchObject({ noAssertionTests: [{ name: 'bare', line: 1 }], skips: { declared: 1, conditional: 0, reasons: [] } });
+  });
+});
+
+describe('scan reports skipped cases', () => {
+  const fileOf = (source: string) => scan(makeTree({ 'tests/a.test.ts': source }), { commitLimit: 1 }).files[0]!;
+
+  it('counts tests, not calls: declared, conditional declarations and a context skip', () => {
+    const file = fileOf([
+      "it.skip('declared', () => { expect(1).toBe(2); });",
+      "it.skipIf(c)('skip if', () => { expect(1).toBe(2); });",
+      "it.runIf(c)('run if', () => { expect(1).toBe(2); });",
+      "it('ctx', ctx => { ctx.skip('no network'); ctx.skip('no network'); expect(1).toBe(2); });",
+    ].join('\n'));
+    expect(file.skips).toEqual({ declared: 1, conditional: 3, reasons: ['no network'] });
+  });
+
+  it('reads context.skip, t.skip and a destructured skip the same way', () => {
+    for (const body of ["context => { context.skip('no network'); }", "t => { t.skip('no network'); }", "({ skip }) => { skip('no network'); }"]) {
+      expect(fileOf(`it('x', ${body});`).skips).toEqual({ declared: 0, conditional: 1, reasons: ['no network'] });
+    }
+  });
+
+  it('counts a Playwright-style skip in a body as one conditional skip, not as a test', () => {
+    const file = fileOf("test('page', async () => {\n  test.skip(isCI, 'flaky on CI');\n  expect(1).toBe(2);\n});\n");
+    expect(file.tests).toBe(1);
+    expect(file.skips).toEqual({ declared: 0, conditional: 1, reasons: ['flaky on CI'] });
+    expect(file.flags).toEqual([]);
+  });
+
+  it('counts a suite-level Playwright skip as a conditional skip', () => {
+    const file = fileOf("describe('s', () => {\n  test.skip(isCI, 'slow on CI');\n  test('a', () => { expect(1).toBe(2); });\n});\n");
+    expect(file.tests).toBe(1);
+    expect(file.skips).toEqual({ declared: 0, conditional: 1, reasons: ['slow on CI'] });
+  });
+
+  it('keeps at most three distinct reasons of 80 characters', () => {
+    const file = fileOf(['a', 'b', 'c', 'd', 'a'].map((reason, i) => `it('t${i}', t => { t.skip('${i === 0 ? 'a'.repeat(100) : reason}'); expect(1).toBe(2); });`).join('\n'));
+    expect(file.skips?.conditional).toBe(5);
+    expect(file.skips?.reasons).toEqual(['a'.repeat(80), 'b', 'c']);
+  });
+
+  it('counts a Playwright-style skip with a dynamic reason as a skip with no reason', () => {
+    const file = fileOf("test('page', async () => {\n  test.skip(isCI, `flaky on ${os}`);\n  test.skip(isCI, REASON);\n  expect(1).toBe(2);\n});\n");
+    expect(file.tests).toBe(1);
+    expect(file.skips).toEqual({ declared: 0, conditional: 1, reasons: [] });
+  });
+
+  it('counts a skip with no reason and leaves the reasons empty', () => {
+    expect(fileOf("it('x', t => { t.skip(); expect(1).toBe(2); });").skips).toEqual({ declared: 0, conditional: 1, reasons: [] });
+  });
+
+  it('keeps a file with no skip free of both new keys, so its JSON is unchanged', () => {
+    const file = fileOf("it('checks', () => { expect(1).toBe(2); });");
+    expect(JSON.parse(JSON.stringify(file))).not.toHaveProperty('skips');
+    expect(JSON.parse(JSON.stringify(file))).not.toHaveProperty('noAssertionTests');
+  });
+
+  it('adds only the legitimate new entries to the bloated fixture', () => {
+    const files = scan(join(FIXTURES, 'bloated'), { commitLimit: 1 }).files;
+    const withNames = Object.fromEntries(files.filter(file => file.noAssertionTests).map(file => [file.file, file.noAssertionTests]));
+    expect(withNames).toEqual(expected.noAssertionTests);
+    expect(files.filter(file => file.skips)).toEqual([]);
   });
 });
