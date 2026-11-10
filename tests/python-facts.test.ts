@@ -228,11 +228,11 @@ describe('dynamic imports', () => {
 });
 
 describe('opaque registration', () => {
-  const cases: Array<{ title: string; source: string; opaque: Array<{ reason: string; line: number; name?: string }> }> = [
+  const cases: Array<{ title: string; source: string; opaque: Array<{ reason: string; line: number; name?: string; module?: string; level?: number }> }> = [
     { title: 'a module-level load_tests', source: py('import unittest', '', 'def load_tests(loader, tests, pattern):', '    return tests'), opaque: [{ reason: 'load_tests', line: 3, name: 'load_tests' }] },
     { title: 'a nested or method load_tests is not opaque', source: py('class A:', '    def load_tests(self): pass', 'def f():', '    def load_tests(): pass'), opaque: [] },
-    { title: 'imported Test*, *Test and *TestCase names, absolute and relative', source: py('from pkg.base import TestFoo', 'from .shared import BarTest, Helper', 'from unittest import TestCase', 'from . import SomeTestCase'), opaque: [{ reason: 'imported-test-class', line: 1, name: 'TestFoo' }, { reason: 'imported-test-class', line: 2, name: 'BarTest' }, { reason: 'imported-test-class', line: 3, name: 'TestCase' }, { reason: 'imported-test-class', line: 4, name: 'SomeTestCase' }] },
-    { title: 'the bound alias is the name that is matched', source: py('from pkg import Helper as TestHelper', 'from pkg import TestReal as Real'), opaque: [{ reason: 'imported-test-class', line: 1, name: 'TestHelper' }] },
+    { title: 'imported Test*, *Test and *TestCase names, absolute and relative', source: py('from pkg.base import TestFoo', 'from .shared import BarTest, Helper', 'from unittest import TestCase', 'from . import SomeTestCase'), opaque: [{ reason: 'imported-test-class', line: 1, name: 'TestFoo', module: 'pkg.base', level: 0 }, { reason: 'imported-test-class', line: 2, name: 'BarTest', module: 'shared', level: 1 }, { reason: 'imported-test-class', line: 3, name: 'TestCase', module: 'unittest', level: 0 }, { reason: 'imported-test-class', line: 4, name: 'SomeTestCase', module: '', level: 1 }] },
+    { title: 'the bound alias is the name that is matched', source: py('from pkg import Helper as TestHelper', 'from pkg import TestReal as Real'), opaque: [{ reason: 'imported-test-class', line: 1, name: 'TestHelper', module: 'pkg', level: 0 }] },
     { title: 'a function-level import of a Test name is not module-level', source: py('def f():', '    from pkg import TestFoo'), opaque: [] },
     { title: 'non-literal dynamic imports, literal ones are not opaque', source: py('import_module("a")', 'import_module(name)', '__import__(x)'), opaque: [{ reason: 'non-literal-import', line: 2 }, { reason: 'non-literal-import', line: 3 }] },
     { title: 'plain imports and non-matching names are not opaque', source: py('import pytest', 'from pkg import Contest, Retest, Helper, helper_Test_case', 'import pkg.TestThing'), opaque: [] },
@@ -241,6 +241,30 @@ describe('opaque registration', () => {
     const facts = await extractPythonFacts(source);
     expect(facts.hasError).toBe(false);
     expect(facts.opaque).toEqual(opaque);
+  });
+});
+
+describe('module and level of imported test classes', () => {
+  const cases: Array<{ title: string; source: string; opaque: Array<{ line: number; name: string; module: string; level: number }> }> = [
+    { title: 'an absolute dotted module', source: py('from app.m import TestFoo'), opaque: [{ line: 1, name: 'TestFoo', module: 'app.m', level: 0 }] },
+    { title: 'odd spacing around the dots and keywords', source: py('from  app . m  import   TestFoo'), opaque: [{ line: 1, name: 'TestFoo', module: 'app.m', level: 0 }] },
+    { title: 'a backslash-continued from-import', source: py('from app.m \\', '    import TestFoo'), opaque: [{ line: 1, name: 'TestFoo', module: 'app.m', level: 0 }] },
+    { title: 'a parenthesised multi-line import', source: py('from app.m import (', '    Helper,', '    TestFoo,', ')'), opaque: [{ line: 1, name: 'TestFoo', module: 'app.m', level: 0 }] },
+    { title: 'relative level 1 and level 2 with a module', source: py('from .m import X, TestX', 'from ..pkg.m import Y, TestY'), opaque: [{ line: 1, name: 'TestX', module: 'm', level: 1 }, { line: 2, name: 'TestY', module: 'pkg.m', level: 2 }] },
+    { title: 'a relative import without a module', source: py('from . import TestFoo', 'from .. import BarTest'), opaque: [{ line: 1, name: 'TestFoo', module: '', level: 1 }, { line: 2, name: 'BarTest', module: '', level: 2 }] },
+    { title: 'an alias: the bound name is reported, the module is the source module', source: py('from app.m import Foo as TestFoo'), opaque: [{ line: 1, name: 'TestFoo', module: 'app.m', level: 0 }] },
+    { title: 'two matching names on one statement give two entries with the same module', source: py('from app.m import TestA, Helper, BTest'), opaque: [{ line: 1, name: 'TestA', module: 'app.m', level: 0 }, { line: 1, name: 'BTest', module: 'app.m', level: 0 }] },
+    { title: 'a string or comment that looks like another import does not change the module', source: py('from unittest import TestCase; x = "from app.m import y"  # from app.m import y'), opaque: [{ line: 1, name: 'TestCase', module: 'unittest', level: 0 }] },
+  ];
+  it.each(cases)('$title', async ({ source, opaque }) => {
+    const facts = await extractPythonFacts(source);
+    expect(facts.hasError).toBe(false);
+    expect(facts.opaque).toEqual(opaque.map(o => ({ reason: 'imported-test-class', ...o })));
+  });
+
+  it('gives load_tests and non-literal imports no module or level', async () => {
+    const facts = await extractPythonFacts(py('def load_tests(a, b, c): pass', 'import_module(name)'));
+    expect(facts.opaque).toEqual([{ reason: 'load_tests', line: 1, name: 'load_tests' }, { reason: 'non-literal-import', line: 2 }]);
   });
 });
 

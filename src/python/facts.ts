@@ -47,6 +47,10 @@ export interface PythonOpaque {
   line: number;
   /** `load_tests`, or the imported name (its alias if it has one) for an imported test class. */
   name?: string;
+  /** `imported-test-class` only: the module of the from-import, without leading dots (`''` for `from . import X`), read from the parsed statement. */
+  module?: string;
+  /** `imported-test-class` only: the number of leading dots of the from-import; 0 for an absolute one. */
+  level?: number;
 }
 
 export interface PythonFacts {
@@ -280,18 +284,21 @@ function readImports(root: Node): PythonImport[] {
       }
       continue;
     }
-    const moduleNode = node.childForFieldName('module_name');
-    let module = '';
-    let level = 0;
-    if (moduleNode?.type === 'relative_import') {
-      level = (moduleNode.namedChildren.find(child => child.type === 'import_prefix')?.text.match(/\./g) ?? []).length;
-      module = compact(moduleNode.namedChildren.find(child => child.type === 'dotted_name')?.text ?? '');
-    } else if (moduleNode) {
-      module = compact(moduleNode.text);
-    }
-    imports.push({ module, names: importedNames(node), level });
+    imports.push({ ...fromImportSource(node), names: importedNames(node) });
   }
   return imports;
+}
+
+/** The module (without leading dots) and the dot count of an `import_from_statement`, read from its parse. */
+function fromImportSource(node: Node): { module: string; level: number } {
+  const moduleNode = node.childForFieldName('module_name');
+  if (moduleNode?.type === 'relative_import') {
+    return {
+      level: (moduleNode.namedChildren.find(child => child.type === 'import_prefix')?.text.match(/\./g) ?? []).length,
+      module: compact(moduleNode.namedChildren.find(child => child.type === 'dotted_name')?.text ?? ''),
+    };
+  }
+  return { module: moduleNode ? compact(moduleNode.text) : '', level: 0 };
 }
 
 /** The original names of a from-import, with `'*'` for a wildcard. */
@@ -342,8 +349,9 @@ function readDynamicImportsAndOpaque(root: Node): Pick<PythonFacts, 'dynamicImpo
     if (definition?.type === 'function_definition' && definition.childForFieldName('name')?.text === 'load_tests') {
       opaque.push({ reason: 'load_tests', line: line(definition), name: 'load_tests' });
     } else if (node.type === 'import_from_statement') {
+      const source = fromImportSource(node);
       for (const bound of boundNames(node)) {
-        if (TEST_CLASS_NAME.test(bound)) opaque.push({ reason: 'imported-test-class', line: line(node), name: bound });
+        if (TEST_CLASS_NAME.test(bound)) opaque.push({ reason: 'imported-test-class', line: line(node), name: bound, ...source });
       }
     }
   }
