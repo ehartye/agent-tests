@@ -23,3 +23,6 @@ jobs:
           node scripts/setup.js
           node scripts/setup.js --check --json
           node scripts/run-managed.js capabilities
+          node scripts/run-managed.js scan --root tests/fixtures/python-mixed > "$RUNNER_TEMP/scan.json"
+          node -e "const r=JSON.parse(require('fs').readFileSync(process.env.RUNNER_TEMP+'/scan.json','utf8')); const py=r.inventory.languages.find(l=>l.language==='Python'); console.log('python', JSON.stringify(py), 'files', r.files.length); if(!py||py.status!=='supported'||r.files.length<5) process.exit(1)"
+          node scripts/run-managed.js report --root tests/fixtures/python-mixed | head -12
