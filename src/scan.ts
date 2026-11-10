@@ -10,7 +10,7 @@ import { detectPythonRunner, detectRunner, discoverTestInfrastructure, discoverT
 import { declaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile } from './parse.ts';
 import { candidateDirs } from './riskdraft.ts';
 import type { PythonFacts, PythonOpaque } from './python/facts.ts';
-import { createPythonSubjectResolver, facadeScope, mergeScopes, opaqueScope, PYTHON_NOTES } from './python/subjects.ts';
+import { createPythonSubjectResolver, facadeScope, mergeScopes, opaqueScope, PYTHON_NOTES, unparsedNote, type PythonSubjectResolver } from './python/subjects.ts';
 import { workflowPythonFiles } from './python/workflow.ts';
 import { loadRiskMap, tierFor } from './riskmap.ts';
 import { CliError } from './errors.ts';
@@ -160,6 +160,8 @@ interface LoadedPythonFile {
   subjects: string[];
   /** The package `__init__.py` files among the subjects that the file imports through. */
   facades: string[];
+  /** The opaque-registration candidates that count: see `projectOpaque`. */
+  opaque: PythonOpaque[];
   tags: TestFileRecord['tags'];
 }
 
@@ -180,6 +182,24 @@ function pythonLaneOf(facts: PythonFacts): LaneName | undefined {
   return first !== undefined && perTest.every(lanes => lanes.length === 1 && lanes[0] === first) ? (first as LaneName) : undefined;
 }
 
+/** A `from <dots><module> import` clause; a line may hold several (after `;` or a compound statement's colon). */
+const FROM_IMPORT = /\bfrom\s+(\.*)\s*([A-Za-z_][\w.]*)?\s+import\b/g;
+
+/**
+ * The opaque-registration candidates of a file that count. `load_tests` and a non-literal dynamic import always do. An imported test
+ * class counts only when it comes from a project module (the facts record every `from X import Test*` name, the unittest, django and
+ * pytest ones included): its `from` clause is read from the source line the facts give, and the module must resolve to a project
+ * file as a subject would (absolute, under the package roots) or against the test's package directory (relative). A line whose clause
+ * cannot be read is kept, since an unknown source is the incomplete side.
+ */
+function projectOpaque(opaque: readonly PythonOpaque[], lines: readonly string[], testRel: string, resolver: PythonSubjectResolver): PythonOpaque[] {
+  return opaque.filter(entry => {
+    if (entry.reason !== 'imported-test-class') return true;
+    const clauses = [...(lines[entry.line - 1] ?? '').matchAll(FROM_IMPORT)];
+    return clauses.length === 0 || clauses.some(clause => resolver.isProjectModule(testRel, clause[2] ?? '', clause[1]!.length));
+  });
+}
+
 /**
  * Read every Python test file with the facts reader. Like JavaScript, one file that cannot be read or has a syntax error must not stop
  * the scan: it keeps no facts and is flagged `unparsed` (its leading-comment tags are still read when the parser recovered them).
@@ -192,11 +212,13 @@ function loadPythonTests(root: string, rels: readonly string[], candidates: read
   const load = (rel: string): LoadedPythonFile => {
     let bytes = 0;
     let facts: PythonFacts | null = null;
+    let lines: string[] = [];
     let tags: PythonFacts['tags'] = {};
     try {
       bytes = statSync(join(root, rel)).size;
       if (bytes <= MAX_PYTHON_FILE_BYTES) {
         const text = readFileSync(join(root, rel), 'utf8');
+        lines = text.replace(/^\uFEFF/, '').split('\n');
         bytes = Buffer.byteLength(text);
         const read_ = read(text.replace(/^\uFEFF/, ''));
         tags = read_.tags;
@@ -214,6 +236,7 @@ function loadPythonTests(root: string, rels: readonly string[], candidates: read
       facts,
       subjects: [...new Set([...resolved.subjects, ...declared])].sort(),
       facades: resolved.facades,
+      opaque: facts ? projectOpaque(facts.opaque, lines, rel, resolveSubjectsOf) : [],
       tags: { ...(lane ? { lane } : {}), ...(tags.risk ? { risk: tags.risk } : {}), ...(tags.subjects ? { subjects: tags.subjects } : {}) },
     };
   };
@@ -221,10 +244,12 @@ function loadPythonTests(root: string, rels: readonly string[], candidates: read
 }
 
 /**
- * The Python incompleteness notes of a scan, in a fixed order (config, facade, opaque), each with its merged scope: the config note
+ * The Python incompleteness notes of a scan, in a fixed order (config, facade, opaque, unparsed), each with its merged scope: the config note
  * when a pytest config mentions `python_files` (scope all; only when Python tests were inventoried); the facade note for every
  * package `__init__.py` a test imports through (the package directories); and the opaque-registration note for every file whose
- * tests the reader cannot fully see (see `opaqueScope`). Empty when nothing makes the Python inventory incomplete.
+ * tests the reader cannot fully see (see `opaqueScope`); and the unparsed note for every name-matched file that could not be parsed.
+ * An unparsed file gives no subjects, so there is no telling which area its tests cover: its scope is always "all". Empty when nothing
+ * makes the Python inventory incomplete.
  */
 function pythonNotesOf(root: string, python: readonly LoadedPythonFile[]): NoteScope[] {
   if (python.length === 0) return [];
@@ -232,8 +257,10 @@ function pythonNotesOf(root: string, python: readonly LoadedPythonFile[]): NoteS
   if (pythonFilesConfigured(root)) notes.push({ text: PYTHON_NOTES.config, scope: 'all' });
   const facades = python.flatMap(file => file.facades.map(facadeScope));
   if (facades.length > 0) notes.push({ text: PYTHON_NOTES.facade, scope: mergeScopes(facades) });
-  const opaque = python.filter(file => (file.facts?.opaque.length ?? 0) > 0).map(file => opaqueScope(root, file.rel, file.subjects));
+  const opaque = python.filter(file => file.opaque.length > 0).map(file => opaqueScope(root, file.rel, file.subjects));
   if (opaque.length > 0) notes.push({ text: PYTHON_NOTES.opaque, scope: mergeScopes(opaque) });
+  const unparsed = python.filter(file => file.facts === null).map(file => file.rel);
+  if (unparsed.length > 0) notes.push({ text: unparsedNote(unparsed), scope: 'all' });
   return notes;
 }
 
@@ -382,7 +409,7 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, cand
     attach(detectWorktreeHazards(file.rel, file.lines));
   }
   for (const file of python) {
-    attach((file.facts?.opaque ?? []).map(opaque => ({
+    attach(file.opaque.map(opaque => ({
       category: 'wiring' as const,
       rule: 'wiring.opaque-test-registration',
       file: file.rel,

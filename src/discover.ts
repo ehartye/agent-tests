@@ -1,4 +1,4 @@
-import { type Dirent, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { type Dirent, existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { relPosix } from './paths.ts';
 import { openParseSession } from './parse.ts';
@@ -158,11 +158,24 @@ export function discoverTestInfrastructure(root: string): string[] {
 
 export type PythonRunner = 'pytest' | 'unittest' | 'unknown';
 
+/**
+ * The text of a Python config file, or '' when it is missing, unreadable or a symbolic link: like `walk`, the Python reads never
+ * follow links. Used only for Python config, so JavaScript config reads are unchanged.
+ */
 const readIfPresent = (path: string): string => {
   try {
+    if (!lstatSync(path).isFile()) return '';
     return readFileSync(path, 'utf8');
   } catch {
     return '';
+  }
+};
+
+const isRealFile = (path: string): boolean => {
+  try {
+    return lstatSync(path).isFile();
+  } catch {
+    return false;
   }
 };
 
@@ -201,7 +214,7 @@ export interface PythonRunnerEvidence {
  */
 export function detectPythonRunner(root: string, hasConftest: boolean, evidence: PythonRunnerEvidence): PythonRunner {
   const configured =
-    existsSync(join(root, 'pytest.ini')) ||
+    isRealFile(join(root, 'pytest.ini')) ||
     PYTEST_SECTION.test(readIfPresent(join(root, 'tox.ini'))) ||
     PYTEST_SECTION.test(readIfPresent(join(root, 'setup.cfg'))) ||
     readIfPresent(join(root, 'pyproject.toml')).includes('pytest');

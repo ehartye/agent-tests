@@ -1,6 +1,6 @@
 /** @lane merge @subject src/scan.ts @subject src/discover.ts @subject src/python/subjects.ts @subject src/python/workflow.ts @subject src/detectors/wiring.ts @subject src/cli.ts @subject src/schema.ts */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
@@ -8,7 +8,7 @@ import { auditArtifact } from '../src/audit-output.ts';
 import { failureFor } from '../src/cli.ts';
 import { extractPythonFactsWith } from '../src/python/facts.ts';
 import { loadPythonParser } from '../src/python/parser.ts';
-import { pythonTargetsOfRun } from '../src/python/workflow.ts';
+import { MAX_RUN_LENGTH, MAX_TOKEN_LENGTH, pythonTargetsOfRun } from '../src/python/workflow.ts';
 import { renderMarkdown } from '../src/report.ts';
 import { MAX_PYTHON_FILE_BYTES, scan, scanProject } from '../src/scan.ts';
 import { EvidenceReport, type TestFileRecord } from '../src/schema.ts';
@@ -149,7 +149,6 @@ describe('a Python-only repo', () => {
     { name: 'a TestCase test and a plain function together', files: { 'tests/test_x.py': py('import unittest', '', 'class T(unittest.TestCase):', '    def test_a(self):', '        self.assertTrue(1)', '', 'def test_b():', '    assert 1') }, runner: 'unittest' },
     { name: 'an unittest import and no tests', files: { 'tests/test_x.py': py('import unittest', 'x = 1') }, runner: 'unittest' },
     { name: 'a file with no tests and no signal', files: { 'tests/test_x.py': 'x = 1\n' }, runner: 'unknown' },
-    { name: 'only a file with a syntax error', files: { 'tests/test_x.py': 'def test_x(:\n' }, runner: 'unknown' },
   ];
 
   it.each(cases)('is inventoried and complete with $name', async ({ files, runner }) => {
@@ -358,36 +357,52 @@ describe('scoped coverage of Python areas, on variants of the python-mixed fixtu
   };
   const INCOMPLETE = 'wiring.inventory-incomplete';
   const UNCOVERED = 'wiring.uncovered-critical';
-  const NO_IO_TEST: Changes = { remove: ['tests/test_io_unittest.py'] };
-  const UNTESTED: Changes = { add: { 'tools/untested.py': 'VALUE = 1\n' }, areas: ['tools/untested.py'] };
+  // The shared fixture holds a file with a syntax error, whose unparsed note has scope "all" and would mute every scoping case, so the
+  // scoping variants are built without it.
+  const NO_BROKEN: Changes = { remove: ['tests/test_broken.py'] };
+  const NO_IO_TEST: Changes = { remove: ['tests/test_broken.py', 'tests/test_io_unittest.py'] };
+  const UNTESTED: Changes = { remove: ['tests/test_broken.py'], add: { 'tools/untested.py': 'VALUE = 1\n' }, areas: ['tools/untested.py'] };
   const PYTHON_FILES = { 'pytest.ini': '[pytest]\npython_files = check_*.py\n' };
+  const UNPARSED_NOTE = 'Python test files could not be parsed: tests/test_broken.py';
 
-  const cases: Array<{ name: string; changes: Changes; coverage: string[] }> = [
-    { name: 'the shipped fixture: only Go is coverage-unknown', changes: {}, coverage: [`${INCOMPLETE}@go/**`] },
-    { name: 'io.py loses its test and sits in the facade note scope (src/pkg)', changes: NO_IO_TEST, coverage: [`${INCOMPLETE}@go/**`, `${INCOMPLETE}@src/pkg/io.py`] },
-    { name: 'tools/untested.py is outside every note scope, so it stays uncovered although opaque files and Go exist', changes: UNTESTED, coverage: [`${INCOMPLETE}@go/**`, `${UNCOVERED}@tools/untested.py`] },
-    { name: 'a scoped area and an unscoped one side by side', changes: { ...NO_IO_TEST, ...UNTESTED }, coverage: [`${INCOMPLETE}@go/**`, `${INCOMPLETE}@src/pkg/io.py`, `${UNCOVERED}@tools/untested.py`] },
+  const cases: Array<{ name: string; changes: Changes; coverage: string[]; note: (file: string) => string }> = [
+    { name: 'the shipped fixture: only Go is coverage-unknown', changes: {}, coverage: [`${INCOMPLETE}@go/**`], note: () => FACADE_NOTE },
+    { name: 'io.py loses its test and sits in the facade note scope (src/pkg)', changes: NO_IO_TEST, coverage: [`${INCOMPLETE}@go/**`, `${INCOMPLETE}@src/pkg/io.py`], note: () => FACADE_NOTE },
+    { name: 'tools/untested.py is outside every note scope, so it stays uncovered although opaque files and Go exist', changes: UNTESTED, coverage: [`${INCOMPLETE}@go/**`, `${UNCOVERED}@tools/untested.py`], note: () => FACADE_NOTE },
+    {
+      name: 'a scoped area and an unscoped one side by side',
+      changes: { remove: [...NO_IO_TEST.remove!], add: UNTESTED.add, areas: UNTESTED.areas },
+      coverage: [`${INCOMPLETE}@go/**`, `${INCOMPLETE}@src/pkg/io.py`, `${UNCOVERED}@tools/untested.py`],
+      note: () => FACADE_NOTE,
+    },
     {
       name: 'a global python_files note makes every uncovered Python area coverage-unknown',
-      changes: { ...NO_IO_TEST, ...UNTESTED, add: { ...UNTESTED.add, ...PYTHON_FILES } },
+      changes: { remove: [...NO_IO_TEST.remove!], add: { ...UNTESTED.add, ...PYTHON_FILES }, areas: UNTESTED.areas },
       coverage: [`${INCOMPLETE}@go/**`, `${INCOMPLETE}@src/pkg/io.py`, `${INCOMPLETE}@tools/untested.py`],
+      note: file => (file === 'tools/untested.py' ? CONFIG_NOTE : FACADE_NOTE),
+    },
+    {
+      name: 'an unparsed test file (scope all) makes an unrelated uncovered Python area coverage-unknown and names the note',
+      changes: { add: UNTESTED.add, areas: UNTESTED.areas },
+      coverage: [`${INCOMPLETE}@go/**`, `${INCOMPLETE}@tools/untested.py`],
+      note: file => (file === 'tools/untested.py' ? UNPARSED_NOTE : FACADE_NOTE),
     },
   ];
 
-  it.each(cases)('$name', async ({ changes, coverage }) => {
+  it.each(cases)('$name', async ({ changes, coverage, note }) => {
     const evidence = await scanProject(variant(changes), { commitLimit: 1 });
     expect(coverageOf(evidence)).toEqual(coverage);
     // backend/app/** and checks/** are covered in every variant. A Python finding names Python and the note; an uncovered one does not.
     for (const finding of evidence.projectFindings.filter(finding => finding.rule === INCOMPLETE && finding.file !== 'go/**')) {
       expect(finding.message).toContain('Python');
-      expect(finding.message).toContain(finding.file === 'tools/untested.py' ? CONFIG_NOTE : FACADE_NOTE);
+      expect(finding.message).toContain(note(finding.file));
     }
     for (const finding of evidence.projectFindings.filter(finding => finding.rule === UNCOVERED)) expect(finding.message).not.toContain('Python');
     expect(evidence.inventory!.complete).toBe(false);
   });
 
   it('reports the config note with scope all in the global variant', async () => {
-    const evidence = await scanProject(variant({ add: PYTHON_FILES }), { commitLimit: 1 });
+    const evidence = await scanProject(variant({ ...NO_BROKEN, add: PYTHON_FILES }), { commitLimit: 1 });
     expect(evidence.inventory!.notes).toContain(CONFIG_NOTE);
     expect(evidence.inventory!.noteScopes).toContainEqual({ text: CONFIG_NOTE, scope: 'all' });
   });
@@ -416,5 +431,182 @@ describe('Python parser load failures and file size', () => {
     expect({ language: record.language, tests: record.tests, assertions: record.assertions, flags: record.flags, tags: record.tags, subjects: record.subjects }).toEqual({ language: 'python', tests: 0, assertions: 0, flags: ['unparsed'], tags: {}, subjects: [] });
     expect(evidence.files.find(file => file.file === 'tests/test_ok.py')!.flags).toEqual([]);
     expect(evidence.inventory!.languages.find(entry => entry.language === 'Python')).toMatchObject({ files: 2, status: 'supported' });
+  });
+});
+
+describe('imported test classes count only from project modules', () => {
+  const body = ['', 'def test_x():', '    assert 1'];
+  const cases: Array<{ name: string; files: Record<string, string>; test: string; opaque: string[] }> = [
+    { name: 'a project module under src/', files: { 'src/lib/tool.py': '', 'tests/test_a.py': py('from lib.tool import TestBase', ...body) }, test: 'tests/test_a.py', opaque: ['TestBase'] },
+    { name: 'a project package', files: { 'src/lib/__init__.py': '', 'tests/test_a.py': py('from lib import TestBase', ...body) }, test: 'tests/test_a.py', opaque: ['TestBase'] },
+    { name: 'a project module under an ancestor package root', files: { 'backend/app/base.py': '', 'backend/tests/test_a.py': py('from app.base import TestBase', ...body) }, test: 'backend/tests/test_a.py', opaque: ['TestBase'] },
+    { name: 'a project module imported under a Test alias', files: { 'lib/tool.py': '', 'tests/test_a.py': py('from lib.tool import Helper as TestHelper', ...body) }, test: 'tests/test_a.py', opaque: ['TestHelper'] },
+    { name: 'a relative import of a project module', files: { 'tests/base.py': '', 'tests/test_a.py': py('from .base import TestBase', ...body) }, test: 'tests/test_a.py', opaque: ['TestBase'] },
+    { name: 'a relative import of the package itself', files: { 'tests/__init__.py': '', 'tests/test_a.py': py('from . import SomeTestCase', ...body) }, test: 'tests/test_a.py', opaque: ['SomeTestCase'] },
+    { name: 'a two-level relative import of a project module', files: { 'tests/shared.py': '', 'tests/unit/test_a.py': py('from ..shared import BarTest', ...body) }, test: 'tests/unit/test_a.py', opaque: ['BarTest'] },
+    { name: 'unittest.TestCase', files: { 'tests/test_a.py': py('from unittest import TestCase', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'django.test.TestCase', files: { 'tests/test_a.py': py('from django.test import TestCase', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'rest_framework.test.APITestCase', files: { 'tests/test_a.py': py('from rest_framework.test import APITestCase', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'a third-party module that shares no project file', files: { 'src/lib/tool.py': '', 'tests/test_a.py': py('from pytest_mock import TestMock', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'a relative import of a module that is missing', files: { 'tests/test_a.py': py('from .missing import TestBase', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'a relative import of a package with no __init__.py', files: { 'tests/test_a.py': py('from . import TestBase', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'a relative import that climbs above the project', files: { 'tests/test_a.py': py('from ... import TestBase', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'a project class and unittest.TestCase together count once', files: { 'src/lib/tool.py': '', 'tests/test_a.py': py('from unittest import TestCase', 'from lib.tool import TestBase', ...body) }, test: 'tests/test_a.py', opaque: ['TestBase'] },
+  ];
+
+  it.each(cases)('$name: opaque $opaque', async ({ files, test, opaque }) => {
+    const evidence = await scanProject(makeTree(files), { commitLimit: 1 });
+    const record = evidence.files.find(file => file.file === test)!;
+    expect(record.findings.filter(finding => finding.rule === 'wiring.opaque-test-registration').map(finding => finding.evidence)).toEqual(opaque);
+    expect(renderMarkdown(evidence).includes('1+?')).toBe(opaque.length > 0);
+    expect(evidence.inventory!.notes.includes(OPAQUE_NOTE)).toBe(opaque.length > 0);
+    expect(evidence.inventory!.complete).toBe(opaque.length === 0);
+  });
+});
+
+describe('the unparsed-files note', () => {
+  const unparsedNote = (...files: string[]) => `Python test files could not be parsed: ${files.join(', ')}`;
+  const bad = 'def test_x(:\n';
+  const many = (count: number): Record<string, string> => Object.fromEntries(Array.from({ length: count }, (_, index) => [`tests/test_bad${index + 1}.py`, bad]));
+  const names = (count: number): string[] => Array.from({ length: count }, (_, index) => `tests/test_bad${index + 1}.py`);
+
+  it.each([
+    { name: 'one file', files: many(1), text: unparsedNote('tests/test_bad1.py') },
+    { name: 'five files, all listed', files: many(5), text: unparsedNote(...names(5)) },
+    { name: 'six files, five listed and one more', files: many(6), text: `${unparsedNote(...names(5))} and 1 more` },
+    { name: 'twelve files, sorted, five listed and seven more', files: many(12), text: `${unparsedNote(...names(12).sort().slice(0, 5))} and 7 more` },
+  ])('is scoped to all and incomplete for $name', async ({ files, text }) => {
+    const evidence = await scanProject(makeTree({ ...files, 'tests/test_ok.py': 'def test_ok():\n    assert 1\n' }), { commitLimit: 1 });
+    expect(evidence.inventory).toMatchObject({ complete: false, notes: [text], noteScopes: [{ text, scope: 'all' }] });
+    expect(renderMarkdown(evidence)).toContain(`- Inventory incomplete: ${text}`);
+  });
+
+  it('also covers a file over the size cap, and names only name-matched files, not workflow candidates that failed to parse', async () => {
+    const big = `# big\n${'#'.repeat(MAX_PYTHON_FILE_BYTES)}\n`;
+    const workflow = 'on: push\njobs:\n  a:\n    steps:\n      - run: python tools/bad.py\n';
+    const evidence = await scanProject(makeTree({ 'tests/test_big.py': big, 'tools/bad.py': bad, '.github/workflows/ci.yml': workflow }), { commitLimit: 1 });
+    expect(evidence.inventory!.notes).toEqual([unparsedNote('tests/test_big.py')]);
+  });
+
+  it('comes after the facade and opaque notes, and stays ASCII for an odd file name', async () => {
+    const evidence = await scanProject(makeTree({
+      'pkg/__init__.py': '',
+      'tests/test_facade.py': 'from pkg import value\n\ndef test_x():\n    assert 1\n',
+      'tests/test_load.py': 'def load_tests(loader, tests, pattern):\n    return tests\n\ndef test_x():\n    assert 1\n',
+      'tests/test_caf\u00e9.py': bad,
+    }), { commitLimit: 1 });
+    const notes = evidence.inventory!.notes;
+    expect(notes).toEqual([FACADE_NOTE, OPAQUE_NOTE, unparsedNote('tests/test_caf?.py')]);
+    expect(notes.every(text => /^[\x20-\x7e]*$/.test(text))).toBe(true);
+    expect(evidence.inventory!.noteScopes!.map(note => note.scope)).toEqual([['pkg'], ['tests'], 'all']);
+  });
+});
+
+describe('hostile workflow files', () => {
+  const clock = <T>(work: () => T): { value: T; ms: number } => {
+    const start = performance.now();
+    const value = work();
+    return { value, ms: performance.now() - start };
+  };
+  const NONE = { files: [], modules: [] };
+
+  it.each([
+    { name: 'a one-million-character token', run: `python ${'x'.repeat(1_000_000)}.py` },
+    { name: 'a hundred-thousand-comma token', run: `python -m unittest ${','.repeat(100_000)}x` },
+    { name: 'a hundred-thousand-quote token', run: `python "${'"'.repeat(100_000)}` },
+  ])('reads $name quickly and names nothing', ({ run }) => {
+    const { value, ms } = clock(() => pythonTargetsOfRun(run));
+    expect(value).toEqual(NONE);
+    expect(ms).toBeLessThan(1000);
+  });
+
+  it('keeps a token at the length cap and drops one above it', () => {
+    const name = (length: number) => `${'d/'.repeat(Math.floor((length - 4) / 2))}${'x'.repeat(((length - 4) % 2) + 1)}.py`;
+    expect(name(MAX_TOKEN_LENGTH)).toHaveLength(MAX_TOKEN_LENGTH);
+    expect(pythonTargetsOfRun(`python ${name(MAX_TOKEN_LENGTH)}`).files).toEqual([name(MAX_TOKEN_LENGTH)]);
+    expect(pythonTargetsOfRun(`python ${name(MAX_TOKEN_LENGTH + 1)}`)).toEqual(NONE);
+  });
+
+  it('ignores a run string over the length cap and reads one at it', () => {
+    const at = `python tools/a.py ${' '.repeat(MAX_RUN_LENGTH - 'python tools/a.py '.length)}`;
+    expect(at).toHaveLength(MAX_RUN_LENGTH);
+    expect(pythonTargetsOfRun(at).files).toEqual(['tools/a.py']);
+    expect(pythonTargetsOfRun(`${at} `)).toEqual(NONE);
+  });
+
+  it('does not throw on thousands of repeated python words, and stays linear', () => {
+    const names = (count: number) => Array.from({ length: count }, (_, index) => `m${index}.x`).join(' ');
+    const over = pythonTargetsOfRun(`${'python '.repeat(20_000)}-m unittest ${names(20_000)}`);
+    expect(over).toEqual(NONE);
+    const capped = clock(() => pythonTargetsOfRun(`${'python '.repeat(9_000)}-m unittest ${names(300)}`));
+    expect(capped.value.modules).toHaveLength(300);
+    expect(capped.ms).toBeLessThan(1000);
+  });
+
+  it('lets a scan of a JavaScript-only repo finish when its workflow is hostile', async () => {
+    const workflow = (run: string) => `on: push\njobs:\n  a:\n    steps:\n      - run: ${JSON.stringify(run)}\n`;
+    const root = makeTree({
+      '.github/workflows/a.yml': workflow(`${'python '.repeat(20_000)}-m unittest ${Array.from({ length: 20_000 }, (_, index) => `m${index}.x`).join(' ')}`),
+      '.github/workflows/b.yml': workflow(`python ${'x'.repeat(1_000_000)}.py`),
+      'web/app.test.ts': "import { test } from 'vitest';\ntest('a', () => {});\n",
+    });
+    const evidence = await scanProject(root, { commitLimit: 1 });
+    expect(evidence.files.map(file => file.file)).toEqual(['web/app.test.ts']);
+    expect('inventory' in evidence).toBe(false);
+  });
+});
+
+describe('symlinked Python reads', () => {
+  const SUITE = py('import unittest', '', 'class Suite(unittest.TestCase):', '    def test_it(self):', '        self.assertTrue(1)');
+  const WORKFLOW = 'on: push\njobs:\n  a:\n    steps:\n      - run: python -m unittest checks.suite\n';
+  /** Make a link at `link` to `target`, or report that the platform does not allow it (file links need a privilege on Windows). */
+  const link = (target: string, path: string, kind: 'file' | 'dir'): boolean => {
+    mkdirSync(dirname(path), { recursive: true });
+    try {
+      symlinkSync(target, path, kind === 'dir' && process.platform === 'win32' ? 'junction' : kind);
+      return true;
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) return false;
+      throw error;
+    }
+  };
+
+  it('does not read a symlinked workflow file', async ctx => {
+    const root = makeTree({ 'checks/suite.py': SUITE, 'real/ci.yml': WORKFLOW });
+    if (!link(join(root, 'real/ci.yml'), join(root, '.github/workflows/ci.yml'), 'file')) return ctx.skip('symlink creation unavailable');
+    expect((await scanProject(root, { commitLimit: 1 })).files).toEqual([]);
+  });
+
+  it('does not read a symlinked workflows directory', async ctx => {
+    const root = makeTree({ 'checks/suite.py': SUITE, 'real/ci.yml': WORKFLOW });
+    if (!link(join(root, 'real'), join(root, '.github/workflows'), 'dir')) return ctx.skip('symlink creation unavailable');
+    expect((await scanProject(root, { commitLimit: 1 })).files).toEqual([]);
+  });
+
+  it('does not inventory a symlinked candidate file', async ctx => {
+    const root = makeTree({ 'real/suite_impl.py': SUITE, '.github/workflows/ci.yml': WORKFLOW });
+    if (!link(join(root, 'real/suite_impl.py'), join(root, 'checks/suite.py'), 'file')) return ctx.skip('symlink creation unavailable');
+    expect((await scanProject(root, { commitLimit: 1 })).files).toEqual([]);
+  });
+
+  it('does not inventory a candidate under a symlinked directory', async ctx => {
+    const root = makeTree({ 'real/suite.py': SUITE, '.github/workflows/ci.yml': WORKFLOW });
+    if (!link(join(root, 'real'), join(root, 'checks'), 'dir')) return ctx.skip('symlink creation unavailable');
+    expect((await scanProject(root, { commitLimit: 1 })).files).toEqual([]);
+  });
+
+  it('reads the same files when they are regular, so the cases above are not vacuous', async () => {
+    const root = makeTree({ 'checks/suite.py': SUITE, '.github/workflows/ci.yml': WORKFLOW });
+    expect((await scanProject(root, { commitLimit: 1 })).files.map(file => file.file)).toEqual(['checks/suite.py']);
+  });
+
+  it('does not read a symlinked pytest.ini, tox.ini, setup.cfg or pyproject.toml for the runner or the python_files note', async ctx => {
+    for (const name of ['pytest.ini', 'tox.ini', 'setup.cfg', 'pyproject.toml']) {
+      const root = makeTree({ 'tests/test_x.py': SUITE, 'real/config': '[pytest]\n[tool:pytest]\n[tool.pytest.ini_options]\npython_files = x\n' });
+      if (!link(join(root, 'real/config'), join(root, name), 'file')) return ctx.skip('symlink creation unavailable');
+      const evidence = await scanProject(root, { commitLimit: 1 });
+      expect(evidence.inventory!.languages[1], name).toMatchObject({ language: 'Python', runner: 'unittest' });
+      expect(evidence.inventory!.notes, name).toEqual([]);
+    }
   });
 });

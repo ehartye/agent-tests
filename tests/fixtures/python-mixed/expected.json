@@ -48,11 +48,13 @@
     "notes": [
       "Those files are named like tests and were counted by file name only, never read, so their test counts and the coverage they give are unknown.",
       "imports through a package __init__ may reach other modules",
-      "some Python tests are registered in ways the scan cannot read (load_tests, an imported test class or a non-literal import)"
+      "some Python tests are registered in ways the scan cannot read (load_tests, an imported test class or a non-literal import)",
+      "Python test files could not be parsed: tests/test_broken.py"
     ],
     "noteScopes": [
       { "text": "imports through a package __init__ may reach other modules", "scope": ["src/pkg"] },
-      { "text": "some Python tests are registered in ways the scan cannot read (load_tests, an imported test class or a non-literal import)", "scope": ["src/pkg"] }
+      { "text": "some Python tests are registered in ways the scan cannot read (load_tests, an imported test class or a non-literal import)", "scope": ["src/pkg"] },
+      { "text": "Python test files could not be parsed: tests/test_broken.py", "scope": "all" }
     ]
   },
   "coverage": ["wiring.inventory-incomplete@go/**"]

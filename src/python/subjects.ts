@@ -17,6 +17,21 @@ export const PYTHON_NOTES = {
   opaque: 'some Python tests are registered in ways the scan cannot read (load_tests, an imported test class or a non-literal import)',
 } as const;
 
+/** At most this many unparsed files are named in their note; the rest are counted. */
+const MAX_UNPARSED_LISTED = 5;
+
+/**
+ * The note for Python test files that could not be parsed (a syntax error, a construct the grammar rejects, or the size cap), which
+ * give no subjects and so could cover any area. Their paths are sorted, the first five named (ASCII only: other characters become
+ * `?`), the rest counted. Its scope is always "all".
+ */
+export function unparsedNote(files: readonly string[]): string {
+  const sorted = [...files].sort();
+  const listed = sorted.slice(0, MAX_UNPARSED_LISTED).map(file => file.replace(/[^\x20-\x7e]/g, '?'));
+  const more = sorted.length - listed.length;
+  return `Python test files could not be parsed: ${listed.join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
+}
+
 /** The directory part of a repo-relative path; `''` for a file in the project root. */
 const parentOf = (rel: string): string => rel.slice(0, Math.max(rel.lastIndexOf('/'), 0));
 
@@ -27,7 +42,15 @@ export interface PythonSubjects {
   facades: string[];
 }
 
-export type PythonSubjectResolver = (testRel: string, facts: Pick<PythonFacts, 'imports' | 'dynamicImports'>) => PythonSubjects;
+export interface PythonSubjectResolver {
+  (testRel: string, facts: Pick<PythonFacts, 'imports' | 'dynamicImports'>): PythonSubjects;
+  /**
+   * Whether `from <module> import ...` in the test file names a project module or package: an absolute module resolves under the same
+   * package roots as a subject, a relative one (`level` dots) against the test file's directory and its parents. Stdlib and third-party
+   * modules resolve to nothing. Test and support files count: they are project modules, merely not subjects.
+   */
+  isProjectModule(testRel: string, module: string, level: number): boolean;
+}
 
 /**
  * The package roots a dotted module is looked up under for one test file, in order: the project root, then `src/`, then every
@@ -100,7 +123,15 @@ export function createPythonSubjectResolver(root: string): PythonSubjectResolver
     return { hits: [] };
   };
 
-  return (testRel, facts) => {
+  const resolver: PythonSubjectResolver['isProjectModule'] = (testRel, module, level) => {
+    const parts = module ? module.split('.') : [];
+    if (level === 0) return parts.length > 0 && packageRoots(testRel).some(base => asModule(base, parts) !== undefined);
+    const directory = testRel.split('/').slice(0, -1);
+    if (level - 1 > directory.length) return false;
+    return asModule(directory.slice(0, directory.length - (level - 1)).join('/'), parts) !== undefined;
+  };
+
+  const resolve = (testRel: string, facts: Pick<PythonFacts, 'imports' | 'dynamicImports'>): PythonSubjects => {
     const found = new Set<string>();
     const facades = new Set<string>();
     const keep = (resolved: { hits: string[]; facade?: string }): void => {
@@ -123,6 +154,7 @@ export function createPythonSubjectResolver(root: string): PythonSubjectResolver
     const subjects = [...found].filter(rel => !isPythonTestPath(rel) && !isPythonSupportFile(rel) && !isSupportPath(rel)).sort();
     return { subjects, facades: [...facades].filter(rel => subjects.includes(rel)).sort() };
   };
+  return Object.assign(resolve, { isProjectModule: resolver });
 }
 
 /** The scope of a note: every area (`"all"`), or the directories it can affect. A directory that is the project root is `"all"`. */
