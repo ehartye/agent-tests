@@ -40,7 +40,7 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    - Present: read it. Treat `phase`, `consumers` and `areas` as the owner's decisions.
 3. **Evidence.** `node "<plugin-root>/scripts/run-managed.js" report --root "<project>"` prints ranked Markdown (`--max-files <n>` extends the table); `scan` prints full JSON.
    For requested saved evidence, use `--out <new-file>` and cite its identity/receipt; [saved audit artifacts](../../references/audit-output.md) defines parent-directory and no-overwrite requirements.
-   - The report opens with a header and counts; if it says the inventory is incomplete, read `<plugin-root>/references/inventory.md`.
+   - The report opens with a header and counts. Python tests are inventoried, but some unknowns remain (custom markers, `+?` files, collection hooks); if it says the inventory is incomplete, read `<plugin-root>/references/inventory.md`.
      Project findings (CI, hooks, scripts, agent instructions, risk-map gaps) follow, then a table of test files.
    - The table ranks unparsed files first, then possible opaque registrations (inventory may be incomplete), then files
      with the most distinct finding rules. Read the first two directly. The Rules column shows which rules fired. A `redundancy.shared-subject`

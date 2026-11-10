@@ -1,8 +1,8 @@
 import { join } from 'node:path';
-import { IGNORED_DIRS, isSupportPath, isTestPath, readEntries } from '../discover.ts';
+import { IGNORED_DIRS, isPythonSupportFile, isPythonTestPath, isSupportPath, isTestPath, readEntries } from '../discover.ts';
 import { globToRegExp } from '../paths.ts';
 import { RISK_MAP_PATH, tierFor } from '../riskmap.ts';
-import type { Finding, LaneName, RiskMap, Tier } from '../schema.ts';
+import type { Finding, LaneName, NoteScope, RiskMap, Tier } from '../schema.ts';
 
 /** `rel` and every entry of `subjects` must be repo-relative with forward slashes, as `relPosix` produces. */
 export interface WiringFile {
@@ -22,8 +22,9 @@ export const ALLOWED_LANES: Record<Tier, LaneName[]> = {
 const TAG_HELP = 'Add `@risk <critical|standard|low>` or `@subject <path>` at the top of the file.';
 const TIERS: readonly string[] = ['critical', 'standard', 'low'];
 const EVIDENCE_LIMIT = 160;
-/** Files the scan inventories as tests: when every classifiable file of an area is one of these kinds, its tests are all visible. */
+/** Files of the languages the scan reads (JavaScript, TypeScript and Python): an area of only these has no language the scan cannot see. */
 const JS_TS_FILE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
+const PYTHON_FILE = /\.pyi?$/;
 /** An area whose glob is one literal segment followed by `/**` (`src/**`): it assigns a tier to everything, so it hides drift. */
 const CATCH_ALL = /^[^/*?]+\/\*\*$/;
 
@@ -71,7 +72,7 @@ export function unmappedSubjectFinding(rel: string, unmapped: string[], mappedAr
 
 /**
  * The files a directory holds that the risk map is expected to classify: nested directories are walked, but ignored output
- * directories, dot directories, test files, test support files and probe artifacts are skipped. Sorted, repo-relative.
+ * directories, dot directories, test files (JavaScript, TypeScript and Python), test support files (including `conftest.py`) and probe artifacts are skipped. Sorted, repo-relative.
  */
 export function classifiableFiles(root: string, dir: string): string[] {
   const found: string[] = [];
@@ -80,7 +81,7 @@ export function classifiableFiles(root: string, dir: string): string[] {
       const path = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         if (!IGNORED_DIRS.has(entry.name) && !entry.name.startsWith('.')) visit(path);
-      } else if (entry.isFile() && !entry.name.startsWith('__probe__') && !isTestPath(path) && !isSupportPath(path)) found.push(path);
+      } else if (entry.isFile() && !entry.name.startsWith('__probe__') && !isTestPath(path) && !isPythonTestPath(path) && !isPythonSupportFile(path) && !isSupportPath(path)) found.push(path);
     }
   };
   visit(dir);
@@ -95,10 +96,35 @@ function areaFiles(area: string, filesIn: (dir: string) => string[]): string[] {
   return filesIn(segments.slice(0, wild === -1 ? -1 : wild).join('/')).filter(path => pattern.test(path));
 }
 
+/** Whether `pattern` (area glob segments) can match a path at or under the directory made of `directory` segments. */
+function reachesInto(pattern: readonly string[], directory: readonly string[]): boolean {
+  if (directory.length === 0) return true;
+  const [head, ...rest] = pattern;
+  if (head === undefined) return false;
+  if (head.includes('**')) return reachesInto(rest, directory) || reachesInto(pattern, directory.slice(1));
+  return globToRegExp(head).test(directory[0]!) && reachesInto(rest, directory.slice(1));
+}
+
+/**
+ * Whether a critical area lies within the scope of a Python incompleteness note. A note scoped `"all"` covers every area. A note
+ * scoped to directories covers an area when the area's glob can match a path at or under one of them: its leading path segments
+ * match the directory's segments, where `**` matches any number of segments and `*` and `?` stay inside one. So `src/pkg/io.py`,
+ * `src/pkg/**` and `src/pkg/sub/*.py` are inside `src/pkg`, and so is `src/**` (it can reach it); `src/*.py` is not (it cannot
+ * reach below `src`), and `src/package/io.py` is not (a shared name prefix is not containment). A directory of `''` is the project root.
+ */
+export function areaInNoteScope(area: string, scope: NoteScope['scope']): boolean {
+  if (scope === 'all') return true;
+  const pattern = area.split('/');
+  return scope.some(directory => reachesInto(pattern, directory === '' ? [] : directory.split('/')));
+}
+
 /**
  * Tests not tied to a risk tier or lane, lane/tier mismatches, critical areas nobody tests, and directories the map has never seen.
- * `unsupportedLanguages` names languages whose tests exist but are not inventoried: a critical area with no covering test is then
- * reported as `wiring.inventory-incomplete` (coverage unknown) unless every classifiable file in it is JavaScript or TypeScript.
+ * A critical area with no covering test is reported as `wiring.inventory-incomplete` (coverage unknown) rather than uncovered when
+ * either (a) `unsupportedLanguages` names languages whose tests exist but are not inventoried and the area holds a classifiable file
+ * that is neither JavaScript, TypeScript nor Python, or (b) the area holds Python files and lies within the scope of one of
+ * `pythonNotes`, the Python incompleteness notes (see `areaInNoteScope`). Python is an inventoried language, so a Python-only area
+ * is never softened by an unrelated unsupported language, and a Python area outside every note's scope stays uncovered.
  */
 export function detectWiring(
   map: RiskMap | null,
@@ -106,6 +132,7 @@ export function detectWiring(
   candidateDirs: string[],
   filesIn?: (dir: string) => string[],
   unsupportedLanguages: string[] = [],
+  pythonNotes: readonly NoteScope[] = [],
 ): Finding[] {
   if (!map) {
     return [
@@ -136,7 +163,8 @@ export function detectWiring(
     if (area.tier !== 'critical') continue;
     const pattern = globToRegExp(area.path);
     if (!files.some(file => pattern.test(file.rel) || file.subjects.some(subject => pattern.test(subject)))) {
-      if (unsupportedLanguages.length > 0 && !areaFiles(area.path, filesIn ?? (() => [])).every(path => JS_TS_FILE.test(path))) {
+      const inArea = areaFiles(area.path, filesIn ?? (() => []));
+      if (unsupportedLanguages.length > 0 && inArea.some(path => !JS_TS_FILE.test(path) && !PYTHON_FILE.test(path))) {
         const names = unsupportedLanguages.join(', ');
         findings.push({
           category: 'wiring',
@@ -144,6 +172,18 @@ export function detectWiring(
           file: area.path,
           message: `Critical area with no test the scan can read, but tests in ${names} exist and are not inventoried, so coverage is unknown. Check those tests before treating the area as uncovered.`,
           evidence: `0 inventoried test files import this area; unsupported: ${names}`,
+        });
+        continue;
+      }
+      const applicable = inArea.some(path => PYTHON_FILE.test(path)) ? pythonNotes.filter(note => areaInNoteScope(area.path, note.scope)) : [];
+      if (applicable.length > 0) {
+        const texts = applicable.map(note => note.text).join('; ');
+        findings.push({
+          category: 'wiring',
+          rule: 'wiring.inventory-incomplete',
+          file: area.path,
+          message: `Critical area with no test the scan can read, but some Python tests may not be fully inventoried (${texts}), so coverage is unknown. Check those tests before treating the area as uncovered.`,
+          evidence: `0 inventoried test files import this area; Python notes: ${texts}`,
         });
         continue;
       }

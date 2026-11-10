@@ -1,0 +1,61 @@
+{
+  "runner": "vitest",
+  "testFiles": [
+    "backend/tests/test_svc.py",
+    "checks/geometry_check.py",
+    "tests/test_broken.py",
+    "tests/test_core.py",
+    "tests/test_dynamic.py",
+    "tests/test_facade.py",
+    "tests/test_io_unittest.py",
+    "tests/test_loadtests.py",
+    "tests/test_scheduled.py",
+    "web/app.test.ts"
+  ],
+  "records": {
+    "backend/tests/test_svc.py": { "language": "python", "tests": 1, "assertions": 1, "flags": [], "subjects": ["backend/app/svc.py"], "tier": "critical", "area": "backend/app/**" },
+    "checks/geometry_check.py": { "language": "python", "tests": 1, "assertions": 1, "flags": [], "subjects": [], "tier": "critical", "area": "checks/**" },
+    "tests/test_broken.py": { "language": "python", "tests": 0, "assertions": 0, "flags": ["unparsed"] },
+    "tests/test_core.py": {
+      "language": "python",
+      "tests": 6,
+      "assertions": 5,
+      "flags": ["no-direct-assertions"],
+      "noAssertionTests": [{ "name": "test_no_assertion", "line": 27 }],
+      "subjects": ["src/pkg/core.py"],
+      "tags": {},
+      "tier": "critical",
+      "area": "src/pkg/core.py"
+    },
+    "tests/test_dynamic.py": { "language": "python", "tests": 2, "assertions": 2, "flags": [], "subjects": ["src/pkg/core.py"], "tier": "critical" },
+    "tests/test_facade.py": { "language": "python", "tests": 1, "assertions": 1, "flags": [], "subjects": ["src/pkg/__init__.py"], "tier": null, "area": null },
+    "tests/test_io_unittest.py": { "language": "python", "tests": 1, "assertions": 1, "flags": [], "subjects": ["src/pkg/io.py"], "tags": {}, "tier": "critical", "area": "src/pkg/io.py" },
+    "tests/test_loadtests.py": { "language": "python", "tests": 1, "assertions": 1, "flags": [], "subjects": ["src/pkg/core.py"], "tier": "critical" },
+    "tests/test_scheduled.py": { "language": "python", "tests": 1, "assertions": 1, "flags": [], "subjects": ["src/pkg/core.py"], "tags": { "lane": "scheduled" } }
+  },
+  "opaque": {
+    "tests/test_dynamic.py": [{ "line": 12, "evidence": "non-literal import" }],
+    "tests/test_loadtests.py": [{ "line": 6, "evidence": "load_tests" }]
+  },
+  "laneMismatch": ["tests/test_scheduled.py"],
+  "inventory": {
+    "complete": false,
+    "languages": [
+      { "language": "JavaScript", "runner": "vitest", "files": 1, "status": "supported" },
+      { "language": "Go", "runner": "unknown", "files": 1, "status": "detected-unsupported" },
+      { "language": "Python", "runner": "pytest", "files": 9, "status": "supported" }
+    ],
+    "notes": [
+      "Those files are named like tests and were counted by file name only, never read, so their test counts and the coverage they give are unknown.",
+      "imports through a package __init__ may reach other modules",
+      "some Python tests are registered in ways the scan cannot read (load_tests, an imported test class or a non-literal import)",
+      "Python test files could not be parsed: tests/test_broken.py"
+    ],
+    "noteScopes": [
+      { "text": "imports through a package __init__ may reach other modules", "scope": ["src/pkg"] },
+      { "text": "some Python tests are registered in ways the scan cannot read (load_tests, an imported test class or a non-literal import)", "scope": ["src/pkg"] },
+      { "text": "Python test files could not be parsed: tests/test_broken.py", "scope": "all" }
+    ]
+  },
+  "coverage": ["wiring.inventory-incomplete@go/**"]
+}

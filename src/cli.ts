@@ -7,7 +7,7 @@ import { admitOutput, auditArtifact, publishAudit } from './audit-output.ts';
 import { renderMarkdown } from './report.ts';
 import { draftRiskMap } from './riskdraft.ts';
 import { RISK_MAP_PATH, serializeRiskMap } from './riskmap.ts';
-import { scan } from './scan.ts';
+import { scanProject } from './scan.ts';
 import { MAX_RUNS, worktreeCheck } from './worktree-check.ts';
 
 export const COMMANDS = ['capabilities', 'risk-draft', 'scan', 'report', 'worktree-check'] as const;
@@ -193,13 +193,13 @@ async function run(args: string[]): Promise<void> {
   }
   if (command === 'scan') {
     // scan always prints the full JSON, so the report caps do not apply to it.
-    const evidence = scan(root);
+    const evidence = await scanProject(root);
     process.stdout.write(output ? `${JSON.stringify(publishAudit(output, auditArtifact(evidence, 'scan')))}\n` : `${JSON.stringify(evidence, null, 2)}\n`);
     return;
   }
   const maxFiles = positiveInteger('max-files', values['max-files']);
   const maxPerRule = positiveInteger('max-per-rule', values['max-per-rule']);
-  const evidence = scan(root);
+  const evidence = await scanProject(root);
   const reportOptions = {
       ...(maxFiles !== undefined ? { maxFiles } : {}),
       ...(maxPerRule !== undefined ? { maxPerRule } : {}),

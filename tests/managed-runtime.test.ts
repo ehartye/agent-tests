@@ -156,6 +156,12 @@ describe('installRuntime', () => {
     expect(calls[0]?.slice(0, 2)).toEqual(['ci', '--omit=dev']);
   });
 
+  it('skips dependency install scripts so an unsupported platform never needs a compiler', () => {
+    const calls: string[][] = [];
+    installRuntime(source(), { home: makeTree(), npm: (args: string[]) => { calls.push(args); return ''; }, checkDependencies: () => {} });
+    expect(calls[0]).toEqual(expect.arrayContaining(['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund']));
+  });
+
   it('cleans its staging directory and lock when dependency checks fail', () => {
     const root = source();
     const home = makeTree();

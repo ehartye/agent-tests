@@ -543,6 +543,36 @@ describe('renderMarkdown inventory header', () => {
     expect(lines).toEqual(['- Languages: JavaScript (vitest, 3 files), Python (detected-unsupported, 7 files)', '- Inventory incomplete: Python detected but not inventoried. Counted by file name only.']);
   });
 
+  it.each([
+    { name: 'a note without final punctuation', notes: ['imports go through __init__'], expected: '- Inventory incomplete: imports go through __init__.' },
+    { name: 'several notes, separated and ended once', notes: ['first note', 'second note: a, b and 1 more', 'third note'], expected: '- Inventory incomplete: first note; second note: a, b and 1 more; third note.' },
+    { name: 'a note that already ends with a period is not doubled', notes: ['A sentence.', 'a clause'], expected: '- Inventory incomplete: A sentence; a clause.' },
+    { name: 'an empty note is dropped', notes: ['', 'only'], expected: '- Inventory incomplete: only.' },
+  ])('joins notes with semicolons and no unsupported language: $name', ({ notes, expected }) => {
+    const lines = header({ inventory: { complete: false, languages: [language('JavaScript', 'vitest', 3, 'supported'), language('Python', 'pytest', 7, 'supported')], notes }, files: [record('tests/a.test.ts')] });
+    expect(lines[1]).toBe(expected);
+  });
+
+  it('keeps the unsupported-language sentence first and separates the notes after it', () => {
+    const lines = header({
+      inventory: { complete: false, languages: [language('JavaScript', 'vitest', 3, 'supported'), language('Go', 'unknown', 2, 'detected-unsupported')], notes: ['Counted by file name only.', 'a python note'] },
+      files: [record('tests/a.test.ts')],
+    });
+    expect(lines[1]).toBe('- Inventory incomplete: Go detected but not inventoried. Counted by file name only; a python note.');
+  });
+
+  it('shows a supported language by its runner and lists its Python files with their lane, with no zero-count line', () => {
+    const md = renderMarkdown(report({
+      runner: 'unknown',
+      inventory: { complete: true, languages: [language('JavaScript', 'unknown', 0, 'supported'), language('Python', 'pytest', 1, 'supported')], notes: [] },
+      files: [record('tests/test_a.py', { language: 'python', tags: { lane: 'merge' } })],
+    }));
+    expect(md).toContain('- Languages: JavaScript (unknown, 0 files), Python (pytest, 1 files)');
+    expect(md).toContain('| tests/test_a.py | standard | merge | 2 | 3 |');
+    expect(md).not.toContain('- Inventory incomplete:');
+    expect(md).not.toContain('- No supported runner detected');
+  });
+
   it('omits the incomplete line when the inventory is complete and both lines without an inventory', () => {
     expect(header({ inventory: { complete: true, languages: [language('JavaScript', 'vitest', 3, 'supported')], notes: [] }, files: [record('tests/a.test.ts')] })).toEqual(['- Languages: JavaScript (vitest, 3 files)']);
     expect(header({ files: [record('tests/a.test.ts')] })).toEqual([]);

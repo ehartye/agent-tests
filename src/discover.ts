@@ -1,4 +1,4 @@
-import { type Dirent, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { type Dirent, existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { relPosix } from './paths.ts';
 import { openParseSession } from './parse.ts';
@@ -64,9 +64,16 @@ export function walk(root: string, visit: (absolute: string, rel: string) => voi
   }
 }
 
-/** Test files of languages the scan cannot read, recognized by conventional file name only (the extension decides the language). */
+/** Python test files are recognized by name alone, as pytest and unittest discover them; `conftest.py` is shared support, never a test. */
+const PYTHON_TEST_FILE = /(?:^|\/)(?:test_[^/]*|[^/]*_test)\.py$/;
+const PYTHON_SUPPORT_FILE = /(?:^|\/)conftest\.py$/;
+
+export const isPythonTestPath = (rel: string): boolean => PYTHON_TEST_FILE.test(rel);
+export const isPythonSupportFile = (rel: string): boolean => PYTHON_SUPPORT_FILE.test(rel);
+
+/** Test files by conventional file name (the extension decides the language). Python is inventoried; the others are counted by name only. */
 const CENSUS_NAMES: ReadonlyArray<{ language: string; pattern: RegExp }> = [
-  { language: 'Python', pattern: /(?:^|\/)(?:test_[^/]*|[^/]*_test)\.py$/ },
+  { language: 'Python', pattern: PYTHON_TEST_FILE },
   { language: 'Go', pattern: /_test\.go$/ },
   { language: 'Ruby', pattern: /(?:^|\/)(?:test_[^/]*\.rb|[^/]*_spec\.rb)$/ },
   { language: 'PowerShell', pattern: /\.Tests\.ps1$/ },
@@ -84,20 +91,34 @@ const CENSUS_IGNORED_DIRS = new Set([
   '__pycache__', 'venv', 'env', 'site-packages', '.tox', '.mypy_cache', '.pytest_cache', '.ruff_cache',
   'third_party', 'thirdparty', 'testdata', 'Pods', 'target',
 ]);
-const skipForCensus = (name: string): boolean => CENSUS_IGNORED_DIRS.has(name) || name.endsWith('.egg-info');
+export const skipForCensus = (name: string): boolean => CENSUS_IGNORED_DIRS.has(name) || name.endsWith('.egg-info');
 
 /** The non-JavaScript language whose conventional test-file naming this path follows, or null. JavaScript and TypeScript keep `isTestPath`. */
 export function censusLanguage(rel: string): string | null {
   return CENSUS_NAMES.find(({ pattern }) => pattern.test(rel))?.language ?? null;
 }
 
-/** Test-named files of unsupported languages, grouped by language name (sorted), each group's paths sorted. */
-export function discoverCensus(root: string): Array<{ language: string; files: string[] }> {
+export interface Census {
+  /** Test-named files by language name (sorted), each group's paths sorted. */
+  groups: Array<{ language: string; files: string[] }>;
+  /** Every `conftest.py`, sorted: shared pytest support that is never a test but tells the runner apart. */
+  conftests: string[];
+}
+
+/** One walk of the census directories: test-named files of every non-JavaScript language, plus the conftest.py files. */
+export function inspectCensus(root: string): Census {
   const rels: string[] = [];
+  const conftests: string[] = [];
   walk(root, (_absolute, rel) => {
     if (censusLanguage(rel)) rels.push(rel);
+    else if (isPythonSupportFile(rel)) conftests.push(rel);
   }, root, skipForCensus);
-  return groupCensusFiles(rels);
+  return { groups: groupCensusFiles(rels), conftests: conftests.sort() };
+}
+
+/** Test-named files of languages other than JavaScript, grouped by language name (sorted), each group's paths sorted. */
+export function discoverCensus(root: string): Array<{ language: string; files: string[] }> {
+  return inspectCensus(root).groups;
 }
 
 /** Group repo-relative paths by the unsupported language their name follows; other paths are dropped. */
@@ -133,6 +154,74 @@ export function discoverTestInfrastructure(root: string): string[] {
     )) files.push(rel);
   });
   return files.sort();
+}
+
+export type PythonRunner = 'pytest' | 'unittest' | 'unknown';
+
+/**
+ * The text of a Python config file, or '' when it is missing, unreadable or a symbolic link: like `walk`, the Python reads never
+ * follow links. Used only for Python config, so JavaScript config reads are unchanged.
+ */
+const readIfPresent = (path: string): string => {
+  try {
+    if (!lstatSync(path).isFile()) return '';
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
+};
+
+const isRealFile = (path: string): boolean => {
+  try {
+    return lstatSync(path).isFile();
+  } catch {
+    return false;
+  }
+};
+
+const PYTEST_SECTION = /^\s*\[(?:tool:)?pytest\]/m;
+
+/** The project-root files that can configure pytest, which the scan reads only for text and not for settings. */
+const PYTEST_CONFIG_FILES = ['pytest.ini', 'tox.ini', 'setup.cfg', 'pyproject.toml'];
+
+/**
+ * Whether a pytest config file at the project root mentions `python_files`, the setting that changes which files pytest collects.
+ * The settings are not read, so the scan's name-based discovery (the defaults) may miss or add files when it is set.
+ */
+export const pythonFilesConfigured = (root: string): boolean => PYTEST_CONFIG_FILES.some(name => readIfPresent(join(root, name)).includes('python_files'));
+
+/** What the inventoried (cleanly parsed) Python test files show about their runner. */
+export interface PythonRunnerEvidence {
+  /** A file imports pytest. */
+  importsPytest: boolean;
+  /** A file imports unittest. */
+  importsUnittest: boolean;
+  /** Some test is a method of a unittest.TestCase subclass. */
+  hasTestCaseTests: boolean;
+  /** Some test is a module-level function or a method of a plain `Test*` class, which only pytest collects. */
+  hasPlainTests: boolean;
+}
+
+/**
+ * The runner of a repo's Python tests, from files only (nothing is executed), by the first rule that applies:
+ * 1. an explicit pytest signal: a pytest config at the project root (`pytest.ini`; a pytest section in `tox.ini` or `setup.cfg`;
+ *    `pyproject.toml` mentioning pytest), a `conftest.py` anywhere, or an inventoried file that imports pytest: pytest;
+ * 2. an inventoried test derived from `unittest.TestCase`: unittest;
+ * 3. any other inventoried test (a module-level function or a plain `Test*` class): pytest, inferred, because only pytest collects those;
+ * 4. an inventoried file that imports unittest: unittest;
+ * 5. otherwise unknown (only unparsed files, or files with no tests and no import).
+ * Configured settings are not read.
+ */
+export function detectPythonRunner(root: string, hasConftest: boolean, evidence: PythonRunnerEvidence): PythonRunner {
+  const configured =
+    isRealFile(join(root, 'pytest.ini')) ||
+    PYTEST_SECTION.test(readIfPresent(join(root, 'tox.ini'))) ||
+    PYTEST_SECTION.test(readIfPresent(join(root, 'setup.cfg'))) ||
+    readIfPresent(join(root, 'pyproject.toml')).includes('pytest');
+  if (configured || hasConftest || evidence.importsPytest) return 'pytest';
+  if (evidence.hasTestCaseTests) return 'unittest';
+  if (evidence.hasPlainTests) return 'pytest';
+  return evidence.importsUnittest ? 'unittest' : 'unknown';
 }
 
 export function detectRunner(root: string, importedModules?: readonly string[]): Runner {

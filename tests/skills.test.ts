@@ -244,6 +244,84 @@ describe('skills', () => {
     });
   });
 
+  describe('Python adapter documentation', () => {
+    const read = (...parts: string[]): string => readFileSync(join(ROOT, ...parts), 'utf8');
+    const inventory = read('references', 'inventory.md');
+    const readme = read('README.md');
+
+    it('states the Python rules, the optional note scopes and the implementation limits in inventory.md', () => {
+      for (const word of ['noteScopes', 'supported', '# @lane', 'custom markers', 'web-tree-sitter', 'scanProject', 'collect_ignore']) expect(inventory, word).toContain(word);
+    });
+
+    it('does not describe Python as unsupported or unread any more', () => {
+      expect(inventory).not.toMatch(/Tests in other languages are not parsed/);
+      expect(inventory).not.toMatch(/"language": "Python"[^\n]*detected-unsupported/);
+    });
+
+    it('has test-strategy show the Python lane comment form and point at the reference', () => {
+      const body = load('test-strategy').body;
+      expect(body).toContain('# @lane');
+      expect(body).toContain('references/inventory.md');
+    });
+
+    it('has test-audit say Python tests are inventoried in its inventory pointer', () => {
+      const line = load('test-audit').body.split('\n').find(entry => entry.includes('references/inventory.md'));
+      expect(line, 'no inventory pointer').toBeDefined();
+      expect(line).toContain('Python');
+    });
+
+    it('has README stop saying that only JavaScript and TypeScript tests are parsed, and mention Python', () => {
+      expect(readme).not.toMatch(/only (?:JavaScript and TypeScript|TypeScript and JavaScript)[^.]*(?:tests )?(?:are |is )?parsed/i);
+      expect(readme).not.toMatch(/the only languages whose tests are parsed/i);
+      const limits = readme.split('## Known limitations')[1] ?? '';
+      expect(limits).toMatch(/Python/);
+      expect(limits).toMatch(/JavaScript, TypeScript and Python tests are parsed/);
+    });
+
+    it('documents Python opaque registration and the scoped rule in scan-rules.md', () => {
+      const rules = read('references', 'scan-rules.md');
+      for (const word of ['load_tests', 'imported test class', 'non-literal', 'noteScopes']) expect(rules, word).toContain(word);
+    });
+
+    it('keeps private preferences out of the public text', () => {
+      for (const [name, text] of [['inventory.md', inventory], ['scan-rules.md', read('references', 'scan-rules.md')], ['README.md', readme]] as const) {
+        expect(text, name).not.toMatch(/owner's rule/i);
+      }
+      expect(inventory).not.toMatch(/\bowner\b/i);
+    });
+
+    it('documents the final limits and failure modes of the Python adapter', () => {
+      for (const word of ['working-directory', 'E_RUNTIME_BROKEN', '2,000,000', 'could not be parsed']) expect(inventory, word).toContain(word);
+    });
+
+    it('says an imported test class is opaque only from a project module', () => {
+      expect(inventory).not.toMatch(/from unittest import TestCase`\s+(?:also )?counts/);
+      expect(read('references', 'scan-rules.md')).not.toMatch(/from unittest import TestCase`\s+also matches/);
+      expect(inventory).toContain('project module');
+    });
+
+    it('describes the parsed-module opaque filter, the managed install flag and the note separator', () => {
+      for (const word of ['--ignore-scripts', 'module', 'level']) expect(inventory, word).toContain(word);
+      expect(inventory).not.toContain('cannot read from the source line');
+      expect(inventory).not.toMatch(/`from` clause[\s\S]{0,40}cannot read/);
+      expect(inventory).not.toMatch(/current npm versions do not run/);
+      const example = inventory.split('\n').find(line => line.includes('- Inventory incomplete:'));
+      expect(example, 'no header example').toBeDefined();
+      expect(example).toContain('; ');
+      expect(read('references', 'scan-rules.md')).not.toMatch(/source line/);
+    });
+
+    it('keeps the plugin-root pointer out of the block users copy into their own instructions', () => {
+      const lines = load('test-strategy').body.split('\n');
+      const start = lines.findIndex(line => /^ {4}## Testing rules/.test(line));
+      expect(start, 'no copied block').toBeGreaterThanOrEqual(0);
+      const end = lines.findIndex((line, index) => index > start && line.trim() !== '' && !line.startsWith('    '));
+      const block = lines.slice(start, end).join('\n');
+      expect(block).toContain('# @lane');
+      expect(block).not.toContain('<plugin-root>');
+    });
+  });
+
   it.each(['test-audit', 'test-strategy'])('%s preserves publication, platform obligations and current owner policy in CI advice', name => {
     const body = load(name).body;
     expect(body).toMatch(/preserve[^\n]*publication/i);
