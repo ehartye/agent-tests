@@ -52,11 +52,42 @@ describe('what counts as a test', () => {
       ),
       tests: [['test_win', 3], ['test_outer', 4]],
     },
+    {
+      title: 'pytest fixtures named test* are not tests, bare or called, pytest or pytest_asyncio, at module level and in classes',
+      source: py(
+        'import pytest', 'import pytest_asyncio',
+        '@pytest.fixture', 'def test_f1(): pass',
+        '@pytest.fixture(scope="module")', 'def test_f2(): pass',
+        '@fixture', 'def test_f3(): pass',
+        '@fixture(autouse=True)', 'def test_f4(): pass',
+        '@pytest_asyncio.fixture', 'async def test_f5(): pass',
+        '@pytest_asyncio.fixture(scope="session")', 'async def test_f6(): pass',
+        '@pytest.mark.slow', 'def test_real(): pass',
+        'class TestA:', '    @pytest.fixture', '    def test_f7(self): pass', '    def test_m(self): pass',
+      ),
+      tests: [['test_real', 16], ['test_m', 20, 'TestA']],
+    },
   ];
   it.each(cases)('$title', async ({ source, tests }) => {
     const facts = await extractPythonFacts(source);
     expect(facts.hasError).toBe(false);
     expect(facts.tests.map(t => [t.name, t.line, ...(t.className ? [t.className] : [])])).toEqual(tests);
+  });
+});
+
+describe('test style', () => {
+  it('marks methods of TestCase-derived classes and nothing else as testCase', async () => {
+    const facts = await extractPythonFacts(py(
+      'import unittest',
+      'def test_function(): pass',
+      'class TestPlain:', '    def test_plain(self): pass',
+      'class A(unittest.TestCase):', '    def test_a(self): pass',
+      'class B(TestCase):', '    def test_b(self): pass',
+      'class TestC(DjangoTestCase):', '    def __init__(self): pass', '    def test_c(self): pass',
+    ));
+    expect(facts.tests.map(t => [t.name, t.testCase])).toEqual([
+      ['test_function', false], ['test_plain', false], ['test_a', true], ['test_b', true], ['test_c', true],
+    ]);
   });
 });
 
@@ -151,6 +182,11 @@ describe('tags in leading comments', () => {
     { title: 'a risk must start with a letter', source: py('# @risk 9lives', 'x = 1'), tags: {} },
     { title: 'a subject takes the first non-space token', source: py('# @subject src/a.py extra words', 'x = 1'), tags: { subjects: ['src/a.py'] } },
     { title: 'a tag inside a docstring or a string is not read', source: py('"""', '@lane merge', '"""', 'x = 1'), tags: {} },
+    { title: 'a lane followed by punctuation is still read, as in JS', source: py('# @lane merge,', 'x = 1'), tags: { lane: 'merge' } },
+    { title: 'a lane followed by a period is still read', source: py('# @lane merge.', 'x = 1'), tags: { lane: 'merge' } },
+    { title: 'only the first @lane counts: invalid first, valid second gives none', source: py('# @lane nightly', '# @lane merge', 'x = 1'), tags: {} },
+    { title: 'only the first @lane counts: valid first, invalid second keeps the first', source: py('# @lane edit', '# @lane nightly', 'x = 1'), tags: { lane: 'edit' } },
+    { title: 'the first @risk counts, subjects accumulate', source: py('# @risk a', '# @risk b', '# @subject s1 @subject s2', 'x = 1'), tags: { risk: 'a', subjects: ['s1', 's2'] } },
     { title: 'no comments at all', source: py('def test_a(): pass'), tags: {} },
   ];
   it.each(cases)('$title', async ({ source, tags }) => {

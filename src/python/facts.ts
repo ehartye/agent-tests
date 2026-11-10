@@ -21,6 +21,8 @@ export interface PythonTest {
   /** 1-based line of the `def` (decorators excluded). */
   line: number;
   assertions: number;
+  /** A method of a unittest `TestCase`-derived class (base `TestCase`, `unittest.TestCase` or a name ending `TestCase`); false for module-level functions and plain `Test*` classes. */
+  testCase: boolean;
   /** Python has no todo form; never set. Present so a Python test is shaped like a JavaScript one. */
   todo?: false;
   /** The enclosing class, for a method. */
@@ -107,7 +109,11 @@ const isModuleOrChild = (module: string, root: string) => module === root || mod
 const compact = (text: string) => text.replace(/\s+/g, '');
 const line = (node: Node) => node.startPosition.row + 1;
 
-/** Leading comment lines before the first statement; blank lines are skipped, a docstring or code ends them. */
+/**
+ * Leading comment lines before the first statement (blank lines are skipped; a docstring or code ends them), read with
+ * the same patterns as the JavaScript tags in `parseTags`: the first `@lane` match only, kept only if it names a lane;
+ * the first `@risk`; every `@subject`.
+ */
 function readTags(source: string): PythonFacts['tags'] {
   const comments: string[] = [];
   for (const raw of source.split(/\r\n|\r|\n/)) {
@@ -116,16 +122,13 @@ function readTags(source: string): PythonFacts['tags'] {
     if (!text.startsWith('#')) break;
     comments.push(text);
   }
+  const head = comments.join('\n');
   const tags: PythonFacts['tags'] = {};
-  const subjects: string[] = [];
-  for (const comment of comments) {
-    const lane = comment.match(/@lane\s+(\S+)/)?.[1];
-    if (tags.lane === undefined && lane && (LANES as readonly string[]).includes(lane)) tags.lane = lane as LaneName;
-    const risk = comment.match(/@risk\s+([A-Za-z][\w-]*)/)?.[1];
-    if (tags.risk === undefined && risk) tags.risk = risk;
-    const subject = comment.match(/@subject\s+(\S+)/)?.[1];
-    if (subject) subjects.push(subject);
-  }
+  const lane = head.match(/@lane\s+([a-z]+)/)?.[1];
+  if (lane && (LANES as readonly string[]).includes(lane)) tags.lane = lane as LaneName;
+  const risk = head.match(/@risk\s+([A-Za-z][\w-]*)/)?.[1];
+  if (risk) tags.risk = risk;
+  const subjects = [...head.matchAll(/@subject\s+(\S+)/g)].map(match => match[1]!);
   if (subjects.length > 0) tags.subjects = subjects;
   return tags;
 }
@@ -159,6 +162,12 @@ function decoratorExpressions(node: Node): Node[] {
     const expression = decorator.namedChildren.find(child => child.type !== 'comment');
     return expression ? [expression] : [];
   });
+}
+
+/** `pytest.fixture`, `fixture` or `pytest_asyncio.fixture`, bare or called: a decorated function is not collected as a test. */
+function isFixtureDecorator(expression: Node): boolean {
+  const callee = expression.type === 'call' ? expression.childForFieldName('function') : expression;
+  return !!callee && /^(?:pytest\.|pytest_asyncio\.)?fixture$/.test(compact(callee.text));
 }
 
 /** `pytest.mark.<name>` or a call of it. */
@@ -213,7 +222,9 @@ function readTests(root: Node): PythonTest[] {
     const definition = undecorated(node);
     if (definition?.type === 'function_definition') {
       const name = definition.childForFieldName('name')?.text ?? '';
-      if (name.startsWith('test')) tests.push(makeTest(definition, name, unique(decoratorExpressions(node).flatMap(e => markerName(e) ?? []))));
+      if (name.startsWith('test') && !decoratorExpressions(node).some(isFixtureDecorator)) {
+        tests.push(makeTest(definition, name, unique(decoratorExpressions(node).flatMap(e => markerName(e) ?? [])), false));
+      }
     } else if (definition?.type === 'class_definition') {
       const className = definition.childForFieldName('name')?.text ?? '';
       const body = definition.childForFieldName('body');
@@ -225,17 +236,17 @@ function readTests(root: Node): PythonTest[] {
         const method = undecorated(member);
         if (method?.type !== 'function_definition') continue;
         const name = method.childForFieldName('name')?.text ?? '';
-        if (!name.startsWith('test')) continue;
+        if (!name.startsWith('test') || decoratorExpressions(member).some(isFixtureDecorator)) continue;
         const own = decoratorExpressions(member).flatMap(e => markerName(e) ?? []);
-        tests.push({ ...makeTest(method, name, unique([...classMarkers, ...own])), className });
+        tests.push({ ...makeTest(method, name, unique([...classMarkers, ...own]), unittestClass), className });
       }
     }
   }
   return tests;
 }
 
-function makeTest(definition: Node, name: string, markers: string[]): PythonTest {
-  return { name, line: line(definition), assertions: countAssertions(definition.childForFieldName('body')), markers };
+function makeTest(definition: Node, name: string, markers: string[], testCase: boolean): PythonTest {
+  return { name, line: line(definition), assertions: countAssertions(definition.childForFieldName('body')), testCase, markers };
 }
 
 /** Assert statements and asserting calls anywhere in the body, nested defs and lambdas included. A with-block or call of the same call node counts once. */
