@@ -149,6 +149,12 @@ describe('skills', () => {
     expect(pairs.some(pair => /forbids installs/.test(pair) && /\bstop\b/.test(pair))).toBe(true);
   });
 
+  it('names the managed home in the setup write-scope text', () => {
+    const scope = load('tests-setup').body.split('\n').find(line => line.includes('writes nothing in the project'));
+    expect(scope).toContain('managed home');
+    expect(load('test-strategy').body).toContain('managed home');
+  });
+
   it.each(['test-audit', 'test-strategy'])('%s preserves publication, platform obligations and current owner policy in CI advice', name => {
     const body = load(name).body;
     expect(body).toMatch(/preserve[^\n]*publication/i);

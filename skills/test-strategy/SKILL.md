@@ -14,7 +14,7 @@ up from this skill's directory). In Codex, resolve it from the SKILL.md file you
 Quote the project path (`"<project>"`) so a Windows path with spaces survives.
 
 Runtime first: managed commands need the managed runtime. Check it with `node "<plugin-root>/scripts/setup.js" --check --json`; if `ok` is false, load tests-setup.
-Setup installs under the managed folder (npm may also use its own cache), needs registry access and writes nothing in the project or the plugin. A read-only review may run it unless the brief forbids installs or network; then stop, report that scope and ask the owner.
+Setup installs under the managed home (`AGENT_TESTS_HOME`, default `~/.agent-tests`; npm may also use its own cache), needs registry access and writes nothing in the project or the plugin. A read-only review may run it unless the brief forbids installs or network; then stop, report that scope and ask the owner.
 
 ## 1. Know the phase
 

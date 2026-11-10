@@ -10,7 +10,7 @@ does not need this check or installation; follow test-audit's manual route and s
 
 The plugin cache holds source only. The `tests` CLI runs from a managed release in
 `~/.agent-tests/releases/<version>-<fingerprint>-...` (override with `AGENT_TESTS_HOME`).
-Setup installs under that folder (npm may also use its own cache), needs registry access and writes nothing in the project or the plugin.
+Setup installs under the managed home (`AGENT_TESTS_HOME`, default `~/.agent-tests`; npm may also use its own cache), needs registry access and writes nothing in the project or the plugin.
 Skills always launch it through the plugin's checked launcher, never a `tests` on PATH:
 
     node "<plugin-root>/scripts/run-managed.js" <command> [args]
