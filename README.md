@@ -145,6 +145,8 @@ Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
 
+Version 0.11.0 makes four audit-scan rules say what they found and stop flagging safe code. `no-direct-assertions` now names the tests (`noAssertionTests`), and declared skips are exempt from it. Skipped cases are reported, declared and conditional, with `ctx.skip` reasons; a Playwright-style `test.skip(cond, reason)` inside a test body is a conditional skip, not a test. `worktree.shared-tmp` no longer flags object-property data rows or absence checks, and `worktree.fixed-db-file` is quiet when the file is joined to a directory the file made with `mkdtemp`, and otherwise carries a note that path uniqueness is unresolved. The path-filter CI finding now says a `paths:` filter is a trigger, not an ownership list. See [scan rules](references/scan-rules.md).
+
 Version 0.10.1 puts managed-runtime readiness first in the test-strategy skill and states what setup writes: the missing-runtime message now names the managed home and says setup never writes in the project or the plugin, and the skills say a read-only review may run setup unless its brief forbids installs or network access.
 
 Version 0.10.0 adds opt-in `scan`/`report --out` with immutable file publication, producer identity and exact-byte receipts. Existing stdout and checked-launcher behavior remain unchanged; see [saved audit artifacts](references/audit-output.md).
