@@ -13,6 +13,9 @@ to keep the set of suspect changes small.
 up from this skill's directory). In Codex, resolve it from the SKILL.md file you loaded, not from the current directory.
 Quote the project path (`"<project>"`) so a Windows path with spaces survives.
 
+Runtime first: managed commands need the managed runtime. Check it with `node "<plugin-root>/scripts/setup.js" --check --json`; if `ok` is false, load tests-setup.
+Setup installs under the managed home (`AGENT_TESTS_HOME`, default `~/.agent-tests`; npm may also use its own cache), needs registry access and writes nothing in the project or the plugin. A read-only review may run it unless the brief forbids installs or network; then stop, report that scope and ask the owner.
+
 ## 1. Know the phase
 
 | Phase | Goal | Tests that matter | Automatic CI | Compat tests |
@@ -35,8 +38,7 @@ directory names and writes nothing. Show it to the owner and ask for the phase, 
 critical, standard or low. Never write the file before they have confirmed all three. Then run the same command with
 `--write` to create the file, edit `.testing/risk.yml` to apply their answers (phase, consumers, tiers), rerun
 `report --root "<project>"` to validate it (an `E_RISKMAP` error names the bad field) and commit it. Tiers: `critical`
-(data loss, auth, money, public contracts), `standard`, `low` (presentation, examples). First matching area wins, so
-list specific areas first. If the CLI is missing, load the tests-setup skill.
+(data loss, auth, money, public contracts), `standard`, `low` (presentation, examples). First matching area wins, so list specific areas first. A missing CLI: see "Runtime first" above.
 
 ## 3. Assign lanes by frequency
 

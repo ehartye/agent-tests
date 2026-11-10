@@ -134,6 +134,27 @@ describe('skills', () => {
     expect(load('tests-setup').body).toContain('scripts/setup.js');
   });
 
+  it('has test-strategy check runtime readiness before its first managed command', () => {
+    const lines = load('test-strategy').body.split('\n');
+    const check = lines.findIndex(line => line.includes('setup.js" --check --json'));
+    const command = lines.findIndex(line => /run-managed\.js" [a-z]/.test(line));
+    expect(check, 'no readiness check').toBeGreaterThanOrEqual(0);
+    expect(command, 'no managed command').toBeGreaterThanOrEqual(0);
+    expect(check).toBeLessThan(command);
+  });
+
+  it('has tests-setup stop before installing when the brief forbids installs', () => {
+    const lines = load('tests-setup').body.split('\n');
+    const pairs = lines.map((line, index) => `${line} ${lines[index + 1] ?? ''}`);
+    expect(pairs.some(pair => /forbids installs/.test(pair) && /\bstop\b/.test(pair))).toBe(true);
+  });
+
+  it('names the managed home in the setup write-scope text', () => {
+    const scope = load('tests-setup').body.split('\n').find(line => line.includes('writes nothing in the project'));
+    expect(scope).toContain('managed home');
+    expect(load('test-strategy').body).toContain('managed home');
+  });
+
   it.each(['test-audit', 'test-strategy'])('%s preserves publication, platform obligations and current owner policy in CI advice', name => {
     const body = load(name).body;
     expect(body).toMatch(/preserve[^\n]*publication/i);

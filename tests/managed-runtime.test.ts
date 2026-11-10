@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { checkDependencies, describeSource, installRuntime, inspectInstallation, resolveRuntime } from '../scripts/managed-runtime.js';
@@ -73,6 +73,18 @@ describe('describeSource', () => {
 describe('resolveRuntime', () => {
   it('says to run tests-setup when nothing is installed', () => {
     expect(() => resolveRuntime(source(), { home: makeTree() })).toThrow(/tests-setup/);
+  });
+
+  it('states what setup writes and where when nothing is installed', () => {
+    const home = makeTree();
+    let message = '';
+    try { resolveRuntime(source(), { home }); } catch (error) { message = (error as Error).message; }
+    expect(message).toMatch(/^Managed CLI 1\.2\.3 is missing\. Run the tests-setup skill \(node ".*setup\.js"\)\./);
+    expect(message).toContain(home);
+    expect(message).toContain('never in the project or the plugin');
+    expect(message).toContain('npm may also use its own cache');
+    expect(message).toContain('npm');
+    expect(message).toMatch(/^[ -~]*$/);
   });
 
   it('refuses a home inside the plugin checkout', () => {
@@ -230,6 +242,35 @@ describe('launcher contract', () => {
     const result = run('setup.js', ['--check', '--json'], makeTree());
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+  });
+
+  it('setup.js --check --json carries the same write-scope sentence in errors[0]', () => {
+    const home = makeTree();
+    const result = run('setup.js', ['--check', '--json'], home);
+    expect(result.status).toBe(1);
+    expect(result.stdout.trim().split('\n')).toHaveLength(1);
+    const report = JSON.parse(result.stdout);
+    expect(report.ok).toBe(false);
+    expect(report.errors[0]).toContain('tests-setup');
+    expect(report.errors[0]).toContain(resolve(home));
+    expect(report.errors[0]).toContain('never in the project or the plugin');
+    expect(report.errors[0]).toContain('npm may also use its own cache');
+    expect(report.errors[0]).toContain('npm');
+  });
+
+  it('run-managed.js names the managed home and the write scope when the runtime is missing', () => {
+    const home = makeTree();
+    const result = run('run-managed.js', ['risk-draft', '--root', join(repoRoot, 'tests', 'fixtures', 'clean')], home);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    const error = errorOf(result.stderr);
+    expect(error.code).toBe('E_RUNTIME_MISSING');
+    expect(error.hint).toContain('tests-setup');
+    expect(error.message).toContain('tests-setup');
+    expect(error.message).toContain(resolve(home));
+    expect(error.message).toContain('never in the project');
+    expect(error.message).toContain('npm may also use its own cache');
+    expect(error.message).toContain('npm');
   });
 
   it('setup.js reports an install failure as E_SETUP_FAILED without the circular hint', () => {
