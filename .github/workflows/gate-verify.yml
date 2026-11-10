@@ -1,0 +1,23 @@
+# Throwaway gate verification for the Python parser dependency. Removed before merge.
+name: gate-verify
+on: workflow_dispatch
+jobs:
+  managed-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: managed install, check and capabilities
+        shell: bash
+        run: |
+          export AGENT_TESTS_HOME="$RUNNER_TEMP/agent-tests-home"
+          node --version && npm --version
+          node scripts/setup.js
+          node scripts/setup.js --check --json
+          node scripts/run-managed.js capabilities
