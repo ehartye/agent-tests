@@ -190,7 +190,7 @@ Version 0.4.2 advertises managed helper commands and verifies byte-identical Pla
 provenance metadata. Use `--verify --require-current` for exact producer identity at release gates.
 
 
-Version 0.3 includes static audits for TypeScript and JavaScript projects using vitest, jest or Node's test runner,
+Version 0.3 includes static audits for TypeScript and JavaScript projects (the only languages whose tests are parsed) using vitest, jest or Node's test runner,
 an optional Node reporter, and explicitly invoked observational candidate evidence for Node-test/Vitest. Scan and
 report never run tests. Candidate observation does not select lanes, suppress checks or authorize integration.
 CI charges and statistical flakiness are not measured; remediation and wider runner/language support remain separate work.
@@ -208,6 +208,10 @@ It supplies evidence and validation, rather than a common game director or input
 
 ## Known limitations
 
+- Only JavaScript and TypeScript tests are parsed. Test files in Python, Go, Ruby, PowerShell, Java, Kotlin, C# and PHP are
+  counted by conventional file name but not read or inventoried: the scan reports them as an incomplete inventory, and a
+  critical area it cannot see tests for is reported as `wiring.inventory-incomplete` (coverage unknown) rather than uncovered.
+  Tests with unconventional names and inline tests are not counted at all. See [references/inventory.md](references/inventory.md).
 - Pattern detectors also match strings inside tests that are about those patterns, including this repository's own tests.
   Findings are evidence for the agent to read, not verdicts.
 - Discovery skips `.local`, `.playwright-mcp`, `test-results` and `playwright-report` so archived checkouts and generated reports do not
