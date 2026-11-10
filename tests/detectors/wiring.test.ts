@@ -263,3 +263,29 @@ describe('a fixture project with folder/** roots', () => {
     expect(drift[0].evidence).toBe('tools/build.ts');
   });
 });
+
+describe('detectWiring with tests the scan cannot read', () => {
+  const critical = (path: string): RiskMap => ({ ...defaultRiskMap(), areas: [{ path, tier: 'critical' }] });
+  const run = (path: string, files: string[], unsupported: string[], tests: Array<{ rel: string; subjects: string[] }> = []) =>
+    detectWiring(critical(path), tests.map(test => ({ ...test, tier: 'critical' as const, tags: {} })), [], () => files, unsupported)
+      .filter(finding => finding.rule.startsWith('wiring.uncovered') || finding.rule.startsWith('wiring.inventory'));
+
+  it.each([
+    { name: 'an area of C++ files, with only PowerShell tests detected', area: 'Source/**', files: ['Source/a.cpp', 'Source/a.h'], unsupported: ['PowerShell'], rule: 'wiring.inventory-incomplete' },
+    { name: 'an area mixing TypeScript and Python files', area: 'src/**', files: ['src/a.ts', 'src/b.py'], unsupported: ['Python'], rule: 'wiring.inventory-incomplete' },
+    { name: 'an area of JS and TS files only, although Go is detected', area: 'web/**', files: ['web/a.ts', 'web/b.mjs', 'web/c.tsx'], unsupported: ['Go'], rule: 'wiring.uncovered-critical' },
+    { name: 'an area of C++ files when no unsupported language is detected', area: 'Source/**', files: ['Source/a.cpp'], unsupported: [], rule: 'wiring.uncovered-critical' },
+    { name: 'a single-file area written in Python', area: 'src/core.py', files: ['src/core.py', 'src/other.ts'], unsupported: ['Python'], rule: 'wiring.inventory-incomplete' },
+  ])('reports $rule for $name', ({ area, files, unsupported, rule }) => {
+    const findings = run(area, files, unsupported);
+    expect(findings.map(finding => `${finding.rule}@${finding.file}`)).toEqual([`${rule}@${area}`]);
+    if (rule === 'wiring.inventory-incomplete') {
+      expect(findings[0]!.message).toContain(unsupported.join(', '));
+      expect(findings[0]!.message).toContain('coverage is unknown');
+    }
+  });
+
+  it('reports nothing for an area that a supported test covers', () => {
+    expect(run('Source/**', ['Source/a.cpp'], ['PowerShell'], [{ rel: 'tests/a.test.ts', subjects: ['Source/a.cpp'] }])).toEqual([]);
+  });
+});

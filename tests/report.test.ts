@@ -530,3 +530,37 @@ describe('renderMarkdown reports skipped cases', () => {
     expect(md).not.toContain('Skipped cases');
   });
 });
+
+describe('renderMarkdown inventory header', () => {
+  const language = (name: string, runner: string, files: number, status: 'supported' | 'detected-unsupported') => ({ language: name, runner, files, status });
+  const header = (overrides: Partial<EvidenceReport>): string[] => renderMarkdown(report(overrides)).split('\n').filter(line => /^- (Languages|Inventory incomplete|No supported runner)/.test(line));
+
+  it('lists the languages and, when incomplete, the unsupported ones with the notes', () => {
+    const lines = header({
+      inventory: { complete: false, languages: [language('JavaScript', 'vitest', 3, 'supported'), language('Python', 'unknown', 7, 'detected-unsupported')], notes: ['Counted by file name only.'] },
+      files: [record('tests/a.test.ts')],
+    });
+    expect(lines).toEqual(['- Languages: JavaScript (vitest, 3 files), Python (detected-unsupported, 7 files)', '- Inventory incomplete: Python detected but not inventoried. Counted by file name only.']);
+  });
+
+  it('omits the incomplete line when the inventory is complete and both lines without an inventory', () => {
+    expect(header({ inventory: { complete: true, languages: [language('JavaScript', 'vitest', 3, 'supported')], notes: [] }, files: [record('tests/a.test.ts')] })).toEqual(['- Languages: JavaScript (vitest, 3 files)']);
+    expect(header({ files: [record('tests/a.test.ts')] })).toEqual([]);
+  });
+
+  it.each([
+    { runner: 'unknown' as const, files: 0, line: true },
+    { runner: 'unknown' as const, files: 1, line: false },
+    { runner: 'vitest' as const, files: 0, line: false },
+  ])('prints the zero-count line only for runner $runner with $files files: $line', ({ runner, files, line }) => {
+    const md = renderMarkdown(report({ runner, files: Array.from({ length: files }, (_, i) => record(`tests/t${i}.test.ts`)) }));
+    expect(md.includes('- No supported runner detected; a zero test count does not prove the project has no tests.')).toBe(line);
+  });
+
+  it('lists coverage unknown after uncovered-critical and before drift', () => {
+    const project = section(renderMarkdown(report({ projectFindings: ['wiring.drift', 'wiring.inventory-incomplete', 'wiring.uncovered-critical'].map(rule => finding({ category: 'wiring', rule, file: rule })) })), 'Project findings');
+    const order = ['wiring.uncovered-critical', 'wiring.inventory-incomplete', 'wiring.drift'].map(rule => project.indexOf(`**${rule}**`));
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(order[0]).toBeGreaterThan(-1);
+  });
+});

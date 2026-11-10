@@ -20,7 +20,7 @@ const MAX_SKIP_REASONS_PER_FILE = 3;
 const MAX_OVERLAP_ROWS = 5;
 
 /** Wiring rules in the order the audit should read them; other wiring rules follow. */
-const WIRING_ORDER = ['wiring.uncovered-critical', 'wiring.drift', 'wiring.no-risk-map'];
+const WIRING_ORDER = ['wiring.uncovered-critical', 'wiring.inventory-incomplete', 'wiring.drift', 'wiring.no-risk-map'];
 
 /** Any run of whitespace, newlines and carriage returns included, becomes one space, so a value stays on one line. */
 const flat = (text: string): string => text.replace(/\s+/g, ' ').trim();
@@ -136,6 +136,15 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
     `- Risk map: ${report.riskMapPresent ? 'present' : 'missing'}`,
     `- Test files: ${report.files.length}`,
   ];
+  if (report.inventory) {
+    const { languages, complete, notes } = report.inventory;
+    out.push(`- Languages: ${languages.map(entry => `${flat(entry.language)} (${entry.status === 'supported' ? flat(entry.runner) : entry.status}, ${entry.files} files)`).join(', ')}`);
+    if (!complete) {
+      const unsupported = languages.filter(entry => entry.status === 'detected-unsupported').map(entry => flat(entry.language));
+      out.push(`- Inventory incomplete: ${[unsupported.length > 0 ? `${unsupported.join(', ')} detected but not inventoried.` : '', ...notes.map(flat)].filter(Boolean).join(' ')}`);
+    }
+  }
+  if (report.runner === 'unknown' && report.files.length === 0) out.push('- No supported runner detected; a zero test count does not prove the project has no tests.');
   if (unparsed.length > 0) {
     const listed = unparsed.slice(0, MAX_UNPARSED_LISTED).map(span);
     if (unparsed.length > MAX_UNPARSED_LISTED) listed.push(`+${unparsed.length - MAX_UNPARSED_LISTED} more`);

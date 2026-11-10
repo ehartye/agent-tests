@@ -6,11 +6,11 @@ import { detectRedundancy } from './detectors/redundancy.ts';
 import { detectShims } from './detectors/shims.ts';
 import { classifiableFiles, detectWiring, unmappedSubjectFinding } from './detectors/wiring.ts';
 import { detectWorktreeHazards } from './detectors/worktree.ts';
-import { detectRunner, discoverTestInfrastructure, discoverTests } from './discover.ts';
+import { detectRunner, discoverCensus, discoverTestInfrastructure, discoverTests } from './discover.ts';
 import { declaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile, type ParsedTest } from './parse.ts';
 import { candidateDirs } from './riskdraft.ts';
 import { loadRiskMap, tierFor } from './riskmap.ts';
-import { EVIDENCE_SCHEMA, Tier, type EvidenceReport, type FileFlag, type Finding, type RiskMap, type TestFileRecord } from './schema.ts';
+import { EVIDENCE_SCHEMA, Tier, type EvidenceReport, type FileFlag, type Finding, type Inventory, type RiskMap, type TestFileRecord } from './schema.ts';
 
 export interface ScanOptions {
   commitLimit?: number;
@@ -126,6 +126,23 @@ function loadTests(root: string): LoadedFile[] {
   }
 }
 
+/**
+ * The language census, or undefined for a repo with no non-JavaScript test-named files, so a JavaScript-only report keeps its
+ * exact JSON. Every other language is counted by file name only and is never read, hence detected-unsupported.
+ */
+function inventoryOf(root: string, runner: EvidenceReport['runner'], jsFiles: number): Inventory | undefined {
+  const others = discoverCensus(root);
+  if (others.length === 0) return undefined;
+  return {
+    complete: false,
+    languages: [
+      { language: 'JavaScript', runner, files: jsFiles, status: 'supported' },
+      ...others.map(({ language, files }) => ({ language, runner: 'unknown', files: files.length, status: 'detected-unsupported' as const })),
+    ],
+    notes: ['Those files are named like tests and were counted by file name only, never read, so their test counts and the coverage they give are unknown.'],
+  };
+}
+
 const byLocation = (a: Finding, b: Finding): number => (a.line ?? 0) - (b.line ?? 0) || (a.rule < b.rule ? -1 : a.rule > b.rule ? 1 : 0);
 
 /** Gather evidence about a project's tests. Never executes them and never judges: verdicts belong to the audit skill. */
@@ -186,6 +203,8 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
       // Infrastructure may be unreadable; tests still have their own parse diagnostics.
     }
   }
+  const runner = detectRunner(root, loaded.flatMap(file => file.parsed.imports));
+  const inventory = inventoryOf(root, runner, loaded.length);
   const redundancy = detectRedundancy(loaded);
   attach(redundancy.findings);
   attach(
@@ -194,6 +213,7 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
       [...records.values()].map(record => ({ rel: record.file, tier: record.tier, tags: record.tags, subjects: record.subjects })),
       candidateDirs(root),
       dir => classifiableFiles(root, dir),
+      inventory?.languages.filter(entry => entry.status === 'detected-unsupported').map(entry => entry.language),
     ),
   );
   attach(unmappedFindings);
@@ -205,11 +225,12 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
   return {
     schema: EVIDENCE_SCHEMA,
     root,
-    runner: detectRunner(root, loaded.flatMap(file => file.parsed.imports)),
+    runner,
     phase: map?.phase ?? null,
     riskMapPresent: map !== null,
     files: [...records.values()],
     clusters: redundancy.clusters,
     projectFindings,
+    ...(inventory ? { inventory } : {}),
   };
 }

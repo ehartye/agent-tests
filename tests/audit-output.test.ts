@@ -96,4 +96,22 @@ describe('stable audit artifacts',()=>{
     const root=makeTree(),actual=makeTree(),alias=join(root,'alias');symlinkSync(actual,alias,process.platform==='win32'?'junction':'dir');
     const result=publishAudit(admitOutput(root,'alias/out'),'complete');expect(readFileSync(join(actual,'out'),'utf8')).toBe('complete');expect(result.sha256).toBe(hash('complete'));
   });
+  it.each([
+    {name:'JavaScript with no known runner and an unsupported Python file',languages:[['JavaScript','unknown',10,'supported'],['Python','unknown',1,'detected-unsupported']],warns:true},
+    {name:'a supported language with a known runner and files',languages:[['JavaScript','unknown',10,'supported'],['Python','pytest',2,'supported']],warns:false},
+    {name:'a supported language with a known runner but no files',languages:[['JavaScript','unknown',0,'supported'],['Python','pytest',0,'supported']],warns:true},
+  ] as const)('keeps the unknown-runner warning by inventory: $name',({languages,warns})=>{
+    const evidence=EvidenceReport.parse({...scan(makeTree()),inventory:{complete:false,languages:languages.map(([language,runner,files,status])=>({language,runner,files,status})),notes:[]}});
+    const warning='No supported runner detected; a zero static test count does not prove that the project has no tests.';
+    expect(auditArtifact(evidence,'report').includes(warning)).toBe(warns);
+    expect(JSON.parse(auditArtifact(evidence,'scan')).artifact.limits.includes(warning)).toBe(warns);
+  });
+  it('keeps the warning for 10 JavaScript tests with no runner config beside one Python test',()=>{
+    const files:Record<string,string>={'tests/test_x.py':'def test_x():\n    assert True\n'};
+    for(let i=0;i<10;i++)files[`tests/t${i}.test.js`]='it("x",()=>{expect(1).toBe(1);});\n';
+    const evidence=scan(makeTree(files),{commitLimit:1});
+    expect(evidence.runner).toBe('unknown');expect(evidence.inventory?.languages[0]).toMatchObject({language:'JavaScript',runner:'unknown',files:10,status:'supported'});
+    expect(auditArtifact(evidence,'report')).toContain('> No supported runner detected');
+    expect(JSON.parse(auditArtifact(evidence,'scan')).artifact.limits).toContain('No supported runner detected; a zero static test count does not prove that the project has no tests.');
+  });
 });

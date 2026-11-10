@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { detectRunner, discoverTests, isSupportPath, isTestPath, walk } from '../src/discover.ts';
+import { censusLanguage, detectRunner, discoverCensus, discoverTests, isSupportPath, isTestPath, walk } from '../src/discover.ts';
 import { makeTree } from './helpers/tree.ts';
 
 describe('isTestPath', () => {
@@ -108,5 +108,36 @@ describe('detectRunner', () => {
 
   it('reports unknown when nothing identifies a runner', () => {
     expect(detectRunner(makeTree({ 'package.json': '{not json' }))).toBe('unknown');
+  });
+});
+
+describe('censusLanguage', () => {
+  it.each([
+    ['py/test_core.py', 'Python'], ['py/core_test.py', 'Python'], ['svc/service_test.go', 'Go'],
+    ['spec/a_spec.rb', 'Ruby'], ['test/test_a.rb', 'Ruby'], ['tests/Core.Tests.ps1', 'PowerShell'],
+    ['src/FooTest.java', 'Java'], ['src/FooTests.kt', 'Kotlin'], ['src/FooTest.cs', 'C#'], ['src/FooTests.php', 'PHP'],
+    ['py/core.py', null], ['py/testing.py', null], ['py/test.txt', null], ['go/service.go', null], ['tests/Core.ps1', null],
+    ['src/Contest.java', null], ['src/Test.cs.bak', null], ['a.test.ts', null],
+  ])('names %s as %s', (rel, language) => {
+    expect(censusLanguage(rel)).toBe(language);
+  });
+});
+
+describe('discoverCensus', () => {
+  it('groups test-named files by language in sorted order and skips Python-only ignored directories', () => {
+    const root = makeTree({
+      'b/test_b.py': '', 'a/test_a.py': '', 'go/x_test.go': '', 'web/a.test.ts': '', 'src/core.py': '',
+      'venv/lib/test_v.py': '', 'env/test_e.py': '', '__pycache__/test_c.py': '', 'lib/site-packages/test_s.py': '',
+      '.tox/py/test_t.py': '', '.mypy_cache/test_m.py': '', '.pytest_cache/test_p.py': '', '.ruff_cache/test_r.py': '',
+      'pkg.egg-info/test_g.py': '', 'node_modules/x/test_n.py': '', '.venv/test_d.py': '',
+    });
+    expect(discoverCensus(root)).toEqual([
+      { language: 'Go', files: ['go/x_test.go'] },
+      { language: 'Python', files: ['a/test_a.py', 'b/test_b.py'] },
+    ]);
+  });
+
+  it('leaves JavaScript discovery alone, venv directories included', () => {
+    expect(discoverTests(makeTree({ 'venv/pkg/a.test.js': '', 'src/a.test.ts': '' }))).toEqual(['src/a.test.ts', 'venv/pkg/a.test.js']);
   });
 });

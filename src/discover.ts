@@ -55,13 +55,44 @@ const byName = (a: { name: string }, b: { name: string }): number => (a.name < b
  * Visit every regular file under root. Symbolic links and junctions are intentionally not followed (this prevents loops;
  * a symlinked test file or directory is therefore not audited), and unreadable directories are skipped.
  */
-export function walk(root: string, visit: (absolute: string, rel: string) => void, dir = root): void {
+export function walk(root: string, visit: (absolute: string, rel: string) => void, dir = root, skip: (name: string) => boolean = () => false): void {
   for (const entry of readEntries(dir).sort(byName)) {
     const absolute = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (!IGNORED_DIRS.has(entry.name)) walk(root, visit, absolute);
+      if (!IGNORED_DIRS.has(entry.name) && !skip(entry.name)) walk(root, visit, absolute, skip);
     } else if (entry.isFile()) visit(absolute, relPosix(root, absolute));
   }
+}
+
+/** Test files of languages the scan cannot read, recognized by conventional file name only (the extension decides the language). */
+const CENSUS_NAMES: ReadonlyArray<{ language: string; pattern: RegExp }> = [
+  { language: 'Python', pattern: /(?:^|\/)(?:test_[^/]*|[^/]*_test)\.py$/ },
+  { language: 'Go', pattern: /_test\.go$/ },
+  { language: 'Ruby', pattern: /(?:^|\/)(?:test_[^/]*\.rb|[^/]*_spec\.rb)$/ },
+  { language: 'PowerShell', pattern: /\.Tests\.ps1$/ },
+  { language: 'Java', pattern: /Tests?\.java$/ },
+  { language: 'Kotlin', pattern: /Tests?\.kt$/ },
+  { language: 'C#', pattern: /Tests?\.cs$/ },
+  { language: 'PHP', pattern: /Tests?\.php$/ },
+];
+
+/** Directories only a Python tree holds (environments, caches, build metadata); the census skips them in addition to IGNORED_DIRS. */
+const PYTHON_IGNORED_DIRS = new Set(['__pycache__', 'venv', 'env', 'site-packages', '.tox', '.mypy_cache', '.pytest_cache', '.ruff_cache']);
+const skipForCensus = (name: string): boolean => PYTHON_IGNORED_DIRS.has(name) || name.endsWith('.egg-info');
+
+/** The non-JavaScript language whose conventional test-file naming this path follows, or null. JavaScript and TypeScript keep `isTestPath`. */
+export function censusLanguage(rel: string): string | null {
+  return CENSUS_NAMES.find(({ pattern }) => pattern.test(rel))?.language ?? null;
+}
+
+/** Test-named files of unsupported languages, grouped by language name (sorted), each group's paths sorted. */
+export function discoverCensus(root: string): Array<{ language: string; files: string[] }> {
+  const groups = new Map<string, string[]>();
+  walk(root, (_absolute, rel) => {
+    const language = censusLanguage(rel);
+    if (language) groups.set(language, [...(groups.get(language) ?? []), rel]);
+  }, root, skipForCensus);
+  return [...groups.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([language, files]) => ({ language, files: files.sort() }));
 }
 
 export function discoverTests(root: string): string[] {

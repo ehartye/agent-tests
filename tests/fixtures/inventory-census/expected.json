@@ -1,0 +1,16 @@
+{
+  "runner": "vitest",
+  "testFiles": ["web/app.test.ts"],
+  "inventory": {
+    "complete": false,
+    "languages": [
+      { "language": "JavaScript", "runner": "vitest", "files": 1, "status": "supported" },
+      { "language": "Go", "runner": "unknown", "files": 1, "status": "detected-unsupported" },
+      { "language": "Python", "runner": "unknown", "files": 1, "status": "detected-unsupported" }
+    ]
+  },
+  "coverageFindings": [
+    "wiring.inventory-incomplete@go/**",
+    "wiring.inventory-incomplete@py/pkg/**"
+  ]
+}
