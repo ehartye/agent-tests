@@ -289,3 +289,31 @@ describe('detectWiring with tests the scan cannot read', () => {
     expect(run('Source/**', ['Source/a.cpp'], ['PowerShell'], [{ rel: 'tests/a.test.ts', subjects: ['Source/a.cpp'] }])).toEqual([]);
   });
 });
+
+describe('critical area globs through the real classifiableFiles, with Go detected', () => {
+  const tree = { 'main.py': '', 'src/m.py': '', 'src/a.ts': '', 'src/b.py': '', 'lib/deep/c.py': '', 'lib/deep/d.ts': '' };
+  const cases: Array<{ area: string; tests?: string[]; expected: string | null }> = [
+    { area: 'src/*.py', expected: 'wiring.inventory-incomplete' },
+    { area: 'src/*.ts', expected: 'wiring.uncovered-critical' },
+    { area: 'src/m.py', expected: 'wiring.inventory-incomplete' },
+    { area: 'main.py', expected: 'wiring.inventory-incomplete' },
+    { area: '*.py', expected: 'wiring.inventory-incomplete' },
+    { area: '**/*.py', expected: 'wiring.inventory-incomplete' },
+    { area: 'lib/**/*.ts', expected: 'wiring.uncovered-critical' },
+    { area: '**/*.ts', tests: ['src/a.test.ts'], expected: null },
+  ];
+
+  it.each(cases)('$area with tests [$tests] gives $expected', ({ area, tests = [], expected }) => {
+    const root = makeTree(tree);
+    const map: RiskMap = { ...defaultRiskMap(), areas: [{ path: area, tier: 'critical' }] };
+    const files = tests.map(rel => ({ rel, tier: 'critical' as const, tags: {}, subjects: [] }));
+    const findings = detectWiring(map, files, [], dir => classifiableFiles(root, dir), ['Go']);
+    expect(findings.map(finding => finding.rule)).toEqual(expected ? [expected] : []);
+  });
+
+  it('lists repo-relative forward-slash paths from the root and from a directory, whatever the platform separator', () => {
+    const root = makeTree(tree);
+    expect(classifiableFiles(root, '')).toEqual(['lib/deep/c.py', 'lib/deep/d.ts', 'main.py', 'src/a.ts', 'src/b.py', 'src/m.py']);
+    expect(classifiableFiles(root, 'lib')).toEqual(['lib/deep/c.py', 'lib/deep/d.ts']);
+  });
+});

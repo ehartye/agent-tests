@@ -76,9 +76,15 @@ const CENSUS_NAMES: ReadonlyArray<{ language: string; pattern: RegExp }> = [
   { language: 'PHP', pattern: /Tests?\.php$/ },
 ];
 
-/** Directories only a Python tree holds (environments, caches, build metadata); the census skips them in addition to IGNORED_DIRS. */
-const PYTHON_IGNORED_DIRS = new Set(['__pycache__', 'venv', 'env', 'site-packages', '.tox', '.mypy_cache', '.pytest_cache', '.ruff_cache']);
-const skipForCensus = (name: string): boolean => PYTHON_IGNORED_DIRS.has(name) || name.endsWith('.egg-info');
+/**
+ * Directories the census skips in addition to IGNORED_DIRS (JavaScript discovery does not): Python environments, caches and build
+ * metadata, and vendored or generated trees whose test files are not the project's own. Case-sensitive, like IGNORED_DIRS.
+ */
+const CENSUS_IGNORED_DIRS = new Set([
+  '__pycache__', 'venv', 'env', 'site-packages', '.tox', '.mypy_cache', '.pytest_cache', '.ruff_cache',
+  'third_party', 'thirdparty', 'testdata', 'Pods', 'target',
+]);
+const skipForCensus = (name: string): boolean => CENSUS_IGNORED_DIRS.has(name) || name.endsWith('.egg-info');
 
 /** The non-JavaScript language whose conventional test-file naming this path follows, or null. JavaScript and TypeScript keep `isTestPath`. */
 export function censusLanguage(rel: string): string | null {
@@ -87,11 +93,23 @@ export function censusLanguage(rel: string): string | null {
 
 /** Test-named files of unsupported languages, grouped by language name (sorted), each group's paths sorted. */
 export function discoverCensus(root: string): Array<{ language: string; files: string[] }> {
-  const groups = new Map<string, string[]>();
+  const rels: string[] = [];
   walk(root, (_absolute, rel) => {
-    const language = censusLanguage(rel);
-    if (language) groups.set(language, [...(groups.get(language) ?? []), rel]);
+    if (censusLanguage(rel)) rels.push(rel);
   }, root, skipForCensus);
+  return groupCensusFiles(rels);
+}
+
+/** Group repo-relative paths by the unsupported language their name follows; other paths are dropped. */
+export function groupCensusFiles(rels: readonly string[]): Array<{ language: string; files: string[] }> {
+  const groups = new Map<string, string[]>();
+  for (const rel of rels) {
+    const language = censusLanguage(rel);
+    if (!language) continue;
+    const files = groups.get(language);
+    if (files) files.push(rel);
+    else groups.set(language, [rel]);
+  }
   return [...groups.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([language, files]) => ({ language, files: files.sort() }));
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { censusLanguage, detectRunner, discoverCensus, discoverTests, isSupportPath, isTestPath, walk } from '../src/discover.ts';
+import { censusLanguage, detectRunner, discoverCensus, discoverTests, groupCensusFiles, isSupportPath, isTestPath, walk } from '../src/discover.ts';
 import { makeTree } from './helpers/tree.ts';
 
 describe('isTestPath', () => {
@@ -130,6 +130,7 @@ describe('discoverCensus', () => {
       'venv/lib/test_v.py': '', 'env/test_e.py': '', '__pycache__/test_c.py': '', 'lib/site-packages/test_s.py': '',
       '.tox/py/test_t.py': '', '.mypy_cache/test_m.py': '', '.pytest_cache/test_p.py': '', '.ruff_cache/test_r.py': '',
       'pkg.egg-info/test_g.py': '', 'node_modules/x/test_n.py': '', '.venv/test_d.py': '',
+      'third_party/x/test_t.py': '', 'thirdparty/y/z_test.go': '', 'testdata/FooTest.java': '', 'ios/Pods/Pod/PodTest.cs': '', 'target/debug/m_test.go': '',
     });
     expect(discoverCensus(root)).toEqual([
       { language: 'Go', files: ['go/x_test.go'] },
@@ -137,7 +138,18 @@ describe('discoverCensus', () => {
     ]);
   });
 
-  it('leaves JavaScript discovery alone, venv directories included', () => {
-    expect(discoverTests(makeTree({ 'venv/pkg/a.test.js': '', 'src/a.test.ts': '' }))).toEqual(['src/a.test.ts', 'venv/pkg/a.test.js']);
+  it('leaves JavaScript discovery alone, directories the census skips included', () => {
+    const dirs = ['venv', 'env', '__pycache__', 'site-packages', 'third_party', 'thirdparty', 'testdata', 'Pods', 'target'];
+    const found = discoverTests(makeTree(Object.fromEntries([...dirs.map(dir => [`${dir}/pkg/a.test.js`, '']), ['src/a.test.ts', '']])));
+    expect(found).toEqual([...dirs.map(dir => `${dir}/pkg/a.test.js`), 'src/a.test.ts'].sort());
+  });
+
+  it('groups 60,000 names in linear time, sorted', () => {
+    const names = Array.from({ length: 60000 }, (_, i) => `pkg/t${String(60000 - i).padStart(6, '0')}/test_a.py`);
+    const started = performance.now();
+    const groups = groupCensusFiles([...names, 'svc/a_test.go', 'src/core.py']);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(groups.map(group => `${group.language}:${group.files.length}`)).toEqual(['Go:1', 'Python:60000']);
+    expect(groups[1]!.files).toEqual([...names].sort());
   });
 });
