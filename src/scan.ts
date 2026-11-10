@@ -182,21 +182,17 @@ function pythonLaneOf(facts: PythonFacts): LaneName | undefined {
   return first !== undefined && perTest.every(lanes => lanes.length === 1 && lanes[0] === first) ? (first as LaneName) : undefined;
 }
 
-/** A `from <dots><module> import` clause; a line may hold several (after `;` or a compound statement's colon). */
-const FROM_IMPORT = /\bfrom\s+(\.*)\s*([A-Za-z_][\w.]*)?\s+import\b/g;
-
 /**
  * The opaque-registration candidates of a file that count. `load_tests` and a non-literal dynamic import always do. An imported test
  * class counts only when it comes from a project module (the facts record every `from X import Test*` name, the unittest, django and
- * pytest ones included): its `from` clause is read from the source line the facts give, and the module must resolve to a project
- * file as a subject would (absolute, under the package roots) or against the test's package directory (relative). A line whose clause
- * cannot be read is kept, since an unknown source is the incomplete side.
+ * pytest ones included): the `module` and `level` the facts took from the parsed import statement must resolve to a project file as a
+ * subject would (absolute, under the package roots) or against the test's package directory (relative). An entry without them is kept,
+ * since an unknown source is the incomplete side.
  */
-function projectOpaque(opaque: readonly PythonOpaque[], lines: readonly string[], testRel: string, resolver: PythonSubjectResolver): PythonOpaque[] {
+function projectOpaque(opaque: readonly PythonOpaque[], testRel: string, resolver: PythonSubjectResolver): PythonOpaque[] {
   return opaque.filter(entry => {
-    if (entry.reason !== 'imported-test-class') return true;
-    const clauses = [...(lines[entry.line - 1] ?? '').matchAll(FROM_IMPORT)];
-    return clauses.length === 0 || clauses.some(clause => resolver.isProjectModule(testRel, clause[2] ?? '', clause[1]!.length));
+    if (entry.reason !== 'imported-test-class' || entry.module === undefined || entry.level === undefined) return true;
+    return resolver.isProjectModule(testRel, entry.module, entry.level);
   });
 }
 
@@ -212,13 +208,11 @@ function loadPythonTests(root: string, rels: readonly string[], candidates: read
   const load = (rel: string): LoadedPythonFile => {
     let bytes = 0;
     let facts: PythonFacts | null = null;
-    let lines: string[] = [];
     let tags: PythonFacts['tags'] = {};
     try {
       bytes = statSync(join(root, rel)).size;
       if (bytes <= MAX_PYTHON_FILE_BYTES) {
         const text = readFileSync(join(root, rel), 'utf8');
-        lines = text.replace(/^\uFEFF/, '').split('\n');
         bytes = Buffer.byteLength(text);
         const read_ = read(text.replace(/^\uFEFF/, ''));
         tags = read_.tags;
@@ -236,7 +230,7 @@ function loadPythonTests(root: string, rels: readonly string[], candidates: read
       facts,
       subjects: [...new Set([...resolved.subjects, ...declared])].sort(),
       facades: resolved.facades,
-      opaque: facts ? projectOpaque(facts.opaque, lines, rel, resolveSubjectsOf) : [],
+      opaque: facts ? projectOpaque(facts.opaque, rel, resolveSubjectsOf) : [],
       tags: { ...(lane ? { lane } : {}), ...(tags.risk ? { risk: tags.risk } : {}), ...(tags.subjects ? { subjects: tags.subjects } : {}) },
     };
   };

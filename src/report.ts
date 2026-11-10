@@ -141,7 +141,10 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
     out.push(`- Languages: ${languages.map(entry => `${flat(entry.language)} (${entry.status === 'supported' ? flat(entry.runner) : entry.status}, ${entry.files} files)`).join(', ')}`);
     if (!complete) {
       const unsupported = languages.filter(entry => entry.status === 'detected-unsupported').map(entry => flat(entry.language));
-      out.push(`- Inventory incomplete: ${[unsupported.length > 0 ? `${unsupported.join(', ')} detected but not inventoried.` : '', ...notes.map(flat)].filter(Boolean).join(' ')}`);
+      // The unsupported-language statement is a sentence of its own. The notes follow as clauses: each loses one trailing period, they
+      // are joined with "; " (spec-fixed note texts carry no final punctuation) and the line ends with one period.
+      const clauses = notes.map(note => flat(note).replace(/\.$/, '')).filter(Boolean).join('; ');
+      out.push(`- Inventory incomplete: ${[unsupported.length > 0 ? `${unsupported.join(', ')} detected but not inventoried.` : '', clauses ? `${clauses}.` : ''].filter(Boolean).join(' ')}`);
     }
   }
   if (report.runner === 'unknown' && report.files.length === 0) out.push('- No supported runner detected; a zero test count does not prove the project has no tests.');

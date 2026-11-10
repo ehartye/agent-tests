@@ -72,9 +72,8 @@ describe('the python-mixed fixture, through the CLI', () => {
     const markdown = cli('report', '--root', FIXTURE).stdout;
     expect(markdown).toContain('- Languages: JavaScript (vitest, 1 files), Go (detected-unsupported, 1 files), Python (pytest, 9 files)');
     const incomplete = markdown.split('\n').find(line => line.startsWith('- Inventory incomplete:')) ?? '';
-    expect(incomplete).toContain('Go detected but not inventoried.');
-    expect(incomplete).toContain(FACADE_NOTE);
-    expect(incomplete).toContain(OPAQUE_NOTE);
+    // The Go statement keeps its sentence; the notes follow, separated by "; " (their texts carry no final punctuation) and ended by one period.
+    expect(incomplete).toBe(`- Inventory incomplete: Go detected but not inventoried. Those files are named like tests and were counted by file name only, never read, so their test counts and the coverage they give are unknown; ${FACADE_NOTE}; ${OPAQUE_NOTE}; Python test files could not be parsed: tests/test_broken.py.`);
     expect(markdown).toMatch(/\| tests\/test_scheduled\.py \| critical \| scheduled \|/);
     // A count marked +? has opaque registration; a file with none shows its plain count.
     expect(markdown).toMatch(/\| tests\/test_dynamic\.py \| critical \| - \| 2\+\? \| 2 \|/);
@@ -332,7 +331,7 @@ describe('the python_files config note', () => {
     expect(evidence.inventory!.notes).toEqual(note ? [CONFIG_NOTE] : []);
     expect(evidence.inventory!.noteScopes).toEqual(note ? [{ text: CONFIG_NOTE, scope: 'all' }] : undefined);
     expect(evidence.inventory!.languages[1]).toMatchObject({ language: 'Python', runner: 'pytest', files: 1 });
-    expect(renderMarkdown(evidence).includes(`- Inventory incomplete: ${CONFIG_NOTE}`)).toBe(note);
+    expect(renderMarkdown(evidence).includes(`- Inventory incomplete: ${CONFIG_NOTE}.\n`)).toBe(note);
   });
 
   it('is not reported for a repo with no Python tests, where a stray config says nothing about the inventory', async () => {
@@ -451,6 +450,19 @@ describe('imported test classes count only from project modules', () => {
     { name: 'a relative import of a module that is missing', files: { 'tests/test_a.py': py('from .missing import TestBase', ...body) }, test: 'tests/test_a.py', opaque: [] },
     { name: 'a relative import of a package with no __init__.py', files: { 'tests/test_a.py': py('from . import TestBase', ...body) }, test: 'tests/test_a.py', opaque: [] },
     { name: 'a relative import that climbs above the project', files: { 'tests/test_a.py': py('from ... import TestBase', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'a from-import in a trailing comment is not read', files: { 'app/m.py': '', 'tests/test_a.py': py('from unittest import TestCase  # from app.m import y', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'a from-import in a string beside a stdlib import is not read', files: { 'app/m.py': '', 'tests/test_a.py': py('from unittest import TestCase; text = "from app.m import y"', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'a project import beside a stdlib one on one line is read from the right statement', files: { 'app/m.py': '', 'tests/test_a.py': py('from unittest import TestCase; from app.m import TestBase', ...body) }, test: 'tests/test_a.py', opaque: ['TestBase'] },
+    { name: 'odd spacing around a project module', files: { 'lib/tool.py': '', 'tests/test_a.py': py('from   lib.tool   import   TestBase', ...body) }, test: 'tests/test_a.py', opaque: ['TestBase'] },
+    { name: 'a parenthesised import with no space before the bracket', files: { 'lib/tool.py': '', 'tests/test_a.py': py('from lib.tool import(TestBase)', ...body) }, test: 'tests/test_a.py', opaque: ['TestBase'] },
+    { name: 'a backslash continuation of a stdlib import', files: { 'tests/test_a.py': py('from unittest \\', '    import TestCase', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'a backslash continuation of a project import', files: { 'lib/tool.py': '', 'tests/test_a.py': py('from lib.tool \\', '    import TestBase', ...body) }, test: 'tests/test_a.py', opaque: ['TestBase'] },
+    { name: 'a parenthesised multi-line stdlib import', files: { 'tests/test_a.py': py('from unittest import (', '    TestCase,', ')', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'a parenthesised multi-line project import', files: { 'lib/tool.py': '', 'tests/test_a.py': py('from lib.tool import (', '    Helper,', '    TestBase,', ')', ...body) }, test: 'tests/test_a.py', opaque: ['TestBase'] },
+    { name: 'a one-dot import of the package, with its __init__.py', files: { 'tests/__init__.py': '', 'tests/test_a.py': py('from . import TestFoo', ...body) }, test: 'tests/test_a.py', opaque: ['TestFoo'] },
+    { name: 'a one-dot import of a directory with no __init__.py', files: { 'tests/test_a.py': py('from . import TestFoo', ...body) }, test: 'tests/test_a.py', opaque: [] },
+    { name: 'a two-dot import of the parent package, with its __init__.py', files: { 'tests/__init__.py': '', 'tests/unit/test_a.py': py('from .. import TestFoo', ...body) }, test: 'tests/unit/test_a.py', opaque: ['TestFoo'] },
+    { name: 'a two-dot import of a parent with no __init__.py', files: { 'tests/unit/test_a.py': py('from .. import TestFoo', ...body) }, test: 'tests/unit/test_a.py', opaque: [] },
     { name: 'a project class and unittest.TestCase together count once', files: { 'src/lib/tool.py': '', 'tests/test_a.py': py('from unittest import TestCase', 'from lib.tool import TestBase', ...body) }, test: 'tests/test_a.py', opaque: ['TestBase'] },
   ];
 
@@ -461,6 +473,20 @@ describe('imported test classes count only from project modules', () => {
     expect(renderMarkdown(evidence).includes('1+?')).toBe(opaque.length > 0);
     expect(evidence.inventory!.notes.includes(OPAQUE_NOTE)).toBe(opaque.length > 0);
     expect(evidence.inventory!.complete).toBe(opaque.length === 0);
+  });
+});
+
+describe('an imported test class whose module the facts do not give', () => {
+  it('stays opaque, since an unknown source is the incomplete side', async () => {
+    const parse = await loadPythonParser();
+    const reader = (source: string) => {
+      const facts = extractPythonFactsWith(parse, source);
+      return { ...facts, opaque: facts.opaque.map(({ module: _module, level: _level, ...rest }) => rest) };
+    };
+    const files = { 'tests/test_a.py': py('from unittest import TestCase', '', 'def test_x():', '    assert 1') };
+    const evidence = await scanProject(makeTree(files), { commitLimit: 1, python: reader });
+    expect(evidence.files[0]!.findings.filter(finding => finding.rule === 'wiring.opaque-test-registration').map(finding => finding.evidence)).toEqual(['TestCase']);
+    expect(evidence.inventory!.notes).toEqual([OPAQUE_NOTE]);
   });
 });
 
@@ -478,7 +504,7 @@ describe('the unparsed-files note', () => {
   ])('is scoped to all and incomplete for $name', async ({ files, text }) => {
     const evidence = await scanProject(makeTree({ ...files, 'tests/test_ok.py': 'def test_ok():\n    assert 1\n' }), { commitLimit: 1 });
     expect(evidence.inventory).toMatchObject({ complete: false, notes: [text], noteScopes: [{ text, scope: 'all' }] });
-    expect(renderMarkdown(evidence)).toContain(`- Inventory incomplete: ${text}`);
+    expect(renderMarkdown(evidence)).toContain(`- Inventory incomplete: ${text}.\n`);
   });
 
   it('also covers a file over the size cap, and names only name-matched files, not workflow candidates that failed to parse', async () => {
