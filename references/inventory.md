@@ -24,9 +24,16 @@ file named like a test is counted even if it holds none, and the report says "na
 | PHP        | ending `Test.php` or `Tests.php`                                           |
 
 Matching is by file name and is case-sensitive. The census walk skips the directories the scan always ignores (for
-example `node_modules`, `.git`, `dist`, `build`, `fixtures`, `.venv`, `vendor`) and these Python environment and cache
-directories: `__pycache__`, `venv`, `env`, `site-packages`, `.tox`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`
-and any `*.egg-info`.
+example `node_modules`, `.git`, `dist`, `build`, `fixtures`, `.venv`, `vendor`) and these census-only directories:
+`__pycache__`, `venv`, `env`, `site-packages`, `.tox`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `third_party`,
+`thirdparty`, `testdata`, `Pods`, `target` and any `*.egg-info`. The names up to `.ruff_cache` are Python environments and caches;
+the others are vendored, generated or fixture trees whose test files are not the project's own. Names match
+case-sensitively at any depth.
+
+These census-only skips apply to the census alone, not to JavaScript and TypeScript test discovery, whose own ignore
+list is unchanged: a JavaScript test inside `testdata` or `target` is still found and inventoried. A skipped directory
+name applies to every language: a Go test file under `env/` or `testdata/` is not counted either, although
+most of these names come from Python trees.
 
 The list is not exhaustive. The census cannot see tests with unconventional names, and it cannot see inline tests
 (tests that live inside the source file, as in Rust). A language not in the table is not counted at all.

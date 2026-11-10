@@ -228,7 +228,7 @@ describe('skills', () => {
     it('exists and states the incomplete rule, the status and that a missing key proves nothing', () => {
       expect(existsSync(inventoryPath)).toBe(true);
       const inventory = text(inventoryPath);
-      for (const word of ['inventory-incomplete', 'detected-unsupported', 'does not mean']) expect(inventory, word).toContain(word);
+      for (const word of ['inventory-incomplete', 'detected-unsupported', 'does not mean', 'third_party', 'testdata']) expect(inventory, word).toContain(word);
     });
 
     it('is documented in scan-rules, the test-audit skill and the README', () => {
