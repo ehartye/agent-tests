@@ -179,6 +179,16 @@ describe('skills', () => {
       expect(rules).toContain('more files (see the JSON noAssertionTests)');
     });
 
+    it('says the unresolved-path note means no earlier mkdtemp assignment', () => {
+      expect(rules).toContain('no earlier assignment');
+      expect(rules).not.toContain('is not assigned from `mkdtemp` in this file');
+    });
+
+    it('documents that a skip call with a bare-reference handler reads as a conditional skip', () => {
+      expect(rules).toContain('bare reference');
+      expect(rules).toContain('test.skip(title)');
+    });
+
     it('keeps the workflow advice that says reporting may be equivalent', () => {
       expect(load('test-audit').body).toContain('or equivalent reporting');
     });

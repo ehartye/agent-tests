@@ -80,9 +80,11 @@ argument of the same join, `path.join` or `resolve` call that holds the quoted f
 literal, does not make it quiet.
 
 Qualified, not silenced, when the directory cannot be traced. `join(dir, 'x.sqlite')` where `dir` is a function parameter,
-or is not assigned from `mkdtemp` in this file, is still flagged, and its `note` starts `Path uniqueness unresolved:`
-and names `dir`. The path may be unique because the caller passes a per-run directory; the scan cannot see that, so
-check the caller. A bare fixed name (`'test.sqlite'`, `'data/app.db'`) is flagged with no note.
+or has no earlier assignment from `mkdtemp` in this file, is still flagged, and its `note` starts
+`Path uniqueness unresolved:` and names `dir` (the note says there is no earlier assignment because the scan reads the
+file once, top to bottom: an assignment further down, such as in a `beforeEach`, is not seen). The path may be unique
+because the caller passes a per-run directory or the assignment comes later; the scan cannot see that, so check the caller
+and the rest of the file. A bare fixed name (`'test.sqlite'`, `'data/app.db'`) is flagged with no note.
 
 Limits: a template literal containing `${...}` is never matched by this rule at all, so an untraced `${dir}/x.sqlite` gives
 no finding and no note, and a traced one is not checked either; read such paths yourself. Identifier tracing is name-based,
@@ -116,6 +118,11 @@ skips has no `skips` key.
   A Playwright-style `test.skip(isCI, 'flaky on CI')` inside a test body is not a test: a `test.skip` or `it.skip` call
   whose first argument is not a string or template literal and whose second argument is not a function counts as one
   conditional skip. A call with a string title or a function body, `test.skip('later', () => {})`, is a declared skip.
+  Known limit: because a skip call whose second argument is not a function is read as an inline conditional skip, a
+  skipped declaration whose handler is a bare reference or call (`it.skip(name, handler)`, `test.skip(title, vi.fn())`,
+  `test.skip(title, runCase.bind(null, 1))`) is counted as a conditional skip and not as a test, and a one-argument
+  `test.skip(title)` is likewise counted as a conditional skip. A skipped test written that way is missing from the
+  declared count; read such files yourself.
 - Counts are tests, not calls. A declared skip is counted once and never also as conditional.
 - `reasons` holds the reason of each skip call, distinct, at most 3 per file and 80 characters each. A context skip
   takes its first string argument; an inline `test.skip(cond, 'reason')` takes its second argument. The reason is recorded

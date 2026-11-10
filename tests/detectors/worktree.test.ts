@@ -175,6 +175,20 @@ describe('detectWorktreeHazards tuning', () => {
       expect(dotted?.note).toMatch(/^Path uniqueness unresolved:.*opts\.dir/);
     });
 
+    it('words the note as no earlier assignment, since only earlier lines are traced', () => {
+      const found = run(
+        'async function open(dir: string) {',
+        "  return new DatabaseSync(join(dir, 'x.sqlite'));",
+        '}',
+        'beforeEach(async () => {',
+        "  dir = await mkdtemp(join(tmpdir(), 'run-'));",
+        '});',
+      );
+      expect(found).toHaveLength(1);
+      expect(found[0]?.note).toMatch(/^Path uniqueness unresolved: dir has no earlier assignment from mkdtemp in this file/);
+      expect(found[0]?.note).not.toContain('is not assigned');
+    });
+
     it('names an untraced identifier even when the file made some other directory', () => {
       const [finding] = run("const runDir = mkdtempSync(join(tmpdir(), 'run-'));", 'const a = 1;', 'const b = 2;', "const db = join(dir, 'x.sqlite');");
       expect(finding?.note).toMatch(/^Path uniqueness unresolved:.*\bdir\b/);

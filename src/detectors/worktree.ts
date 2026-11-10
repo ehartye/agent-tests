@@ -73,7 +73,7 @@ function dirKey(name: string): string {
 function unresolvedDirNote(code: string, match: RegExpExecArray, madeDirs: ReadonlySet<string>): string | undefined {
   const untraced = joinedIdentifiers(code, match).filter(name => !madeDirs.has(dirKey(name)));
   if (untraced.length === 0) return undefined;
-  return `Path uniqueness unresolved: ${untraced.join(', ')} is not assigned from mkdtemp in this file, so the path may be shared; confirm the caller passes a per-run directory.`;
+  return `Path uniqueness unresolved: ${untraced.join(', ')} has no earlier assignment from mkdtemp in this file, so the path may be shared; confirm the caller passes a per-run directory.`;
 }
 
 const RULES: Rule[] = [
