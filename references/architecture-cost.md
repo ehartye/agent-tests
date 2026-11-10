@@ -88,6 +88,30 @@ Retain checkpoint assertions, provenance and failure evidence; a saved fixture d
 Give independent branches cheaper seam owners and name the coverage each replaces. Keep full and release gates until
 replacement coverage and complete-lane timings are proven; a faster partial campaign alone does not earn retirement.
 
+### Server readiness preflight
+
+Before starting an owned server for a browser run, probe the chosen port. The probe is bounded, read-only and needs no
+managed runtime:
+
+    node "<plugin-root>/scripts/server-probe.mjs" --port <n> --expect closed
+
+It makes one TCP connect and one `GET /` per loopback family, prints one JSON line and exits 0 only when the result meets
+`--expect`. The four outcomes are `responding` (HTTP headers arrived, any status), `occupied-no-http-response` (TCP
+connected but no valid HTTP headers within the timeout; a slow valid server looks the same), `closed` (connection
+refused, nothing listening) and `unreachable` (the connect timed out or failed another way). The default host
+`localhost` probes both 127.0.0.1 and ::1 and reports the most occupied family, so a silent listener on one family never
+reads as `closed`. The probe never kills anything, binds nothing and does not claim who owns a listener.
+
+Start the server on the probed port with a strict port (for example Vite `server.strictPort`, which fails instead of
+moving to another port) and `reuseExistingServer: false`, so a listener that appears late fails the start instead of
+being adopted. Never stop a listener you cannot identify; pick another port and probe that one.
+
+Why this is needed: Playwright 1.64.1, 1.65.0 and main (checked 2026-11-10) issue the first availability request of
+`webServer` without a timeout, before the `webServer.timeout` deadline starts. A listener that accepts TCP but never
+answers HTTP therefore stalls setup past `webServer.timeout`. A proposed one-second cap (Playwright pull request 40433)
+was closed unmerged. This records observed version behavior, not a root cause. Retire this advice when a supported
+upstream bound exists. It stays advisory: the probe is a preflight, not a supervisor of the run.
+
 ## Compare concrete alternatives
 
 For each material cause, record `decision -> evidence -> cost -> alternative -> replacement protection`. Prefer the

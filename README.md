@@ -104,6 +104,8 @@ input-scope limits](references/candidate-evidence.md) before recording or checki
 evidence. It does not launch tests or change source. A valid diagnostic exit can be `unclassified`; it never means
 candidate success. See [mutation evidence and native qualification limits](references/mutation-evidence.md).
 
+`scripts/server-probe.mjs` is a directly runnable, dependency-free, read-only script (not a launcher command): `node "<plugin-root>/scripts/server-probe.mjs" --port <n> --expect closed` checks a local port before a browser server starts. See [server readiness preflight](references/architecture-cost.md).
+
 The managed launcher also exports one browser-safe Playbot evidence module:
 
     node "<plugin-root>/scripts/run-managed.js" playbot-export --out <game-vendor-directory>

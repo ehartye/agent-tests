@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { COMMANDS } from '../src/cli.ts';
+import { parseArgs } from '../scripts/server-probe.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SKILLS = join(ROOT, 'skills');
@@ -127,6 +128,22 @@ describe('skills', () => {
     it('defines <plugin-root> when it launches a script', () => {
       if (!/run-managed\.js|setup\.js/.test(body)) return;
       expect(body).toMatch(/^.*`<plugin-root>` is the directory.*$/m);
+    });
+  });
+
+  describe('references/architecture-cost.md server readiness preflight', () => {
+    const cost = readFileSync(join(ROOT, 'references', 'architecture-cost.md'), 'utf8');
+
+    it('has the passage with the script, strict port, version list and upstream proposal', () => {
+      for (const word of ['Server readiness preflight', 'server-probe.mjs', '--expect closed', 'strictPort', 'reuseExistingServer', '40433', '1.64.1', '1.65.0', '2026-11-10']) expect(cost, word).toContain(word);
+    });
+
+    it('has an example command whose flags the probe parser accepts', () => {
+      const example = cost.split('\n').find(line => line.includes('server-probe.mjs" --port'));
+      expect(example, 'no example command').toBeDefined();
+      const flags = (example as string).split('server-probe.mjs"')[1].replace(/`/g, ' ').trim().replace(/<n>/g, '5173').split(/\s+/);
+      expect(() => parseArgs(flags)).not.toThrow();
+      expect(parseArgs(flags).expect).toBe('closed');
     });
   });
 
