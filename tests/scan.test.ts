@@ -317,13 +317,13 @@ describe('scan names the tests with no direct assertions', () => {
     expect(Object.keys(file)).not.toContain('skips');
   });
 
-  it('keeps at most five names, each cut to 80 characters, in file order', () => {
+  it('keeps every name, each cut to 80 characters, in file order', () => {
     const long = 'x'.repeat(120);
-    const source = [...Array.from({ length: 6 }, (_, i) => `it('${i === 0 ? long : `bare ${i}`}', () => { run(); });`)].join('\n');
+    const source = [...Array.from({ length: 8 }, (_, i) => `it('${i === 0 ? long : `bare ${i}`}', () => { run(); });`)].join('\n');
     const file = fileOf(source);
-    expect(file.noAssertionTests).toHaveLength(5);
+    expect(file.noAssertionTests).toHaveLength(8);
     expect(file.noAssertionTests![0]).toEqual({ name: 'x'.repeat(80), line: 1 });
-    expect(file.noAssertionTests!.map(entry => entry.line)).toEqual([1, 2, 3, 4, 5]);
+    expect(file.noAssertionTests!.map(entry => entry.line)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   });
 
   it('does not name a declared skip, a todo, or a test that asserts', () => {
@@ -379,6 +379,12 @@ describe('scan reports skipped cases', () => {
     const file = fileOf(['a', 'b', 'c', 'd', 'a'].map((reason, i) => `it('t${i}', t => { t.skip('${i === 0 ? 'a'.repeat(100) : reason}'); expect(1).toBe(2); });`).join('\n'));
     expect(file.skips?.conditional).toBe(5);
     expect(file.skips?.reasons).toEqual(['a'.repeat(80), 'b', 'c']);
+  });
+
+  it('counts a Playwright-style skip with a dynamic reason as a skip with no reason', () => {
+    const file = fileOf("test('page', async () => {\n  test.skip(isCI, `flaky on ${os}`);\n  test.skip(isCI, REASON);\n  expect(1).toBe(2);\n});\n");
+    expect(file.tests).toBe(1);
+    expect(file.skips).toEqual({ declared: 0, conditional: 1, reasons: [] });
   });
 
   it('counts a skip with no reason and leaves the reasons empty', () => {

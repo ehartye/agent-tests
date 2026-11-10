@@ -45,8 +45,7 @@ function tierOfFile(
   return { tier: override.success ? override.data : best.tier, area: best.area, unmapped: subjects.length > 0 ? unmapped : [] };
 }
 
-/** At most this many tests are named per file, and a test name or a skip reason is cut to this many characters. */
-const MAX_NAMED_TESTS = 5;
+/** At most this many skip reasons are kept per file, and a test name or a skip reason is cut to this many characters. */
 const MAX_SKIP_REASONS = 3;
 const MAX_TEXT = 80;
 
@@ -66,7 +65,7 @@ function flagsOf(parsed: ParsedFile): FileFlag[] {
 function skipFieldsOf(parsed: ParsedFile): Pick<TestFileRecord, 'noAssertionTests' | 'skips'> {
   const fields: Pick<TestFileRecord, 'noAssertionTests' | 'skips'> = {};
   const bare = bareTests(parsed);
-  if (bare.length > 0) fields.noAssertionTests = bare.slice(0, MAX_NAMED_TESTS).map(test => ({ name: test.name.slice(0, MAX_TEXT), line: test.line }));
+  if (bare.length > 0) fields.noAssertionTests = bare.map(test => ({ name: test.name.slice(0, MAX_TEXT), line: test.line }));
   // A test counts once: a declared skip never runs, so only a test that can run is conditional.
   const declared = parsed.tests.filter(test => test.skipped).length;
   const conditional = parsed.tests.filter(test => !test.skipped && (test.conditional || test.bodySkip)).length + (parsed.suiteSkips?.length ?? 0);

@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { renderMarkdown } from '../src/report.ts';
 import { scan } from '../src/scan.ts';
+import { makeTree } from './helpers/tree.ts';
 import { EVIDENCE_SCHEMA, type EvidenceReport, type Finding, type TestFileRecord } from '../src/schema.ts';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -424,29 +425,48 @@ describe('title overlap ranking', () => {
 });
 
 describe('renderMarkdown names tests with no direct assertions', () => {
-  const names = (count: number) => Array.from({ length: count }, (_, i) => ({ name: `bare ${i + 1}`, line: 10 + i }));
-
   it('lists each name with its line under a No direct assertions section', () => {
     const md = renderMarkdown(report({ files: [record('tests/a.test.ts', { flags: ['no-direct-assertions'], noAssertionTests: [{ name: 'does nothing', line: 3 }] })] }));
     expect(section(md, 'No direct assertions')).toContain('tests/a.test.ts: "does nothing" (line 3)');
   });
 
-  it('lists at most five names per file, then how many more', () => {
-    const md = renderMarkdown(report({ files: [record('tests/a.test.ts', { flags: ['no-direct-assertions'], noAssertionTests: names(7) })] }));
+  it('lists at most five names per file, then how many more, for a real scan of seven bare tests', () => {
+    const source = Array.from({ length: 7 }, (_, i) => `it('bare ${i + 1}', () => { run(); });`).join('\n');
+    const md = renderMarkdown(scan(makeTree({ 'tests/a.test.ts': source }), { commitLimit: 1 }));
     const listed = section(md, 'No direct assertions');
-    expect(listed).toContain('"bare 5" (line 14)');
+    expect(listed).toContain('"bare 5" (line 5)');
     expect(listed).not.toContain('"bare 6"');
-    expect(listed).toContain('and 2 more');
+    expect(listed).toContain('tests/a.test.ts: and 2 more');
   });
 
-  it('says nothing about a file that is not shown in the table', () => {
+  it('lists every flagged file, including files below the table cut', () => {
     const files = [
       record('tests/a.test.ts', { findings: [finding({ rule: 'worktree.fixed-port', file: 'tests/a.test.ts', line: 1 })], noAssertionTests: [{ name: 'shown', line: 1 }] }),
-      record('tests/z.test.ts', { noAssertionTests: [{ name: 'hidden', line: 2 }] }),
+      record('tests/z.test.ts', { noAssertionTests: [{ name: 'below the table', line: 2 }] }),
     ];
     const md = renderMarkdown(report({ files }), { maxFiles: 1 });
-    expect(md).toContain('"shown"');
-    expect(md).not.toContain('"hidden"');
+    expect(tableRows(md)).toHaveLength(1);
+    const listed = section(md, 'No direct assertions');
+    expect(listed).toContain('tests/a.test.ts: "shown" (line 1)');
+    expect(listed).toContain('tests/z.test.ts: "below the table" (line 2)');
+    expect(listed.indexOf('tests/a.test.ts')).toBeLessThan(listed.indexOf('tests/z.test.ts'));
+  });
+
+  it('orders files as the table does, then the rest by path', () => {
+    const files = [
+      record('tests/b.test.ts', { noAssertionTests: [{ name: 'b', line: 1 }] }),
+      record('tests/a.test.ts', { noAssertionTests: [{ name: 'a', line: 1 }] }),
+      record('tests/c.test.ts', { findings: [finding({ rule: 'worktree.fixed-port', file: 'tests/c.test.ts', line: 1 })], noAssertionTests: [{ name: 'c', line: 1 }] }),
+    ];
+    const listed = section(renderMarkdown(report({ files }), { maxFiles: 2 }), 'No direct assertions');
+    expect([...listed.matchAll(/tests\/(\w)\.test\.ts/g)].map(match => match[1])).toEqual(['c', 'a', 'b']);
+  });
+
+  it('lists at most 20 files, then counts the rest', () => {
+    const files = Array.from({ length: 23 }, (_, i) => record(`tests/f${String(i).padStart(2, '0')}.test.ts`, { noAssertionTests: [{ name: `n${i}`, line: 1 }] }));
+    const listed = section(renderMarkdown(report({ files })), 'No direct assertions');
+    expect(listed.match(/^- tests\//gm)).toHaveLength(20);
+    expect(listed).toContain('+3 more files (see the JSON noAssertionTests)');
   });
 
   it('keeps a name on one line', () => {

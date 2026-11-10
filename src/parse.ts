@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, resolve } from 'node:path';
-import { SyntaxKind, type ArrowFunction, type CallExpression, type FunctionExpression, type ImportDeclaration, type Node, type PropertyAccessExpression, type SourceFile } from 'typescript/unstable/ast';
+import { SyntaxKind, type ArrowFunction, type CallExpression, type FunctionExpression, type ImportDeclaration, type NoSubstitutionTemplateLiteral, type Node, type PropertyAccessExpression, type SourceFile, type StringLiteral } from 'typescript/unstable/ast';
 import { isArrowFunction, isCallExpression, isFunctionExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isObjectBindingPattern, isPropertyAccessExpression, isStringLiteral, isTaggedTemplateExpression } from 'typescript/unstable/ast/is';
 import { createVirtualFileSystem } from 'typescript/unstable/fs';
 import { API } from 'typescript/unstable/sync';
@@ -105,20 +105,20 @@ function calleeName(node: Node): string {
   return node.getText().replace(/\s+/g, '');
 }
 
-const isLiteralText = (node: Node | undefined): boolean => !!node && (isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node));
+const isLiteralText = (node: Node | undefined): node is StringLiteral | NoSubstitutionTemplateLiteral => !!node && (isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node));
 const isFunctionLike = (node: Node | undefined): node is ArrowFunction | FunctionExpression => !!node && (isArrowFunction(node) || isFunctionExpression(node));
 
 /**
- * A Playwright-style conditional skip: `test.skip(isCI, 'flaky on CI')`, `test.skip(({ browserName }) => ..., 'reason')` or
- * `test.skip(cond)`. It has no string-literal title and no body: its second argument, when there is one, is a string
- * reason. A call with a string title or a function body, `test.skip('title', fn)` or `test.skip(title, fn)`, is a declaration.
+ * A Playwright-style conditional skip: `test.skip(isCI, 'flaky on CI')`, `test.skip(isCI, REASON)`,
+ * `test.skip(({ browserName }) => ..., 'reason')` or `test.skip(cond)`. It has no string-literal title and no function body.
+ * A call with a string title or a function second argument, `test.skip('title', fn)` or `test.skip(title, fn)`, is a declaration.
  */
 function isInlineSkip(call: CallExpression, name: string): boolean {
   if (!INLINE_SKIP_CALLEE.test(name)) return false;
   const [first, second] = call.arguments;
   if (!first) return true;
   if (isLiteralText(first)) return false;
-  return !second || isLiteralText(second);
+  return !isFunctionLike(second);
 }
 
 /**
@@ -130,10 +130,15 @@ function isDeclaration(call: CallExpression, name: string): boolean {
   return call.arguments.length >= 2 || (call.arguments.length === 1 && name.endsWith('.todo'));
 }
 
-/** The first string-literal argument of a skip call, or undefined. */
-function skipReason(call: CallExpression): string | undefined {
-  const literal = call.arguments.find(isLiteralText) as { text: string } | undefined;
-  return literal?.text || undefined;
+/**
+ * The reason of a skip call, or undefined. A context skip, `ctx.skip(isCI, 'reason')`, takes its first string-literal argument;
+ * an inline `test.skip(isCI, 'reason')` takes only its second argument, so a condition is never read as a reason. A template with
+ * substitutions or a variable is dynamic: no reason is recorded rather than an invented one.
+ */
+function skipReason(call: CallExpression, inline: boolean): string | undefined {
+  const argument = inline ? call.arguments[1] : call.arguments.find(isLiteralText);
+  if (!argument || !isLiteralText(argument)) return undefined;
+  return argument.text || undefined;
 }
 
 /**
@@ -163,9 +168,9 @@ function isContextSkip(callee: Node, scope: TestScope): boolean {
   return isPropertyAccessExpression(callee) && callee.name.text === 'skip' && isIdentifier(callee.expression) && scope.ctx !== null && callee.expression.text === scope.ctx;
 }
 
-function noteBodySkip(test: ParsedTest, call: CallExpression): void {
+function noteBodySkip(test: ParsedTest, call: CallExpression, inline: boolean): void {
   test.bodySkip = true;
-  const reason = skipReason(call);
+  const reason = skipReason(call, inline);
   if (reason !== undefined && !test.skipReasons.includes(reason)) test.skipReasons.push(reason);
 }
 
@@ -241,7 +246,7 @@ function extractFacts(sourceFile: SourceFile, text: string): ParsedFile {
       if (specifier && isStringLiteral(specifier) && (callee.kind === SyntaxKind.ImportKeyword || (isIdentifier(callee) && callee.text === 'require'))) {
         out.imports.push(specifier.text);
       }
-      if (current && isContextSkip(callee, current)) noteBodySkip(current.test, node);
+      if (current && isContextSkip(callee, current)) noteBodySkip(current.test, node, false);
       if (TEST_CALLEE.test(name) && isDeclaration(node, name)) {
         const title = titleOf(node);
         const segments = name.split('.');
@@ -261,8 +266,8 @@ function extractFacts(sourceFile: SourceFile, text: string): ParsedFile {
       } else if (SUITE_CALLEE.test(name) && isDeclaration(node, name)) {
         out.titles.push({ text: titleOf(node), line: lineOf(node) });
       } else if (isInlineSkip(node, name)) {
-        const reason = skipReason(node);
-        if (current) noteBodySkip(current.test, node);
+        const reason = skipReason(node, true);
+        if (current) noteBodySkip(current.test, node, true);
         else (out.suiteSkips ??= []).push(reason === undefined ? {} : { reason });
       } else if (!current && isCallExpression(callee) && specifier
         && (isStringLiteral(specifier) || isNoSubstitutionTemplateLiteral(specifier))

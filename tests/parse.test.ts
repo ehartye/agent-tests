@@ -488,6 +488,33 @@ describe('parseTestFile Playwright-style conditional skips', () => {
     ]);
   });
 
+  it('treats a dynamic reason or a template reason as a skip, not as a test, and invents no reason', () => {
+    const parsed = parseTestFile('pw.test.ts', [
+      "test('a', async () => { test.skip(isCI, `flaky on ${os}`); });",
+      "test('b', async () => { test.skip(isCI, REASON); });",
+      "test('c', async () => { test.skip(isCI, `plain reason`); });",
+      "test('d', async () => { it.skip(isCI, reasons.ci); });",
+    ].join('\n'));
+    expect(parsed.tests.map(test => [test.name, test.skipped, test.bodySkip, test.skipReasons])).toEqual([
+      ['a', false, true, []],
+      ['b', false, true, []],
+      ['c', false, true, ['plain reason']],
+      ['d', false, true, []],
+    ]);
+    expect(parsed.titles.map(title => title.text)).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('counts a suite-level skip with a dynamic reason as a suite skip with no reason', () => {
+    const parsed = parseTestFile('pw.test.ts', "describe('s', () => {\n  test.skip(isCI, REASON);\n  test('a', () => {});\n});");
+    expect(parsed.tests.map(test => test.name)).toEqual(['a']);
+    expect(parsed.suiteSkips).toEqual([{}]);
+  });
+
+  it('keeps a string title, or a function second argument, as a declaration', () => {
+    const parsed = parseTestFile('pw.test.ts', "test.skip('title', 'not a reason', () => {});\ntest.skip(title, function () {});\ntest.skip(title, () => {});");
+    expect(parsed.tests.map(test => test.skipped)).toEqual([true, true, true]);
+  });
+
   it('counts a skip outside any test as a suite skip, not as a test', () => {
     const parsed = parseTestFile('pw.test.ts', [
       "describe('suite', () => {",

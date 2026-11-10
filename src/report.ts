@@ -12,9 +12,9 @@ export const DEFAULT_MAX_PER_RULE = 30;
 const MAX_EVIDENCE = 160;
 const MAX_UNPARSED_LISTED = 10;
 const MAX_RULES_PER_ROW = 4;
-/** The No direct assertions section names at most this many tests per file; the Skips section lists at most this many files and reasons. */
+/** The No direct assertions section names at most this many tests per file and lists this many files; the Skips section lists at most as many files. */
 const MAX_NAMED_PER_FILE = 5;
-const MAX_SKIP_FILES = 20;
+const MAX_LISTED_FILES = 20;
 const MAX_SKIP_REASONS_PER_FILE = 3;
 /** Only the first rows of the table spell out their shared title words. */
 const MAX_OVERLAP_ROWS = 5;
@@ -190,24 +190,26 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
     out.push('', `${omitted.length} more files omitted (${findings} findings, ${none} with none); the full data is in the JSON from the scan command.`);
   }
 
-  const named = shown.filter(file => (file.noAssertionTests?.length ?? 0) > 0);
+  // Every flagged file, not only those in the table: table order first, then the files the table cut, by path.
+  const named = [...shown, ...omitted.slice().sort((a, b) => compare(a.file, b.file))].filter(file => (file.noAssertionTests?.length ?? 0) > 0);
   if (named.length > 0) {
     out.push('', '## No direct assertions', '', 'These tests make no assertion of their own, and a helper they call may. Read each before treating it as empty.');
-    for (const file of named) {
+    for (const file of named.slice(0, MAX_LISTED_FILES)) {
       const tests = file.noAssertionTests!;
       for (const test of tests.slice(0, MAX_NAMED_PER_FILE)) out.push(`- ${flat(file.file)}: "${flat(test.name)}" (line ${test.line})`);
       if (tests.length > MAX_NAMED_PER_FILE) out.push(`- ${flat(file.file)}: and ${tests.length - MAX_NAMED_PER_FILE} more`);
     }
+    if (named.length > MAX_LISTED_FILES) out.push(`- +${named.length - MAX_LISTED_FILES} more files (see the JSON noAssertionTests)`);
   }
 
   if (skipFiles.length > 0) {
     out.push('', '## Skips', '', 'A declared skip never runs; a conditional skip runs only when its condition allows it. Counts are tests, and a reason is the first string in a skip call.');
-    for (const file of skipFiles.slice(0, MAX_SKIP_FILES)) {
+    for (const file of skipFiles.slice(0, MAX_LISTED_FILES)) {
       const { declared, conditional, reasons } = file.skips!;
       const why = reasons.length > 0 ? `; reasons: ${reasons.slice(0, MAX_SKIP_REASONS_PER_FILE).map(reason => `"${flat(reason)}"`).join(', ')}` : '';
       out.push(`- ${flat(file.file)}: ${declared} declared, ${conditional} conditional${why}`);
     }
-    if (skipFiles.length > MAX_SKIP_FILES) out.push(`- +${skipFiles.length - MAX_SKIP_FILES} more files (see the scan JSON)`);
+    if (skipFiles.length > MAX_LISTED_FILES) out.push(`- +${skipFiles.length - MAX_LISTED_FILES} more files (see the scan JSON)`);
   }
 
   if (report.clusters.length > 0) {
