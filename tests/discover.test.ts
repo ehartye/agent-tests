@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { censusLanguage, detectRunner, discoverCensus, discoverTests, groupCensusFiles, isSupportPath, isTestPath, walk } from '../src/discover.ts';
+import { censusLanguage, detectRunner, discoverCensus, discoverTests, groupCensusFiles, inspectCensus, isPythonSupportFile, isPythonTestPath, isSupportPath, isTestPath, walk } from '../src/discover.ts';
 import { makeTree } from './helpers/tree.ts';
 
 describe('isTestPath', () => {
@@ -136,6 +136,20 @@ describe('discoverCensus', () => {
       { language: 'Go', files: ['go/x_test.go'] },
       { language: 'Python', files: ['a/test_a.py', 'b/test_b.py'] },
     ]);
+  });
+
+  it('finds conftest.py files for runner detection without ever listing one as a test, and skips the same directories', () => {
+    const root = makeTree({ 'tests/conftest.py': '', 'conftest.py': '', 'tests/test_a.py': '', 'venv/lib/conftest.py': '', '.venv/conftest.py': '', 'node_modules/p/conftest.py': '' });
+    expect(inspectCensus(root)).toEqual({ groups: [{ language: 'Python', files: ['tests/test_a.py'] }], conftests: ['conftest.py', 'tests/conftest.py'] });
+    expect(discoverCensus(root)).toEqual(inspectCensus(root).groups);
+  });
+
+  it.each([
+    ['tests/test_a.py', true, false], ['src/a_test.py', true, false], ['test_a.py', true, false], ['src/conftest.py', false, true], ['conftest.py', false, true],
+    ['src/a.py', false, false], ['src/testing.py', false, false], ['src/my_conftest.py', false, false], ['src/test_a.pyc', false, false], ['checks/geometry_check.py', false, false],
+  ])('classifies %s as a Python test: %s, as a Python support file: %s', (rel, test, support) => {
+    expect(isPythonTestPath(rel)).toBe(test);
+    expect(isPythonSupportFile(rel)).toBe(support);
   });
 
   it('leaves JavaScript discovery alone, directories the census skips included', () => {

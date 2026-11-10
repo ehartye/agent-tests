@@ -406,6 +406,10 @@ describe('scan reports skipped cases', () => {
 });
 
 describe('incomplete inventory', () => {
+  it('refuses to read Python tests without a parser instead of reporting them unread, and points to scanProject', () => {
+    expect(() => scan(makeTree({ 'tests/test_x.py': 'def test_x():\n    assert 1\n' }), { commitLimit: 1 })).toThrow(/scanProject/);
+  });
+
   it('adds no inventory key to a JavaScript-only repo', () => {
     for (const name of ['clean', 'bloated']) expect('inventory' in scan(join(FIXTURES, name), { commitLimit: 1 })).toBe(false);
   });

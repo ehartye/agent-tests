@@ -6,14 +6,24 @@ import { detectRedundancy } from './detectors/redundancy.ts';
 import { detectShims } from './detectors/shims.ts';
 import { classifiableFiles, detectWiring, unmappedSubjectFinding } from './detectors/wiring.ts';
 import { detectWorktreeHazards } from './detectors/worktree.ts';
-import { detectRunner, discoverCensus, discoverTestInfrastructure, discoverTests } from './discover.ts';
-import { declaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile, type ParsedTest } from './parse.ts';
+import { detectPythonRunner, detectRunner, discoverTestInfrastructure, discoverTests, inspectCensus, isPythonSupportFile, isPythonTestPath, type Census } from './discover.ts';
+import { declaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile } from './parse.ts';
 import { candidateDirs } from './riskdraft.ts';
+import type { PythonFacts } from './python/facts.ts';
+import { createPythonSubjectResolver } from './python/subjects.ts';
 import { loadRiskMap, tierFor } from './riskmap.ts';
-import { EVIDENCE_SCHEMA, Tier, type EvidenceReport, type FileFlag, type Finding, type Inventory, type RiskMap, type TestFileRecord } from './schema.ts';
+import { EVIDENCE_SCHEMA, LaneName, Tier, type EvidenceReport, type FileFlag, type Finding, type Inventory, type RiskMap, type TestFileRecord } from './schema.ts';
+
+/** Reads the facts of one Python source text by syntax only. */
+export type PythonReader = (source: string) => PythonFacts;
 
 export interface ScanOptions {
   commitLimit?: number;
+  /**
+   * How Python test files are read. `scan` is synchronous and cannot load the parser, so it needs this whenever the repo has Python
+   * test files; `scanProject` loads the parser itself (only then) and is what the CLI uses.
+   */
+  python?: PythonReader;
 }
 
 const RANK: Record<Tier, number> = { critical: 3, standard: 2, low: 1 };
@@ -50,22 +60,26 @@ const MAX_SKIP_REASONS = 3;
 const MAX_TEXT = 80;
 
 /** Tests whose body makes no assertion. A todo or a declared skip is a placeholder or never runs, so it is not named. */
-const bareTests = (parsed: ParsedFile): ParsedTest[] => parsed.tests.filter(test => !test.todo && !test.skipped && test.assertions === 0);
+const bareTests = <T extends { todo?: boolean; skipped?: boolean; assertions: number }>(tests: readonly T[]): T[] => tests.filter(test => !test.todo && !test.skipped && test.assertions === 0);
 
 function flagsOf(parsed: ParsedFile): FileFlag[] {
   const flags: FileFlag[] = [];
   if (parsed.tautologies > 0) flags.push('tautological');
   if (parsed.assertions > 0 && parsed.snapshotAssertions === parsed.assertions) flags.push('snapshot-only');
   if (parsed.assertions > 0 && parsed.mockAssertions === parsed.assertions) flags.push('mock-only');
-  if (bareTests(parsed).length > 0) flags.push('no-direct-assertions');
+  if (bareTests(parsed.tests).length > 0) flags.push('no-direct-assertions');
   return flags;
 }
 
-/** The record fields a file adds only when it has something to say, so a file without them keeps its JSON unchanged. */
+/** The tests that make no assertion, named in file order, or no field at all so a file without any keeps its JSON unchanged. */
+const noAssertionTestsOf = (tests: ReadonlyArray<{ name: string; line: number; todo?: boolean; skipped?: boolean; assertions: number }>): Pick<TestFileRecord, 'noAssertionTests'> => {
+  const bare = bareTests(tests);
+  return bare.length > 0 ? { noAssertionTests: bare.map(test => ({ name: test.name.slice(0, MAX_TEXT), line: test.line })) } : {};
+};
+
+/** The record fields a JavaScript file adds only when it has something to say, so a file without them keeps its JSON unchanged. */
 function skipFieldsOf(parsed: ParsedFile): Pick<TestFileRecord, 'noAssertionTests' | 'skips'> {
-  const fields: Pick<TestFileRecord, 'noAssertionTests' | 'skips'> = {};
-  const bare = bareTests(parsed);
-  if (bare.length > 0) fields.noAssertionTests = bare.map(test => ({ name: test.name.slice(0, MAX_TEXT), line: test.line }));
+  const fields: Pick<TestFileRecord, 'noAssertionTests' | 'skips'> = { ...noAssertionTestsOf(parsed.tests) };
   // A test counts once: a declared skip never runs, so only a test that can run is conditional.
   const declared = parsed.tests.filter(test => test.skipped).length;
   const conditional = parsed.tests.filter(test => !test.skipped && (test.conditional || test.bodySkip)).length + (parsed.suiteSkips?.length ?? 0);
@@ -126,38 +140,131 @@ function loadTests(root: string): LoadedFile[] {
   }
 }
 
+interface LoadedPythonFile {
+  rel: string;
+  text: string;
+  /** The facts of a file that parsed cleanly; null when it could not be read or parsed, so it is flagged `unparsed`. */
+  facts: PythonFacts | null;
+  subjects: string[];
+  tags: TestFileRecord['tags'];
+}
+
+const LANE_NAMES: readonly string[] = LaneName.options;
+
+/**
+ * The lane of a Python file: its leading-comment `# @lane` tag, else a lane-named marker in a module-level `pytestmark`, else the
+ * one lane every test of the file carries (a test's markers include its class's); otherwise none. Only a marker named exactly like
+ * a lane counts. Two different lane markers at one level are ambiguous and give none, as do tests that disagree or carry no lane.
+ */
+function pythonLaneOf(facts: PythonFacts): LaneName | undefined {
+  if (facts.tags.lane) return facts.tags.lane;
+  const lanesOf = (markers: readonly string[]): string[] => [...new Set(markers.filter(marker => LANE_NAMES.includes(marker)))];
+  const module = lanesOf(facts.moduleMarkers);
+  if (module.length > 0) return module.length === 1 ? (module[0] as LaneName) : undefined;
+  const perTest = facts.tests.map(test => lanesOf(test.markers));
+  const first = perTest[0]?.[0];
+  return first !== undefined && perTest.every(lanes => lanes.length === 1 && lanes[0] === first) ? (first as LaneName) : undefined;
+}
+
+/**
+ * Read every Python test file with the facts reader. Like JavaScript, one file that cannot be read or has a syntax error must not stop
+ * the scan: it keeps no facts and is flagged `unparsed` (its leading-comment tags are still read when the parser recovered them).
+ */
+function loadPythonTests(root: string, rels: readonly string[], read: PythonReader): LoadedPythonFile[] {
+  const resolveSubjectsOf = createPythonSubjectResolver(root);
+  return rels.map(rel => {
+    let text = '';
+    let facts: PythonFacts | null = null;
+    let tags: PythonFacts['tags'] = {};
+    try {
+      text = readFileSync(join(root, rel), 'utf8');
+      const read_ = read(text.replace(/^\uFEFF/, ''));
+      tags = read_.tags;
+      if (!read_.hasError) facts = read_;
+    } catch {
+      // Unreadable or unparsable: the file stays listed, flagged unparsed.
+    }
+    const lane = facts ? pythonLaneOf(facts) : tags.lane;
+    const declared = declaredSubjects(root, tags.subjects ?? []).filter(path => !isPythonTestPath(path) && !isPythonSupportFile(path));
+    return {
+      rel,
+      text,
+      facts,
+      subjects: [...new Set([...(facts ? resolveSubjectsOf(rel, facts) : []), ...declared])].sort(),
+      tags: { ...(lane ? { lane } : {}), ...(tags.risk ? { risk: tags.risk } : {}), ...(tags.subjects ? { subjects: tags.subjects } : {}) },
+    };
+  });
+}
+
 /**
  * The language census, or undefined for a repo with no non-JavaScript test-named files, so a JavaScript-only report keeps its
- * exact JSON. Every other language is counted by file name only and is never read, hence detected-unsupported.
+ * exact JSON. Python is inventoried (supported, with its runner and the number of Python test files read); every other language
+ * is counted by file name only and is never read, hence detected-unsupported and the inventory incomplete.
  */
-function inventoryOf(root: string, runner: EvidenceReport['runner'], jsFiles: number): Inventory | undefined {
-  const others = discoverCensus(root);
-  if (others.length === 0) return undefined;
+function inventoryOf(census: Census, runner: EvidenceReport['runner'], jsFiles: number, python: { runner: string; files: number }): Inventory | undefined {
+  if (census.groups.length === 0) return undefined;
+  const languages: Inventory['languages'] = [
+    { language: 'JavaScript', runner, files: jsFiles, status: 'supported' },
+    ...census.groups.map(({ language, files }) =>
+      language === 'Python'
+        ? { language, runner: python.runner, files: python.files, status: 'supported' as const }
+        : { language, runner: 'unknown', files: files.length, status: 'detected-unsupported' as const }),
+  ];
+  const incomplete = languages.some(entry => entry.status === 'detected-unsupported');
   return {
-    complete: false,
-    languages: [
-      { language: 'JavaScript', runner, files: jsFiles, status: 'supported' },
-      ...others.map(({ language, files }) => ({ language, runner: 'unknown', files: files.length, status: 'detected-unsupported' as const })),
-    ],
-    notes: ['Those files are named like tests and were counted by file name only, never read, so their test counts and the coverage they give are unknown.'],
+    complete: !incomplete,
+    languages,
+    notes: incomplete ? ['Those files are named like tests and were counted by file name only, never read, so their test counts and the coverage they give are unknown.'] : [],
   };
 }
 
 const byLocation = (a: Finding, b: Finding): number => (a.line ?? 0) - (b.line ?? 0) || (a.rule < b.rule ? -1 : a.rule > b.rule ? 1 : 0);
 
-/** Gather evidence about a project's tests. Never executes them and never judges: verdicts belong to the audit skill. */
+/**
+ * Gather evidence about a project's tests, synchronously. Never executes them and never judges: verdicts belong to the audit skill.
+ * A repo with Python test files needs `options.python` (see `scanProject`, which supplies it); without one this throws instead of
+ * reporting those files as unread.
+ */
 export function scan(rootInput: string, options: ScanOptions = {}): EvidenceReport {
   const root = resolve(rootInput);
+  return scanWithCensus(root, options, inspectCensus(root), options.python);
+}
+
+/**
+ * Gather evidence like `scan`, loading the Python parser (WASM, asynchronous) only when the census finds Python test files, so a
+ * repo without them never loads it and reports exactly what `scan` does. This is the entry point for callers that can wait.
+ */
+export async function scanProject(rootInput: string, options: ScanOptions = {}): Promise<EvidenceReport> {
+  const root = resolve(rootInput);
+  const census = inspectCensus(root);
+  let read = options.python;
+  if (!read && census.groups.some(group => group.language === 'Python')) {
+    const [{ loadPythonParser }, { extractPythonFactsWith }] = await Promise.all([import('./python/parser.ts'), import('./python/facts.ts')]);
+    const parse = await loadPythonParser();
+    read = source => extractPythonFactsWith(parse, source);
+  }
+  return scanWithCensus(root, options, census, read);
+}
+
+function scanWithCensus(root: string, options: ScanOptions, census: Census, readPython: PythonReader | undefined): EvidenceReport {
+  const pythonRels = census.groups.find(group => group.language === 'Python')?.files ?? [];
+  if (pythonRels.length > 0 && !readPython) throw new Error(`${pythonRels.length} Python test file(s) need a parser: use scanProject, or pass options.python`);
   const map = loadRiskMap(root);
   const sets = commitFileSets(root, options.commitLimit ?? 500);
   const loaded = loadTests(root);
+  const python = readPython ? loadPythonTests(root, pythonRels, readPython) : [];
 
   const records = new Map<string, TestFileRecord>();
   const unmappedFindings: Finding[] = [];
+  /** Tier, area and cost come from the same rules for every language: subjects decide the tier, git history the churn. */
+  const placement = (rel: string, text: string, subjects: string[], risk: string | undefined): Pick<TestFileRecord, 'tier' | 'area' | 'cost'> => {
+    const { tier, area, unmapped } = tierOfFile(map, rel, subjects, risk);
+    if (unmapped.length > 0 && area) unmappedFindings.push(unmappedSubjectFinding(rel, unmapped, area));
+    const { churn, edits } = churnOf(rel, subjects, sets);
+    // `wait` and `ci` stay null in this version because it never runs tests; a later `time` command fills them.
+    return { tier, area, cost: { wait: null, agent: Math.ceil(Buffer.byteLength(text) / 4), ci: null, churn, edits } };
+  };
   for (const file of loaded) {
-    const { tier, area, unmapped } = tierOfFile(map, file.rel, file.subjects, file.parsed.tags.risk);
-    if (unmapped.length > 0 && area) unmappedFindings.push(unmappedSubjectFinding(file.rel, unmapped, area));
-    const { churn, edits } = churnOf(file.rel, file.subjects, sets);
     records.set(file.rel, {
       file: file.rel,
       tests: file.parsed.tests.length,
@@ -166,10 +273,23 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
       ...(file.unparsed ? {} : skipFieldsOf(file.parsed)),
       subjects: file.subjects,
       tags: file.parsed.tags,
-      tier,
-      area,
-      // `wait` and `ci` stay null in this version because it never runs tests; a later `time` command fills them.
-      cost: { wait: null, agent: Math.ceil(Buffer.byteLength(file.text) / 4), ci: null, churn, edits },
+      ...placement(file.rel, file.text, file.subjects, file.parsed.tags.risk),
+      findings: [],
+    });
+  }
+  // Python records take part in wiring and the report tables but not in the JavaScript line detectors below (shims, worktree
+  // hazards, redundancy), which read JavaScript syntax. Only the flags and fields a Python reader can state are set.
+  for (const file of python) {
+    records.set(file.rel, {
+      file: file.rel,
+      language: 'python',
+      tests: file.facts?.tests.length ?? 0,
+      assertions: file.facts?.tests.reduce((sum, test) => sum + test.assertions, 0) ?? 0,
+      flags: file.facts ? (bareTests(file.facts.tests).length > 0 ? ['no-direct-assertions'] : []) : ['unparsed'],
+      ...(file.facts ? noAssertionTestsOf(file.facts.tests) : {}),
+      subjects: file.subjects,
+      tags: file.tags,
+      ...placement(file.rel, file.text, file.subjects, file.tags.risk),
       findings: [],
     });
   }
@@ -204,7 +324,11 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
     }
   }
   const runner = detectRunner(root, loaded.flatMap(file => file.parsed.imports));
-  const inventory = inventoryOf(root, runner, loaded.length);
+  const pythonRunner = detectPythonRunner(root, census.conftests.length > 0, {
+    pytest: python.some(file => file.facts?.signals.pytest),
+    unittest: python.some(file => file.facts?.signals.unittest),
+  });
+  const inventory = inventoryOf(census, runner, loaded.length, { runner: pythonRunner, files: python.length });
   const redundancy = detectRedundancy(loaded);
   attach(redundancy.findings);
   attach(
@@ -228,7 +352,8 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
     runner,
     phase: map?.phase ?? null,
     riskMapPresent: map !== null,
-    files: [...records.values()],
+    // JavaScript files come first from discovery; a repo with Python files lists every file by path instead.
+    files: python.length > 0 ? [...records.values()].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0)) : [...records.values()],
     clusters: redundancy.clusters,
     projectFindings,
     ...(inventory ? { inventory } : {}),

@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { IGNORED_DIRS, isSupportPath, isTestPath, readEntries } from '../discover.ts';
+import { IGNORED_DIRS, isPythonSupportFile, isPythonTestPath, isSupportPath, isTestPath, readEntries } from '../discover.ts';
 import { globToRegExp } from '../paths.ts';
 import { RISK_MAP_PATH, tierFor } from '../riskmap.ts';
 import type { Finding, LaneName, RiskMap, Tier } from '../schema.ts';
@@ -71,7 +71,7 @@ export function unmappedSubjectFinding(rel: string, unmapped: string[], mappedAr
 
 /**
  * The files a directory holds that the risk map is expected to classify: nested directories are walked, but ignored output
- * directories, dot directories, test files, test support files and probe artifacts are skipped. Sorted, repo-relative.
+ * directories, dot directories, test files (JavaScript, TypeScript and Python), test support files (including `conftest.py`) and probe artifacts are skipped. Sorted, repo-relative.
  */
 export function classifiableFiles(root: string, dir: string): string[] {
   const found: string[] = [];
@@ -80,7 +80,7 @@ export function classifiableFiles(root: string, dir: string): string[] {
       const path = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         if (!IGNORED_DIRS.has(entry.name) && !entry.name.startsWith('.')) visit(path);
-      } else if (entry.isFile() && !entry.name.startsWith('__probe__') && !isTestPath(path) && !isSupportPath(path)) found.push(path);
+      } else if (entry.isFile() && !entry.name.startsWith('__probe__') && !isTestPath(path) && !isPythonTestPath(path) && !isPythonSupportFile(path) && !isSupportPath(path)) found.push(path);
     }
   };
   visit(dir);

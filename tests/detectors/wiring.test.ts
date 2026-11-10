@@ -226,6 +226,11 @@ describe('classifiableFiles', () => {
     expect(classifiableFiles(root, 'engine')).toEqual(['engine/README.md', 'engine/core/a.ts']);
   });
 
+  it('treats Python test files and conftest.py as tests and support, never as source', () => {
+    const root = makeTree({ 'svc/app.py': '', 'svc/test_app.py': '', 'svc/app_test.py': '', 'svc/conftest.py': '', 'svc/pkg/conftest.py': '', 'svc/pkg/core.py': '' });
+    expect(classifiableFiles(root, 'svc')).toEqual(['svc/app.py', 'svc/pkg/core.py']);
+  });
+
   it('returns nothing for a missing directory', () => {
     expect(classifiableFiles(makeTree(), 'nope')).toEqual([]);
   });

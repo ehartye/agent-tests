@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { auditArtifact } from '../src/audit-output.ts';
 import { renderMarkdown } from '../src/report.ts';
-import { scan } from '../src/scan.ts';
+import { scanProject } from '../src/scan.ts';
 import { EvidenceReport } from '../src/schema.ts';
 import { makeTree } from './helpers/tree.ts';
 
@@ -25,7 +25,7 @@ describe('the inventory-census fixture, through the CLI', () => {
   };
   const coverage = evidence.projectFindings.filter(finding => ['wiring.inventory-incomplete', 'wiring.uncovered-critical'].includes(finding.rule));
 
-  it('censuses JavaScript, Python and Go, ignores the venv file, and reports coverage unknown instead of uncovered', () => {
+  it('inventories JavaScript and Python, counts Go by name, ignores the venv file, and reports coverage unknown instead of uncovered', () => {
     expect(scanned.status, scanned.stderr).toBe(0);
     expect(EvidenceReport.safeParse(evidence).success).toBe(true);
     const { notes, ...inventory } = evidence.inventory!;
@@ -36,26 +36,30 @@ describe('the inventory-census fixture, through the CLI', () => {
       coverageFindings: coverage.map(finding => `${finding.rule}@${finding.file}`),
     }).toEqual(expected);
     expect(notes.length).toBeGreaterThan(0);
-    for (const finding of coverage) expect(finding.message).toMatch(/Go, Python.*coverage is unknown|coverage is unknown.*Go, Python/);
+    for (const finding of coverage) {
+      expect(finding.message).toMatch(/Go.*coverage is unknown|coverage is unknown.*Go/);
+      expect(finding.message).not.toContain('Python');
+    }
   });
 
   it('puts the languages and the incomplete inventory in the report header', () => {
-    expect(markdown).toContain('- Languages: JavaScript (vitest, 1 files), Go (detected-unsupported, 1 files), Python (detected-unsupported, 1 files)');
+    expect(markdown).toContain('- Languages: JavaScript (vitest, 1 files), Go (detected-unsupported, 1 files), Python (unknown, 1 files)');
     const line = markdown.split('\n').find(text => text.startsWith('- Inventory incomplete:')) ?? '';
-    expect(line).toContain('Python');
     expect(line).toContain('Go');
+    expect(line).not.toContain('Python');
     expect(markdown).not.toContain(ZERO_COUNT);
   });
 });
 
 describe('repos where the census sees some or none of the tests', () => {
-  const cases: Array<{ name: string; files: Record<string, string>; inventory: string[] | null; zeroLine: boolean; incompleteLine: boolean }> = [
+  const cases: Array<{ name: string; files: Record<string, string>; inventory: string[] | null; zeroLine: boolean; incompleteLine: boolean; warning: boolean }> = [
     {
-      name: 'a Python-only repo is incomplete, not silently empty',
+      name: 'a Python-only repo is inventoried: no zero-count line, but an unknown Python runner keeps the artifact warning',
       files: { 'tests/test_x.py': 'def test_x():\n    assert True\n', 'src/x.py': 'x = 1\n' },
-      inventory: ['JavaScript unknown 0 supported', 'Python unknown 1 detected-unsupported'],
-      zeroLine: true,
-      incompleteLine: true,
+      inventory: ['JavaScript unknown 0 supported', 'Python unknown 1 supported'],
+      zeroLine: false,
+      incompleteLine: false,
+      warning: true,
     },
     {
       name: 'tests with unconventional names get no inventory but still the zero-count line',
@@ -63,6 +67,7 @@ describe('repos where the census sees some or none of the tests', () => {
       inventory: null,
       zeroLine: true,
       incompleteLine: false,
+      warning: true,
     },
     {
       name: 'a configured runner with no tests gets neither line',
@@ -70,19 +75,20 @@ describe('repos where the census sees some or none of the tests', () => {
       inventory: null,
       zeroLine: false,
       incompleteLine: false,
+      warning: false,
     },
   ];
 
-  it.each(cases)('$name', ({ files, inventory, zeroLine, incompleteLine }) => {
-    const evidence = scan(makeTree(files), { commitLimit: 1 });
+  it.each(cases)('$name', async ({ files, inventory, zeroLine, incompleteLine, warning }) => {
+    const evidence = await scanProject(makeTree(files), { commitLimit: 1 });
     expect(evidence.inventory?.languages.map(entry => `${entry.language} ${entry.runner} ${entry.files} ${entry.status}`) ?? null).toEqual(inventory);
     expect('inventory' in evidence).toBe(inventory !== null);
     const markdown = renderMarkdown(evidence);
     expect(markdown.includes(ZERO_COUNT)).toBe(zeroLine);
     expect(markdown.includes('- Inventory incomplete:')).toBe(incompleteLine);
-    // The saved artifacts keep the unknown-runner warning whenever the runner is unknown.
-    expect(auditArtifact(evidence, 'report').includes(ARTIFACT_WARNING)).toBe(zeroLine);
-    expect(auditArtifact(evidence, 'scan').includes(ARTIFACT_WARNING)).toBe(zeroLine);
+    // The saved artifacts keep the unknown-runner warning unless a supported language has a known runner and files.
+    expect(auditArtifact(evidence, 'report').includes(ARTIFACT_WARNING)).toBe(warning);
+    expect(auditArtifact(evidence, 'scan').includes(ARTIFACT_WARNING)).toBe(warning);
   });
 
   it('leaves the JSON of a repo with unconventional names without an inventory key', () => {

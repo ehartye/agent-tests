@@ -51,6 +51,12 @@ export type FileFlag = z.infer<typeof FileFlag>;
 
 export const TestFileRecord = z.object({
   file: z.string(),
+  /**
+   * The language of a test file the scan reads besides JavaScript and TypeScript; absent on JavaScript and TypeScript records, so a
+   * JavaScript-only report is unchanged. A Python record is read by its own parser: it has no `tautological`, `snapshot-only` or
+   * `mock-only` flag, no `skips`, and is not fed to the JavaScript line detectors (shims, worktree hazards, redundancy clusters).
+   */
+  language: z.literal('python').optional(),
   tests: z.number().int().nonnegative(),
   assertions: z.number().int().nonnegative(),
   flags: z.array(FileFlag),

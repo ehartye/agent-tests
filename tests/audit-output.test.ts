@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { admitOutput, auditArtifact, producerIdentity, publishAudit } from '../src/audit-output.ts';
-import { scan } from '../src/scan.ts';
+import { scan, scanProject } from '../src/scan.ts';
 import { renderMarkdown } from '../src/report.ts';
 import { EvidenceReport } from '../src/schema.ts';
 import { makeTree } from './helpers/tree.ts';
@@ -106,10 +106,10 @@ describe('stable audit artifacts',()=>{
     expect(auditArtifact(evidence,'report').includes(warning)).toBe(warns);
     expect(JSON.parse(auditArtifact(evidence,'scan')).artifact.limits.includes(warning)).toBe(warns);
   });
-  it('keeps the warning for 10 JavaScript tests with no runner config beside one Python test',()=>{
+  it('keeps the warning for 10 JavaScript tests with no runner config beside one Python test',async()=>{
     const files:Record<string,string>={'tests/test_x.py':'def test_x():\n    assert True\n'};
     for(let i=0;i<10;i++)files[`tests/t${i}.test.js`]='it("x",()=>{expect(1).toBe(1);});\n';
-    const evidence=scan(makeTree(files),{commitLimit:1});
+    const evidence=await scanProject(makeTree(files),{commitLimit:1});
     expect(evidence.runner).toBe('unknown');expect(evidence.inventory?.languages[0]).toMatchObject({language:'JavaScript',runner:'unknown',files:10,status:'supported'});
     expect(auditArtifact(evidence,'report')).toContain('> No supported runner detected');
     expect(JSON.parse(auditArtifact(evidence,'scan')).artifact.limits).toContain('No supported runner detected; a zero static test count does not prove that the project has no tests.');

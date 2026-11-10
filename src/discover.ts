@@ -64,9 +64,16 @@ export function walk(root: string, visit: (absolute: string, rel: string) => voi
   }
 }
 
-/** Test files of languages the scan cannot read, recognized by conventional file name only (the extension decides the language). */
+/** Python test files are recognized by name alone, as pytest and unittest discover them; `conftest.py` is shared support, never a test. */
+const PYTHON_TEST_FILE = /(?:^|\/)(?:test_[^/]*|[^/]*_test)\.py$/;
+const PYTHON_SUPPORT_FILE = /(?:^|\/)conftest\.py$/;
+
+export const isPythonTestPath = (rel: string): boolean => PYTHON_TEST_FILE.test(rel);
+export const isPythonSupportFile = (rel: string): boolean => PYTHON_SUPPORT_FILE.test(rel);
+
+/** Test files by conventional file name (the extension decides the language). Python is inventoried; the others are counted by name only. */
 const CENSUS_NAMES: ReadonlyArray<{ language: string; pattern: RegExp }> = [
-  { language: 'Python', pattern: /(?:^|\/)(?:test_[^/]*|[^/]*_test)\.py$/ },
+  { language: 'Python', pattern: PYTHON_TEST_FILE },
   { language: 'Go', pattern: /_test\.go$/ },
   { language: 'Ruby', pattern: /(?:^|\/)(?:test_[^/]*\.rb|[^/]*_spec\.rb)$/ },
   { language: 'PowerShell', pattern: /\.Tests\.ps1$/ },
@@ -91,13 +98,27 @@ export function censusLanguage(rel: string): string | null {
   return CENSUS_NAMES.find(({ pattern }) => pattern.test(rel))?.language ?? null;
 }
 
-/** Test-named files of unsupported languages, grouped by language name (sorted), each group's paths sorted. */
-export function discoverCensus(root: string): Array<{ language: string; files: string[] }> {
+export interface Census {
+  /** Test-named files by language name (sorted), each group's paths sorted. */
+  groups: Array<{ language: string; files: string[] }>;
+  /** Every `conftest.py`, sorted: shared pytest support that is never a test but tells the runner apart. */
+  conftests: string[];
+}
+
+/** One walk of the census directories: test-named files of every non-JavaScript language, plus the conftest.py files. */
+export function inspectCensus(root: string): Census {
   const rels: string[] = [];
+  const conftests: string[] = [];
   walk(root, (_absolute, rel) => {
     if (censusLanguage(rel)) rels.push(rel);
+    else if (isPythonSupportFile(rel)) conftests.push(rel);
   }, root, skipForCensus);
-  return groupCensusFiles(rels);
+  return { groups: groupCensusFiles(rels), conftests: conftests.sort() };
+}
+
+/** Test-named files of languages other than JavaScript, grouped by language name (sorted), each group's paths sorted. */
+export function discoverCensus(root: string): Array<{ language: string; files: string[] }> {
+  return inspectCensus(root).groups;
 }
 
 /** Group repo-relative paths by the unsupported language their name follows; other paths are dropped. */
@@ -133,6 +154,33 @@ export function discoverTestInfrastructure(root: string): string[] {
     )) files.push(rel);
   });
   return files.sort();
+}
+
+export type PythonRunner = 'pytest' | 'unittest' | 'unknown';
+
+const readIfPresent = (path: string): string => {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
+};
+
+const PYTEST_SECTION = /^\s*\[(?:tool:)?pytest\]/m;
+
+/**
+ * The runner of a repo's Python tests, from files only (nothing is executed): pytest when the project root has a pytest config
+ * (`pytest.ini`; a pytest section in `tox.ini` or `setup.cfg`; `pyproject.toml` mentioning pytest), a `conftest.py` exists, or an
+ * inventoried file imports pytest; else unittest when one imports unittest; else unknown. Configured settings are not read.
+ */
+export function detectPythonRunner(root: string, hasConftest: boolean, imports: { pytest: boolean; unittest: boolean }): PythonRunner {
+  const configured =
+    existsSync(join(root, 'pytest.ini')) ||
+    PYTEST_SECTION.test(readIfPresent(join(root, 'tox.ini'))) ||
+    PYTEST_SECTION.test(readIfPresent(join(root, 'setup.cfg'))) ||
+    readIfPresent(join(root, 'pyproject.toml')).includes('pytest');
+  if (configured || hasConftest || imports.pytest) return 'pytest';
+  return imports.unittest ? 'unittest' : 'unknown';
 }
 
 export function detectRunner(root: string, importedModules?: readonly string[]): Runner {
