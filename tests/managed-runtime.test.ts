@@ -82,6 +82,7 @@ describe('resolveRuntime', () => {
     expect(message).toMatch(/^Managed CLI 1\.2\.3 is missing\. Run the tests-setup skill \(node ".*setup\.js"\)\./);
     expect(message).toContain(home);
     expect(message).toContain('never in the project or the plugin');
+    expect(message).toContain('npm may also use its own cache');
     expect(message).toContain('npm');
     expect(message).toMatch(/^[ -~]*$/);
   });
@@ -253,6 +254,7 @@ describe('launcher contract', () => {
     expect(report.errors[0]).toContain('tests-setup');
     expect(report.errors[0]).toContain(resolve(home));
     expect(report.errors[0]).toContain('never in the project or the plugin');
+    expect(report.errors[0]).toContain('npm may also use its own cache');
     expect(report.errors[0]).toContain('npm');
   });
 
@@ -267,6 +269,7 @@ describe('launcher contract', () => {
     expect(error.message).toContain('tests-setup');
     expect(error.message).toContain(resolve(home));
     expect(error.message).toContain('never in the project');
+    expect(error.message).toContain('npm may also use its own cache');
     expect(error.message).toContain('npm');
   });
 
