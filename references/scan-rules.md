@@ -210,8 +210,8 @@ coverage of the area is unknown, not absent. It replaces `wiring.uncovered-criti
   language. Trade-off: in a mixed-language repository, an area with any other kind of file and no covering test reads
   "coverage unknown" even if it is genuinely untested, so it can soften a real gap.
 - The area holds Python files and lies within the scope of a Python incompleteness note (`inventory.noteScopes`): a custom
-  `python_files` setting (scope `"all"`), a facade import through a package `__init__.py` (scope: that package), or a Python
-  file with opaque registration (scope: its subjects' packages). The message quotes the note. A Python area outside every
+  `python_files` setting or a Python test file that could not be parsed (scope `"all"`), a facade import through a package
+  `__init__.py` (scope: that package), or a Python file with opaque registration (scope: its subjects' packages). The message quotes the note. A Python area outside every
   note's scope stays `wiring.uncovered-critical`, so one odd file does not mute the rest of the repo.
 
 The census names, the `inventory` object, the scope containment rule and the exact conditions are in
@@ -230,8 +230,8 @@ reach other modules` (an area `src/pkg/io.py` when a test imports `pkg` through 
 Means: a Python test file registers tests in a way the static reader cannot see, so its count of recognized declarations
 may undercount it. The report shows `+?` on the file, as for JavaScript helpers. There are three Python triggers: a module
 that defines `load_tests` (unittest only; pytest ignores it); a module-level import whose bound name is `Test*`, `*Test` or
-`*TestCase` (an imported test class, collected in the importing module; the source module is not checked, so
-`from unittest import TestCase` also matches); and a non-literal dynamic import (`import_module(name)` or
+`*TestCase` (an imported test class, collected in the importing module; it counts only when it comes from a project module,
+so `from unittest import TestCase` is not opaque); and a non-literal dynamic import (`import_module(name)` or
 `__import__(name)`, whose target and subjects are unknown). The evidence is `load_tests`, the imported name, or
 `non-literal import`.
 
@@ -239,7 +239,7 @@ Each such file also adds the opaque note to `inventory.notes` and `inventory.not
 critical Python area near it into `wiring.inventory-incomplete` (see above).
 
 Recommend: open the module, read what `load_tests` returns or where the imported class is declared, and compare a native
-inventory (the runner's own collection listing, run by you or the owner; the scan never runs it) before judging the
+inventory (the runner's own collection listing, run by you or by someone on the project; the scan never runs it) before judging the
 file's count or its coverage.
 
 ## shim.title-marker

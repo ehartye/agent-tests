@@ -111,10 +111,10 @@ Agents write most tests, so prevent bloat at the source. Add this block to the p
     - Tests must not depend on the checkout: no fixed ports (use port 0), no fixed temp paths (use mkdtemp), no
       absolute paths, no reading `.git` directly, no writes under the home directory.
     - Declare the lane in the file's first comment, before any import: `/** @lane merge */` (edit, merge, scheduled or
-      release); in Python, `# @lane merge` in the leading `#` comment lines before the first statement or docstring (see
-      `<plugin-root>/references/inventory.md`). Tags are read only from that leading comment. If the test reaches code only
-      through a subprocess or the network, add `@subject <path>` for that code, as a path from the project root (`src/cli.ts`,
-      not an import-style `../src/cli.ts`, which is dropped). A test with no code subject gets `@risk <critical|standard|low>`.
+      release); in Python, `# @lane merge` in the leading `#` comment lines before the first statement or docstring. Tags are
+      read only from that leading comment. If the test reaches code only through a subprocess or the network, add
+      `@subject <path>` for that code, as a path from the project root (`src/cli.ts`, not an import-style `../src/cli.ts`,
+      which is dropped). A test with no code subject gets `@risk <critical|standard|low>`.
     - For a bug fix, write the failing test first and watch it fail for the reported reason. For any new test, check that
       it fails when the behavior it covers is broken.
     - While editing, run only the tests for the files you changed. Run the project's merge script before pushing. Do
@@ -122,7 +122,7 @@ Agents write most tests, so prevent bloat at the source. Add this block to the p
 
 ## 6. Writing a test at each level
 
-The block above is the short form. When writing or reviewing a test, read the level you are working at in
+The block above is the short form (Python tag syntax and what the scan reads in Python: `<plugin-root>/references/inventory.md`). When writing or reviewing a test, read the level you are working at in
 `<plugin-root>/references/craft.md`: a function or class (what to assert, test doubles, test data), a feature
 (integration, contract and end-to-end tests, time, isolation, third-party APIs) or the suite and process (ownership,
 determinism, coverage, legacy code, agent-written tests).
