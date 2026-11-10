@@ -171,6 +171,18 @@ describe('skills', () => {
       expect(rules).toContain(PATHS_SENTENCE);
     });
 
+    it('describes the final behavior, not the first draft', () => {
+      expect(rules).not.toContain('at most 5 per file');
+      expect(rules).toContain('name-based');
+      expect(rules).toContain('template literal');
+      expect(rules).toContain('same join');
+      expect(rules).toContain('more files (see the JSON noAssertionTests)');
+    });
+
+    it('keeps the workflow advice that says reporting may be equivalent', () => {
+      expect(load('test-audit').body).toContain('or equivalent reporting');
+    });
+
     it('says the same in the test-audit skill', () => {
       expect(load('test-audit').body).toContain(PATHS_SENTENCE);
     });

@@ -101,7 +101,7 @@ Ask in this order. Stop at the first question that settles it.
 3. **Does something cheaper already catch it?** Compare the files in a cluster and the duplicate titles and repeated
    sweeps. Name the test that is the single owner of the behavior.
 4. **Is the test sound?** `tautological`, `snapshot-only`, `mock-only` and `no-direct-assertions` flags mean the test
-   may assert nothing real; the report names the `no-direct-assertions` tests. Confirm against `<plugin-root>/references/craft.md`: concrete
+   may assert nothing real; the report names `no-direct-assertions` tests. Confirm by reading it against `<plugin-root>/references/craft.md`: concrete
    assertions that could fail, real collaborators or fakes before mocks, one behavior per test.
    For native renderers, apply its nonempty PNG/glyph oracles, causal negative controls, declared control geometry and
    capture teardown checks. Static findings cannot certify those runtime properties; inspect the native evidence.
@@ -152,8 +152,8 @@ When mutation evidence supports a keep/rewrite decision, follow the [read-only m
    Preserve production Windows acceptance and declared platform obligations; establish unknown requirements before pruning.
    Subject to owner policy, dev/test can use a cheap non-blocking PR observer and optional OS coverage on demand,
    weekly/nightly and release tags. Production retains required checks. Workflow-level path filters can strand required
-   checks on docs-only changes: use an always-reporting job with job-level conditional work. Verify required-check policy before changing filters or gates; runner labels do not establish billed savings.
-   A paths filter is a trigger, not an ownership list; the scan does not map workflow steps to test files.
+   checks on docs-only changes: use an always-reporting job with job-level conditional work or equivalent reporting.
+   Verify actual required-check policy before changing filters or gates; runner labels do not establish billed savings. A paths filter is a trigger, not an ownership list; the scan does not map workflow steps to test files.
 5. Totals: estimated tokens in files marked `delete` or `merge`, and how many files with a Lane of `edit` you demote
    out of the edit lane.
 6. What this audit could not measure. Static scan/report do not measure wait time; an optional explicitly requested Node

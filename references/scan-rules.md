@@ -74,14 +74,20 @@ worktrees, or two parallel runs, open the same file unless the path is unique pe
 as is a line with `mkdtemp` on it or on the line before.
 
 Quiet when the file sits in a directory the test file made: once the file has assigned an identifier from
-`mkdtemp` or `mkdtempSync` (also `await mkdtemp`) on an earlier line, a later line that uses that identifier is not
-flagged, for example `new DatabaseSync(join(runDir, 'run.sqlite'))` or a template ending `/run.sqlite` that interpolates
-`runDir`.
+`mkdtemp` or `mkdtempSync` (also `await mkdtemp`) on an earlier line, a match is not flagged when that identifier is an
+argument of the same join, `path.join` or `resolve` call that holds the quoted file name, for example
+`new DatabaseSync(join(runDir, 'run.sqlite'))`. The identifier merely appearing elsewhere on the line, or inside a string
+literal, does not make it quiet.
 
 Qualified, not silenced, when the directory cannot be traced. `join(dir, 'x.sqlite')` where `dir` is a function parameter,
 or is not assigned from `mkdtemp` in this file, is still flagged, and its `note` starts `Path uniqueness unresolved:`
 and names `dir`. The path may be unique because the caller passes a per-run directory; the scan cannot see that, so
 check the caller. A bare fixed name (`'test.sqlite'`, `'data/app.db'`) is flagged with no note.
+
+Limits: a template literal containing `${...}` is never matched by this rule at all, so an untraced `${dir}/x.sqlite` gives
+no finding and no note, and a traced one is not checked either; read such paths yourself. Identifier tracing is name-based,
+not scope-aware: a `mkdtemp` assignment to `runDir` anywhere earlier in the file (a leading `this.` is ignored) counts for
+every later `runDir`, including one in another function or a parameter with the same name.
 
 Recommend: build the path inside a `mkdtemp` directory and remove it in cleanup.
 
@@ -92,9 +98,11 @@ body (`expect`, `assert` or another recognized form). A helper the test calls ma
 to read the test, not proof that it checks nothing. A `todo` test and a declared skip (`it.skip`, `test.skip`) are
 exempt: a stub body is a placeholder or never runs, so it is not named.
 
-The scan JSON names the tests: `noAssertionTests` is a list of `{ name, line }` in file order, at most 5 per file and
-80 characters per name. A file without the flag has no `noAssertionTests` key. `report` prints a `No direct assertions`
-section with one line per test, `<file>: "does nothing" (line 12)`, then `and K more` when a file has more than 5.
+The scan JSON names the tests: `noAssertionTests` is a list of `{ name, line }` in file order that keeps every assertionless
+test of the file, each name cut to 80 characters. A file without the flag has no `noAssertionTests` key. `report` prints a
+`No direct assertions` section for every flagged file, not only those in the findings table (table order first, then the
+rest by path), up to 20 files and then `+K more files (see the JSON noAssertionTests)`. Each file shows at most 5 names,
+one line each, `<file>: "does nothing" (line 12)`, then `and K more` with K the real number left.
 `it.each` rows and nested `describe` blocks attribute their assertions to the test that contains them.
 
 ## Skipped cases
@@ -105,11 +113,14 @@ skips has no `skips` key.
 - Declared: the test is declared with `it.skip` or `test.skip`. It never runs.
 - Conditional: it is declared with `it.skipIf(cond)` or `it.runIf(cond)`, or its body skips it at run time with
   `ctx.skip('no network')` on the context parameter (any name: `ctx`, `context`, `t`) or a destructured `skip(...)`.
-  A Playwright-style `test.skip(isCI, 'flaky on CI')` inside a test body is not a test: it counts as one conditional
-  skip, and its string is the reason.
+  A Playwright-style `test.skip(isCI, 'flaky on CI')` inside a test body is not a test: a `test.skip` or `it.skip` call
+  whose first argument is not a string or template literal and whose second argument is not a function counts as one
+  conditional skip. A call with a string title or a function body, `test.skip('later', () => {})`, is a declared skip.
 - Counts are tests, not calls. A declared skip is counted once and never also as conditional.
-- `reasons` holds the first string-literal argument of each skip call, distinct, at most 3 per file and 80 characters
-  each. A skip with no string argument adds no reason.
+- `reasons` holds the reason of each skip call, distinct, at most 3 per file and 80 characters each. A context skip
+  takes its first string argument; an inline `test.skip(cond, 'reason')` takes its second argument. The reason is recorded
+  only when it is a plain string or a template without `${...}`; a variable or a template with substitutions adds no
+  reason, and none is invented.
 
 `report` shows the totals in the header line `- Skipped cases: <n> declared, <m> conditional in <k> files` (only when
 any skip exists) and a `Skips` section with one line per file (at most 20 files, then a count of the rest) giving the
