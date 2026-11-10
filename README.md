@@ -144,6 +144,8 @@ Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
 
+Version 0.10.1 puts managed-runtime readiness first in the test-strategy skill and states what setup writes: the missing-runtime message now names the managed home and says setup never writes in the project or the plugin, and the skills say a read-only review may run setup unless its brief forbids installs or network access.
+
 Version 0.10.0 adds opt-in `scan`/`report --out` with immutable file publication, producer identity and exact-byte receipts. Existing stdout and checked-launcher behavior remain unchanged; see [saved audit artifacts](references/audit-output.md).
 
 Version 0.9.0 adds the opt-in `worktree-check` command, which runs a project's test command once alone and then in the root checkout and a second git worktree of HEAD at the same time and reports whether a failure appeared only in the concurrent runs (`hazard-observed`, `no-hazard-observed` or `baseline-failed`), always removing the second worktree and its branch. It never runs from `scan` or `report`. The output-symlink test now skips with a reason when symlinks are refused, and the held `candidate-native-progress` case is less likely to time out under load. See `references/worktree-check.md`.
