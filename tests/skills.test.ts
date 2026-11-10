@@ -155,6 +155,27 @@ describe('skills', () => {
     expect(load('test-strategy').body).toContain('managed home');
   });
 
+  describe('references/scan-rules.md', () => {
+    const rules = readFileSync(join(ROOT, 'references', 'scan-rules.md'), 'utf8');
+    const PATHS_SENTENCE = 'A paths filter is a trigger, not an ownership list; the scan does not map workflow steps to test files.';
+
+    it.each(['worktree.shared-tmp', 'worktree.fixed-db-file', 'no-direct-assertions', 'frequency.ci-on-push'])('documents %s', rule => {
+      expect(rules).toContain(rule);
+    });
+
+    it('documents the skip fields and the report sections they feed', () => {
+      for (const word of ['skips', 'noAssertionTests', 'No direct assertions', 'Skipped cases']) expect(rules).toContain(word);
+    });
+
+    it('says a paths filter is a trigger, not an ownership list', () => {
+      expect(rules).toContain(PATHS_SENTENCE);
+    });
+
+    it('says the same in the test-audit skill', () => {
+      expect(load('test-audit').body).toContain(PATHS_SENTENCE);
+    });
+  });
+
   it.each(['test-audit', 'test-strategy'])('%s preserves publication, platform obligations and current owner policy in CI advice', name => {
     const body = load(name).body;
     expect(body).toMatch(/preserve[^\n]*publication/i);

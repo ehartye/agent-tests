@@ -39,9 +39,10 @@ when needed to discover updated skills.
 
 1. Redundant coverage: test files sharing a subject, repeated seed sweeps, duplicate titles.
 2. Compat, legacy and fallback tests, judged against who actually consumes the code.
-3. Tests that break beside a second worktree or from another working directory: fixed ports, fixed or timestamp-named temp or database paths (`worktree.timestamp-tmp-path`), absolute paths, reads of `.git`, writes under `process.cwd()` (`worktree.cwd-write`) and repository files located from it (`worktree.cwd-locate`). These are review hints, not verdicts; file-system pollution is a minority cause of flakiness in the measured studies.
+3. Tests that break beside a second worktree or from another working directory: fixed ports, fixed or timestamp-named temp or database paths (`worktree.shared-tmp`, `worktree.fixed-db-file`, `worktree.timestamp-tmp-path`; a database file inside a `mkdtemp` directory the file made is quiet, one in an untraced directory is flagged with a note), absolute paths, reads of `.git`, writes under `process.cwd()` (`worktree.cwd-write`) and repository files located from it (`worktree.cwd-locate`). These are review hints, not verdicts; file-system pollution is a minority cause of flakiness in the measured studies.
 4. Tests not tied to a risk tier or lane, tests with a subject no risk-map area covers (`wiring.unmapped-subject`), and critical areas nobody tests.
 5. Tests that run too often: full suites in hooks or builds, watch-mode test scripts, CI on every push, Windows and macOS matrices on the push path.
+6. Tests that may assert nothing, named by title and line (`no-direct-assertions`), and skipped cases, declared or conditional, with their reasons. A workflow `paths:` filter is a trigger, not an ownership list; the scan does not map workflow steps to test files.
 
 The CLI gathers evidence and never judges. The skill's rubric turns evidence into verdicts: keep, demote, merge, rewrite,
 quarantine or delete.
