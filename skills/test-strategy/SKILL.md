@@ -134,7 +134,7 @@ case contexts, effective startup/base/continuation/finalization budgets and retr
 bounded evaluation and causal allocation/paint/continuous-scroll controls; use candidate-evidence's partial-attempt and
 mutation limits. For explicitly opted-in worker CPU diagnostics, read `<plugin-root>/references/node-profiling.md` for
 awaited Inspector hooks that append to the actual config/setup; a complete profile never makes a failed test green.
-These recipes remain advisory; tiny CPU-only tests need none. Before starting a browser server, follow its Server readiness preflight (scripts/server-probe.mjs).
+These recipes remain advisory; tiny CPU-only tests need none. Before starting a browser server, read "Server readiness preflight" in `<plugin-root>/references/architecture-cost.md` and run `node "<plugin-root>/scripts/server-probe.mjs"` as it says.
 
 ### Portable Playbot evidence
 

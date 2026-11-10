@@ -100,7 +100,13 @@ It makes one TCP connect and one `GET /` per loopback family, prints one JSON li
 connected but no valid HTTP headers within the timeout; a slow valid server looks the same), `closed` (connection
 refused, nothing listening) and `unreachable` (the connect timed out or failed another way). The default host
 `localhost` probes both 127.0.0.1 and ::1 and reports the most occupied family, so a silent listener on one family never
-reads as `closed`. The probe never kills anything, binds nothing and does not claim who owns a listener.
+reads as `closed`. A 1xx or 101 reply counts as `responding`. The probe never kills anything, binds nothing and does not
+claim who owns a listener.
+
+Keep `--timeout-ms` at its default of 3000 or higher for a `--expect closed` check: a closed loopback port can take about
+2 s to refuse on Windows, and a smaller timeout reads a closed port as `unreachable`. Exit codes: 0 when the outcome meets
+`--expect`, 1 when it does not, and 2 for a usage error or an internal failure (the error code, `E_USAGE` or `E_PROBE`,
+is in the JSON on stderr). Exit 2 never means "closed".
 
 Start the server on the probed port with a strict port (for example Vite `server.strictPort`, which fails instead of
 moving to another port) and `reuseExistingServer: false`, so a listener that appears late fails the start instead of

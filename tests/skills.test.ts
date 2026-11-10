@@ -135,7 +135,7 @@ describe('skills', () => {
     const cost = readFileSync(join(ROOT, 'references', 'architecture-cost.md'), 'utf8');
 
     it('has the passage with the script, strict port, version list and upstream proposal', () => {
-      for (const word of ['Server readiness preflight', 'server-probe.mjs', '--expect closed', 'strictPort', 'reuseExistingServer', '40433', '1.64.1', '1.65.0', '2026-11-10']) expect(cost, word).toContain(word);
+      for (const word of ['Server readiness preflight', 'server-probe.mjs', '--expect closed', 'strictPort', 'reuseExistingServer', '40433', '1.64.1', '1.65.0', '2026-11-10', '3000', 'E_PROBE', '1xx']) expect(cost, word).toContain(word);
     });
 
     it('has an example command whose flags the probe parser accepts', () => {
@@ -145,6 +145,12 @@ describe('skills', () => {
       expect(() => parseArgs(flags)).not.toThrow();
       expect(parseArgs(flags).expect).toBe('closed');
     });
+  });
+
+  it('has test-strategy point at the runnable preflight in the architecture-cost reference', () => {
+    const body = load('test-strategy').body;
+    expect(body).toContain('architecture-cost.md');
+    expect(body).toContain('<plugin-root>/scripts/server-probe.mjs');
   });
 
   it('has tests-setup name the setup script', () => {
