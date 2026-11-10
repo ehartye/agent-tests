@@ -8,7 +8,9 @@
 // reports `responding`, `occupied-no-http-response`, `closed` or `unreachable`. It never starts, stops
 // or signals anything, binds nothing and writes no file. It reports what answered, never who owns the
 // listener. Dependency-free (node:http only); it does not use the managed runtime.
+import { realpathSync } from 'node:fs';
 import http from 'node:http';
+import { pathToFileURL } from 'node:url';
 
 export const SCHEMA = 'agent-tests/server-probe@1';
 export const OUTCOMES = ['responding', 'occupied-no-http-response', 'unreachable', 'closed']; // precedence order
@@ -159,10 +161,23 @@ async function main(argv) {
   exitAfterWrite(process.stdout, `${JSON.stringify(result)}\n`, result.met ? 0 : 1);
 }
 
-// Run the CLI when this file is the entry module (import.meta.main) or was piped to node on stdin or --eval, where
-// node reports no main module and names it [eval1]. Staying silent there would exit 0, which reads as "closed".
-// Importing the file (a test, another script) matches neither and runs nothing.
-if (import.meta.main || /\/\[eval\d*\]$/.test(import.meta.url)) {
+/**
+ * True when the module described by `meta` (import.meta) is the one node was launched with. `meta.main` is true for a file
+ * launch, but node 24.0 and 24.1 do not set it and node reports a module piped on stdin or --eval as not main, naming it
+ * [eval1]. Staying silent in those cases would exit 0, which reads as "closed", so they are recognized here. Importing the
+ * file matches none of them.
+ */
+export function isEntryPoint(meta, argv1) {
+  if (meta.main === true || /\/\[eval\d*\]$/.test(meta.url)) return true;
+  if (typeof meta.main === 'boolean') return false;
+  try {
+    return Boolean(argv1) && pathToFileURL(realpathSync(argv1)).href === meta.url;
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint(import.meta, process.argv[1])) {
   main(process.argv.slice(2)).catch(error => {
     // Exit 1 means "outcome does not meet --expect"; an internal failure must not look like that.
     exitAfterWrite(process.stderr, `${JSON.stringify({ error: { code: 'E_PROBE', message: String(error?.message ?? error), hint: 'Re-run; report this if it repeats.' } })}\n`, 2);

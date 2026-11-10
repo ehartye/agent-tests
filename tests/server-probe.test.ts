@@ -3,12 +3,14 @@
  * @subject scripts/server-probe.mjs
  */
 import { spawn } from 'node:child_process';
-import { readFileSync, readdirSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
-import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { classifyConnectError, overallOutcome, parseArgs } from '../scripts/server-probe.mjs';
+import { classifyConnectError, isEntryPoint, overallOutcome, parseArgs } from '../scripts/server-probe.mjs';
 import { physicalTemp } from './helpers/physical-temp.ts';
 
 const script = fileURLToPath(new URL('../scripts/server-probe.mjs', import.meta.url));
@@ -34,6 +36,15 @@ const report = (run: Run) => {
   expect(run.stdout.trimEnd().split('\n')).toHaveLength(1);
   return JSON.parse(run.stdout);
 };
+
+interface Evidence { limits: { timeoutMs: number }; families: { connect: { ms: number }; http?: { ms: number } }[] }
+/**
+ * The spec bound: the probe finishes within 2 x timeout + 250 ms. Each family's connect.ms is measured from the start of its
+ * probe and http.ms from the connect, so their sum is that family's real elapsed time, and families run in parallel, so the
+ * largest sum is the probe's own elapsed time. Unlike the wall clock around the child, this excludes node startup.
+ */
+const slowestFamilyMs = (result: Evidence) => Math.max(...result.families.map(family => family.connect.ms + (family.http?.ms ?? 0)));
+const withinSpecBound = (result: Evidence) => slowestFamilyMs(result) < 2 * result.limits.timeoutMs + 250;
 
 const servers: net.Server[] = [];
 const sockets = new Set<net.Socket>();
@@ -119,7 +130,8 @@ describe('occupied: TCP connects but HTTP does not answer', () => {
     const run = await probe(['--port', String(port), '--host', '127.0.0.1', '--timeout-ms', '300']);
     const result = report(run);
     expect(run.status).toBe(1);
-    expect(run.ms).toBeLessThan(2 * 300 + 2000); // the spec bound is 2 x timeout + 250 ms; child startup and a loaded runner are included here
+    expect(run.ms).toBeLessThan(2 * 300 + 2000); // a CI-safe cap on the wall clock, which includes child startup
+    expect(withinSpecBound(result), `slowest family ${slowestFamilyMs(result)} ms`).toBe(true); // the spec bound, on the probe's own timings
     expect(result).toMatchObject({ outcome: 'occupied-no-http-response', met: false, limits: { timeoutMs: 300 } });
     expect(result.families[0]).toMatchObject({ connect: { ok: true }, http: { timedOut: true } });
     await new Promise(done => setTimeout(done, 50));
@@ -174,7 +186,8 @@ describe('the exit stays bounded whatever the listener does', () => {
     const { port } = await listen(make());
     const run = await probe(['--port', String(port), '--host', '127.0.0.1', '--timeout-ms', String(timeoutMs)]);
     const result = report(run);
-    expect(run.ms).toBeLessThan(2 * timeoutMs + 2000);
+    expect(run.ms).toBeLessThan(2 * timeoutMs + 2000); // a CI-safe cap on the wall clock, which includes child startup
+    expect(withinSpecBound(result), `slowest family ${slowestFamilyMs(result)} ms`).toBe(true); // the spec bound, on the probe's own timings
     expect(run.status).toBe(outcome === 'responding' ? 0 : 1);
     expect(result.outcome).toBe(outcome);
     if (outcome === 'occupied-no-http-response') expect(typeof result.families[0].http.error).toBe('string');
@@ -219,6 +232,34 @@ describe('pure decisions', () => {
   it('parses defaults and both flag spellings', () => {
     expect(parseArgs(['--port', '5173'])).toEqual({ port: 5173, host: 'localhost', timeoutMs: 3000, expect: 'responding' });
     expect(parseArgs(['--port=5173', '--host=::1', '--timeout-ms=1', '--expect=closed'])).toEqual({ port: 5173, host: '::1', timeoutMs: 1, expect: 'closed' });
+  });
+});
+
+describe('the spec-bound check itself', () => {
+  const evidence = (connectMs: number, httpMs?: number): Evidence => ({ limits: { timeoutMs: 300 }, families: [{ connect: { ms: 3 }, http: { ms: 10 } }, { connect: { ms: connectMs }, ...(httpMs === undefined ? {} : { http: { ms: httpMs } }) }] });
+  it.each([
+    { name: 'a family at 2 x timeout', evidence: evidence(300, 299), ok: true },
+    { name: 'a family over 2 x timeout + 250 ms', evidence: evidence(300, 550), ok: false },
+    { name: 'a connect alone over the bound', evidence: evidence(851), ok: false },
+    { name: 'a probe that took about 3 x the timeout', evidence: evidence(5, 900), ok: false },
+  ])('$name is judged correctly', ({ evidence: result, ok }) => {
+    expect(withinSpecBound(result)).toBe(ok);
+  });
+});
+
+describe('entry-point detection', () => {
+  const real = pathToFileURL(realpathSync(script)).href;
+  it.each([
+    { name: 'main is true', meta: { main: true, url: 'file:///elsewhere/other.mjs' }, argv1: undefined, expected: true },
+    { name: 'main is false for an imported module', meta: { main: false, url: real }, argv1: script, expected: false },
+    { name: 'main is false for a module piped on stdin', meta: { main: false, url: 'file:///work/[eval1]' }, argv1: '-', expected: true },
+    { name: 'main is missing and argv1 is this file', meta: { url: real }, argv1: script, expected: true },
+    { name: 'main is missing and argv1 is another file', meta: { url: real }, argv1: fileURLToPath(import.meta.url), expected: false },
+    { name: 'main is missing and argv1 does not exist', meta: { url: real }, argv1: join(tmpdir(), 'server-probe-absent.mjs'), expected: false },
+    { name: 'main is missing and there is no argv1', meta: { url: real }, argv1: undefined, expected: false },
+    { name: 'main is missing and the module was piped on stdin', meta: { url: 'file:///work/[eval1]' }, argv1: '-', expected: true },
+  ])('$name', ({ meta, argv1, expected }) => {
+    expect(isEntryPoint(meta, argv1)).toBe(expected);
   });
 });
 
