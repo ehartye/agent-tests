@@ -146,5 +146,13 @@
         "tests/sweeps/b.test.ts"
       ]
     }
-  ]
+  ],
+  "noAssertionTests": {
+    "tests/misc/invoice.test.ts": [
+      {
+        "name": "creates an invoice without throwing",
+        "line": 5
+      }
+    ]
+  }
 }

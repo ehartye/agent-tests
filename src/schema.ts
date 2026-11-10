@@ -54,6 +54,10 @@ export const TestFileRecord = z.object({
   tests: z.number().int().nonnegative(),
   assertions: z.number().int().nonnegative(),
   flags: z.array(FileFlag),
+  /** The tests behind a `no-direct-assertions` flag, in file order (the scan keeps five); absent when there are none. */
+  noAssertionTests: z.array(z.object({ name: z.string(), line: z.number().int().positive() })).optional(),
+  /** Skipped tests, counted as tests not calls, with a few distinct reasons; absent when nothing is skipped. */
+  skips: z.object({ declared: z.number().int().nonnegative(), conditional: z.number().int().nonnegative(), reasons: z.array(z.string()) }).optional(),
   subjects: z.array(z.string()),
   tags: z.object({ lane: LaneName.optional(), risk: z.string().optional(), subjects: z.array(z.string()).optional() }),
   tier: Tier.nullable(),

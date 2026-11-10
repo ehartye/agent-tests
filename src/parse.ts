@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, resolve } from 'node:path';
-import { SyntaxKind, type CallExpression, type ImportDeclaration, type Node, type PropertyAccessExpression, type SourceFile } from 'typescript/unstable/ast';
-import { isArrowFunction, isCallExpression, isFunctionExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isPropertyAccessExpression, isStringLiteral, isTaggedTemplateExpression } from 'typescript/unstable/ast/is';
+import { SyntaxKind, type ArrowFunction, type CallExpression, type FunctionExpression, type ImportDeclaration, type Node, type PropertyAccessExpression, type SourceFile } from 'typescript/unstable/ast';
+import { isArrowFunction, isCallExpression, isFunctionExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isObjectBindingPattern, isPropertyAccessExpression, isStringLiteral, isTaggedTemplateExpression } from 'typescript/unstable/ast/is';
 import { createVirtualFileSystem } from 'typescript/unstable/fs';
 import { API } from 'typescript/unstable/sync';
 import { isSupportPath, isTestPath } from './discover.ts';
@@ -13,11 +13,28 @@ export interface ParsedTest {
   line: number;
   assertions: number;
   todo: boolean;
+  /** Declared with `.skip`: the test never runs. */
+  skipped: boolean;
+  /** Declared with `.skipIf` or `.runIf`: whether it runs depends on a condition. */
+  conditional: boolean;
+  /** Its body skips it at run time: `ctx.skip(reason)`, a destructured `skip(reason)` or a Playwright `test.skip(condition, reason)`. */
+  bodySkip: boolean;
+  /** The first string-literal argument of each skip call in the body; a skip without one adds nothing. */
+  skipReasons: string[];
+}
+
+/** What a test callback exposes for skipping: its context parameter and a destructured `skip` function, by local name. */
+interface TestScope {
+  test: ParsedTest;
+  ctx: string | null;
+  skipFn: string | null;
 }
 
 export interface ParsedFile {
   /** Possible helper registrations, whose provider semantics are not known statically. */
   opaqueTestCalls?: Array<{ callee: string; line: number }>;
+  /** Playwright-style `test.skip(condition, reason)` calls outside any test body: conditional skips of a suite, not tests. */
+  suiteSkips?: Array<{ reason?: string }>;
   imports: string[];
   tests: ParsedTest[];
   /** Every describe and it/test title, for marker detection. */
@@ -42,6 +59,8 @@ export interface ParseSession {
 }
 
 const TEST_CALLEE = /^(?:it|test)(?:\.(?:only|skip|todo|concurrent|sequential|fails|skipIf|runIf|each|for))*$/;
+/** `it.skip(...)` and `test.skip(...)` exactly: the only forms that may be a call inside a body rather than a declaration. */
+const INLINE_SKIP_CALLEE = /^(?:it|test)\.skip$/;
 const SUITE_CALLEE = /^describe(?:\.(?:only|skip|todo|concurrent|sequential|each|for|skipIf|runIf))*$/;
 const MOCK_CALLEE = /^(?:vi|jest)\.(?:mock|doMock|fn|spyOn)$/;
 /** `expect(x)`, `expect.soft(x)` and `expect.poll(fn)` start an assertion; `expect.assertions(n)` does not. */
@@ -86,12 +105,68 @@ function calleeName(node: Node): string {
   return node.getText().replace(/\s+/g, '');
 }
 
+const isLiteralText = (node: Node | undefined): boolean => !!node && (isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node));
+const isFunctionLike = (node: Node | undefined): node is ArrowFunction | FunctionExpression => !!node && (isArrowFunction(node) || isFunctionExpression(node));
+
+/**
+ * A Playwright-style conditional skip: `test.skip(isCI, 'flaky on CI')`, `test.skip(({ browserName }) => ..., 'reason')` or
+ * `test.skip(cond)`. It has no string-literal title and no body: its second argument, when there is one, is a string
+ * reason. A call with a string title or a function body, `test.skip('title', fn)` or `test.skip(title, fn)`, is a declaration.
+ */
+function isInlineSkip(call: CallExpression, name: string): boolean {
+  if (!INLINE_SKIP_CALLEE.test(name)) return false;
+  const [first, second] = call.arguments;
+  if (!first) return true;
+  if (isLiteralText(first)) return false;
+  return !second || isLiteralText(second);
+}
+
 /**
  * A test or suite declaration has a title and a body. In the curried forms `it.each(table)('name', fn)` and
  * `it.skipIf(cond)('name', fn)` the inner call has one argument, so only the outer call counts.
  */
 function isDeclaration(call: CallExpression, name: string): boolean {
+  if (isInlineSkip(call, name)) return false;
   return call.arguments.length >= 2 || (call.arguments.length === 1 && name.endsWith('.todo'));
+}
+
+/** The first string-literal argument of a skip call, or undefined. */
+function skipReason(call: CallExpression): string | undefined {
+  const literal = call.arguments.find(isLiteralText) as { text: string } | undefined;
+  return literal?.text || undefined;
+}
+
+/**
+ * The names a test callback gives its context. The context is the first parameter, the second for `test.for`, and absent
+ * for `.each`, whose first parameter is a table row. A destructured `{ skip }` or `{ skip: bail }` names the skip function.
+ */
+function scopeOf(test: ParsedTest, call: CallExpression, name: string): TestScope {
+  const scope: TestScope = { test, ctx: null, skipFn: null };
+  const segments = name.split('.');
+  if (segments.includes('each')) return scope;
+  const parameter = call.arguments.find(isFunctionLike)?.parameters[segments.includes('for') ? 1 : 0];
+  if (!parameter) return scope;
+  const binding = parameter.name;
+  if (isIdentifier(binding)) scope.ctx = binding.text;
+  else if (isObjectBindingPattern(binding)) {
+    for (const element of binding.elements) {
+      const source = element.propertyName ?? element.name;
+      if (source && isIdentifier(source) && source.text === 'skip' && element.name && isIdentifier(element.name)) scope.skipFn = element.name.text;
+    }
+  }
+  return scope;
+}
+
+/** `ctx.skip(...)` on the test's context parameter, or a call to its destructured `skip`. */
+function isContextSkip(callee: Node, scope: TestScope): boolean {
+  if (isIdentifier(callee)) return scope.skipFn !== null && callee.text === scope.skipFn;
+  return isPropertyAccessExpression(callee) && callee.name.text === 'skip' && isIdentifier(callee.expression) && scope.ctx !== null && callee.expression.text === scope.ctx;
+}
+
+function noteBodySkip(test: ParsedTest, call: CallExpression): void {
+  test.bodySkip = true;
+  const reason = skipReason(call);
+  if (reason !== undefined && !test.skipReasons.includes(reason)) test.skipReasons.push(reason);
 }
 
 /** Only expression statements at module/suite scope resemble registrations. */
@@ -155,7 +230,7 @@ function extractFacts(sourceFile: SourceFile, text: string): ParsedFile {
   const lineAt = lineIndex(text);
   const lineOf = (node: Node): number => lineAt(node.getStart());
 
-  const visit = (node: Node, current: ParsedTest | null): void => {
+  const visit = (node: Node, current: TestScope | null): void => {
     let next = current;
     if (isImportDeclaration(node) && isStringLiteral(node.moduleSpecifier) && !isTypeOnlyImport(node)) out.imports.push(node.moduleSpecifier.text);
     if (isCallExpression(node)) {
@@ -166,13 +241,29 @@ function extractFacts(sourceFile: SourceFile, text: string): ParsedFile {
       if (specifier && isStringLiteral(specifier) && (callee.kind === SyntaxKind.ImportKeyword || (isIdentifier(callee) && callee.text === 'require'))) {
         out.imports.push(specifier.text);
       }
+      if (current && isContextSkip(callee, current)) noteBodySkip(current.test, node);
       if (TEST_CALLEE.test(name) && isDeclaration(node, name)) {
         const title = titleOf(node);
-        next = { name: title, line: lineOf(node), assertions: 0, todo: name.endsWith('.todo') };
-        out.tests.push(next);
-        out.titles.push({ text: title, line: next.line });
+        const segments = name.split('.');
+        const test: ParsedTest = {
+          name: title,
+          line: lineOf(node),
+          assertions: 0,
+          todo: name.endsWith('.todo'),
+          skipped: segments.includes('skip'),
+          conditional: segments.includes('skipIf') || segments.includes('runIf'),
+          bodySkip: false,
+          skipReasons: [],
+        };
+        next = scopeOf(test, node, name);
+        out.tests.push(test);
+        out.titles.push({ text: title, line: test.line });
       } else if (SUITE_CALLEE.test(name) && isDeclaration(node, name)) {
         out.titles.push({ text: titleOf(node), line: lineOf(node) });
+      } else if (isInlineSkip(node, name)) {
+        const reason = skipReason(node);
+        if (current) noteBodySkip(current.test, node);
+        else (out.suiteSkips ??= []).push(reason === undefined ? {} : { reason });
       } else if (!current && isCallExpression(callee) && specifier
         && (isStringLiteral(specifier) || isNoSubstitutionTemplateLiteral(specifier))
         && node.arguments[1] && (isArrowFunction(node.arguments[1]) || isFunctionExpression(node.arguments[1]))
@@ -184,10 +275,10 @@ function extractFacts(sourceFile: SourceFile, text: string): ParsedFile {
         out.mockCalls++;
       } else if (EXPECT_CALLEE.test(name)) {
         out.assertions++;
-        if (current) current.assertions++;
+        if (current) current.test.assertions++;
       } else if (/^assert(?:\.\w+)?$/.test(name)) {
         out.assertions++;
-        if (current) current.assertions++;
+        if (current) current.test.assertions++;
       } else if (isPropertyAccessExpression(callee)) {
         const root = expectRoot(callee);
         if (root) {

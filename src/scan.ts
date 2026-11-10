@@ -7,7 +7,7 @@ import { detectShims } from './detectors/shims.ts';
 import { classifiableFiles, detectWiring, unmappedSubjectFinding } from './detectors/wiring.ts';
 import { detectWorktreeHazards } from './detectors/worktree.ts';
 import { detectRunner, discoverTestInfrastructure, discoverTests } from './discover.ts';
-import { declaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile } from './parse.ts';
+import { declaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile, type ParsedTest } from './parse.ts';
 import { candidateDirs } from './riskdraft.ts';
 import { loadRiskMap, tierFor } from './riskmap.ts';
 import { EVIDENCE_SCHEMA, Tier, type EvidenceReport, type FileFlag, type Finding, type RiskMap, type TestFileRecord } from './schema.ts';
@@ -45,13 +45,37 @@ function tierOfFile(
   return { tier: override.success ? override.data : best.tier, area: best.area, unmapped: subjects.length > 0 ? unmapped : [] };
 }
 
+/** At most this many tests are named per file, and a test name or a skip reason is cut to this many characters. */
+const MAX_NAMED_TESTS = 5;
+const MAX_SKIP_REASONS = 3;
+const MAX_TEXT = 80;
+
+/** Tests whose body makes no assertion. A todo or a declared skip is a placeholder or never runs, so it is not named. */
+const bareTests = (parsed: ParsedFile): ParsedTest[] => parsed.tests.filter(test => !test.todo && !test.skipped && test.assertions === 0);
+
 function flagsOf(parsed: ParsedFile): FileFlag[] {
   const flags: FileFlag[] = [];
   if (parsed.tautologies > 0) flags.push('tautological');
   if (parsed.assertions > 0 && parsed.snapshotAssertions === parsed.assertions) flags.push('snapshot-only');
   if (parsed.assertions > 0 && parsed.mockAssertions === parsed.assertions) flags.push('mock-only');
-  if (parsed.tests.some(test => !test.todo && test.assertions === 0)) flags.push('no-direct-assertions');
+  if (bareTests(parsed).length > 0) flags.push('no-direct-assertions');
   return flags;
+}
+
+/** The record fields a file adds only when it has something to say, so a file without them keeps its JSON unchanged. */
+function skipFieldsOf(parsed: ParsedFile): Pick<TestFileRecord, 'noAssertionTests' | 'skips'> {
+  const fields: Pick<TestFileRecord, 'noAssertionTests' | 'skips'> = {};
+  const bare = bareTests(parsed);
+  if (bare.length > 0) fields.noAssertionTests = bare.slice(0, MAX_NAMED_TESTS).map(test => ({ name: test.name.slice(0, MAX_TEXT), line: test.line }));
+  // A test counts once: a declared skip never runs, so only a test that can run is conditional.
+  const declared = parsed.tests.filter(test => test.skipped).length;
+  const conditional = parsed.tests.filter(test => !test.skipped && (test.conditional || test.bodySkip)).length + (parsed.suiteSkips?.length ?? 0);
+  if (declared + conditional > 0) {
+    const reasons = [...parsed.tests.filter(test => !test.skipped).flatMap(test => test.skipReasons), ...(parsed.suiteSkips ?? []).flatMap(skip => (skip.reason === undefined ? [] : [skip.reason]))]
+      .map(reason => reason.slice(0, MAX_TEXT));
+    fields.skips = { declared, conditional, reasons: [...new Set(reasons)].slice(0, MAX_SKIP_REASONS) };
+  }
+  return fields;
 }
 
 interface LoadedFile {
@@ -123,6 +147,7 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
       tests: file.parsed.tests.length,
       assertions: file.parsed.assertions,
       flags: file.unparsed ? ['unparsed'] : flagsOf(file.parsed),
+      ...(file.unparsed ? {} : skipFieldsOf(file.parsed)),
       subjects: file.subjects,
       tags: file.parsed.tags,
       tier,
