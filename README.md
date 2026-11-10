@@ -62,7 +62,8 @@ on this machine.
 | `references/architecture-cost.md` | Advisory investigation of architecture that makes tests costly, including complete generated-asset inputs and final verification ownership |
 | `references/node-profiling.md` | Optional Node 24+ reporter, per-file and overall duration, provenance limits and repeatable lane experiments |
 | `references/candidate-evidence.md` | Explicit checked observation of Node-test/Vitest children, content/path/index identities, native counts and honest reuse limits |
-| `references/scan-rules.md` | What the newer and changed scan rules mean, the remedy to recommend and a planted example of each: `worktree.timestamp-tmp-path`, `worktree.cwd-write`, `worktree.cwd-locate`, `wiring.unmapped-subject`, `shim.title-marker`, `redundancy.shared-subject` and `wiring.drift` |
+| `references/scan-rules.md` | What the newer and changed scan rules mean, the remedy to recommend and a planted example of each: `worktree.timestamp-tmp-path`, `worktree.cwd-write`, `worktree.cwd-locate`, `wiring.unmapped-subject`, `shim.title-marker`, `redundancy.shared-subject`, `wiring.drift` and `wiring.inventory-incomplete` |
+| `references/inventory.md` | What the scan can and cannot see: the language census (test-named files in other languages, counted by name only), the `inventory` object, the incomplete-inventory statement in the report, and why a missing `inventory` key does not mean the inventory is complete |
 | `references/worktree-check.md` | The opt-in `worktree-check` command: options, the three verdicts, the report fields, error codes, a runnable example, its cost and its limits |
 | `references/mutation-evidence.md` | Read-only mutation verdicts, exact native assertion scope, frozen judging, raw restoration and honest partial composition |
 

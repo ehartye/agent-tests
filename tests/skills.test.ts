@@ -231,6 +231,12 @@ describe('skills', () => {
       for (const word of ['inventory-incomplete', 'detected-unsupported', 'does not mean', 'third_party', 'testdata']) expect(inventory, word).toContain(word);
     });
 
+    it('has README references-table rows for the inventory reference and the new wiring rule', () => {
+      const rows = text(join(ROOT, 'README.md')).split(/\r?\n/).filter(line => line.startsWith('|'));
+      expect(rows.some(row => row.includes('`references/inventory.md`'))).toBe(true);
+      expect(rows.find(row => row.includes('`references/scan-rules.md`'))).toContain('inventory-incomplete');
+    });
+
     it('is documented in scan-rules, the test-audit skill and the README', () => {
       expect(text(join(ROOT, 'references', 'scan-rules.md'))).toContain('wiring.inventory-incomplete');
       expect(load('test-audit').body).toContain('inventory.md');
