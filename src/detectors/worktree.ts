@@ -4,9 +4,16 @@ interface Rule {
   rule: string;
   pattern: RegExp;
   message: string;
+  /** Qualifies a finding that is kept but not settled; it flows into Finding.note. Return undefined for no note. */
+  note?: (code: string, match: RegExpExecArray, madeDirs: ReadonlySet<string>) => string | undefined;
+  /**
+   * Finds an identifier assigned from mkdtemp (capture group 1). Once a file has assigned one, a match on a
+   * later line that mentions it stays quiet: the path sits inside a directory unique to the run.
+   */
+  madeDir?: RegExp;
   /** When this matches the line or the line before it, the rule stays quiet (the fix is already in place). */
   skip?: RegExp;
-  /** When this matches the line itself, the rule stays quiet (another rule owns that line). */
+  /** When this matches the line itself, the rule stays quiet (another rule owns that line, or the line is known safe). */
   unless?: RegExp;
   /**
    * A weaker second pattern. It counts only while `weakQuietAfter` has not matched an earlier line of the file,
@@ -24,6 +31,52 @@ const CWD_WRITE = new RegExp(
   String.raw`\b(?:write(?:File|FileSync|Stream)?|append(?:File|FileSync)?|mkdir(?:Sync|p)?|rm(?:Sync|dir|dirSync)?|unlink(?:Sync)?|truncate(?:Sync)?|createWriteStream|outputFile(?:Sync)?|outputJson(?:Sync)?|ensureDir(?:Sync)?|emptyDir(?:Sync)?)\s*\((?:[^,()]|\()*?process\.cwd\(\)` +
     String.raw`|\b(?:copyFile|copyFileSync|cp|cpSync|rename|renameSync|symlink|symlinkSync)\s*\(\s*(?:[^,()]|\((?:[^()]|\([^()]*\))*\))*,\s*(?:[^,()]|\()*?process\.cwd\(\)`,
 );
+
+/** A fixed /tmp string literal, as shared-tmp matches it. */
+const TMP_LITERAL = String.raw`['"\`]/tmp/[^'"\`$]*['"\`]`;
+
+/** An object-property data row (`key: '/tmp/x'`, alone on its line, braces and comma allowed): a value, not a call argument. */
+const TMP_PROPERTY_ROW = new RegExp(String.raw`^\{?\s*(?:[A-Za-z_$][\w$]*|'[^']*'|"[^"]*")\s*:\s*${TMP_LITERAL}\s*\}?\s*,?$`);
+
+/** A statement that only checks the /tmp path is absent, so nothing is created there. */
+const TMP_ABSENCE_CHECK = new RegExp(
+  String.raw`^(?:await\s+)?(?:` +
+    String.raw`expect\(\s*(?:[\w$]+\.)*(?:existsSync|exists)\(\s*${TMP_LITERAL}\s*\)\s*\)\s*\.(?:toBe\(\s*false\s*\)|toBeFalsy\(\s*\)|not\.toBeTruthy\(\s*\)|not\.toBe\(\s*true\s*\))` +
+    String.raw`|assert(?:\.ok)?\(\s*!\s*(?:[\w$]+\.)*(?:existsSync|exists)\(\s*${TMP_LITERAL}\s*\)\s*(?:,[^()]*)?\)` +
+    String.raw`|assert\.(?:equal|strictEqual)\(\s*(?:[\w$]+\.)*(?:existsSync|exists)\(\s*${TMP_LITERAL}\s*\)\s*,\s*false\s*\)` +
+    String.raw`)\s*;?$`,
+);
+
+/** `name = mkdtemp(...)` in any of its forms: const/let, a type annotation, await, a namespace, or one wrapping call (realpathSync). */
+const MKDTEMP_ASSIGNMENT = /\b(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*(?::\s*[\w<>[\]. |]+)?=(?!=)\s*(?:await\s+)?(?:[\w$.]+\(\s*(?:await\s+)?)*[\w$.]*\bmkdtemp(?:Sync)?\s*\(/;
+
+/** Names that stand for a fixed location, never for a per-run directory a file could be unique inside. */
+const FIXED_LOCATIONS = new Set(['__dirname', '__filename', 'import.meta.dirname', 'import.meta.filename']);
+
+/** The bare identifiers joined in the call that holds the matched file name, such as `dir` in join(dir, 'x.sqlite'). */
+function joinedIdentifiers(code: string, match: RegExpExecArray): string[] {
+  const args = /\b(?:join|resolve)\(([^()]*)$/.exec(code.slice(0, match.index))?.[1];
+  if (args === undefined) return [];
+  return args
+    .split(',')
+    .map(arg => arg.trim())
+    .filter(arg => /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(arg) && !FIXED_LOCATIONS.has(arg));
+}
+
+/** Whether the line uses one of the identifiers as a whole word. */
+function mentionsAny(code: string, names: ReadonlySet<string>): boolean {
+  for (const name of names) {
+    if (new RegExp(String.raw`(?<![\w$])${name.replace(/\$/g, String.raw`\$`)}(?![\w$])`).test(code)) return true;
+  }
+  return false;
+}
+
+/** A finding on a file joined to a directory held in an identifier the file never assigned from mkdtemp stays, qualified. */
+function unresolvedDirNote(code: string, match: RegExpExecArray, madeDirs: ReadonlySet<string>): string | undefined {
+  const untraced = joinedIdentifiers(code, match).filter(name => !madeDirs.has(name));
+  if (untraced.length === 0) return undefined;
+  return `Path uniqueness unresolved: ${untraced.join(', ')} is not assigned from mkdtemp in this file, so the path may be shared; confirm the caller passes a per-run directory.`;
+}
 
 const RULES: Rule[] = [
   {
@@ -43,6 +96,8 @@ const RULES: Rule[] = [
     // A fixed /tmp literal (not `'/tmp/' + id` or a template with ${}), or a fixed name under tmpdir() that is not a mkdtemp prefix ending in - or _.
     pattern: /['"`]\/tmp\/[^'"`$]*['"`](?!\s*\+)|tmpdir\(\)\s*,\s*['"`][^'"`$]+(?<![-_])['"`]\s*\)/,
     skip: /mkdtemp/,
+    // Quiet only for a property data row and an absence check; an array row or a split call's argument line looks the same as a write, so it stays flagged.
+    unless: new RegExp(`${TMP_PROPERTY_ROW.source}|${TMP_ABSENCE_CHECK.source}`),
     message: 'Fixed temp path shared by every worktree and every parallel run. Use mkdtemp for a unique directory.',
   },
   {
@@ -61,6 +116,9 @@ const RULES: Rule[] = [
     // A named database file outside fixtures/, not inside a mkdtemp directory; a bare '.db' extension is not a file name.
     pattern: /['"`](?![^'"`]*fixtures[/\\])[^'"`\s$]*[^'"`\s$/\\.]\.(?:sqlite3?|db)['"`]/i,
     skip: /mkdtemp/,
+    // A line that joins a directory the file assigned from mkdtemp is unique per run; one that joins an untraced identifier is kept, with a note.
+    madeDir: MKDTEMP_ASSIGNMENT,
+    note: unresolvedDirNote,
     message: 'Fixed database file name: concurrent worktrees share or clobber it unless the path is unique per run.',
   },
   {
@@ -152,6 +210,8 @@ export function detectWorktreeHazards(file: string, lines: string[]): Finding[] 
   let inBlock = false;
   let previous = '';
   const madeQuiet = new Set<string>();
+  /** Identifiers the file assigned from mkdtemp so far; a path inside one is unique to the run. */
+  const madeDirs = new Set<string>();
   for (const [index, text] of lines.entries()) {
     const trimmed = text.trim();
     // A doc-comment body line (` * text`) whose opening comment is not among the lines we were given; `*/ code` closes a comment.
@@ -168,11 +228,25 @@ export function detectWorktreeHazards(file: string, lines: string[]): Finding[] 
         if (rule.unless?.test(code)) continue;
         let match = rule.pattern.exec(code);
         if (!match && rule.weak && !madeQuiet.has(rule.rule)) match = rule.weak.exec(code);
+        if (match && rule.madeDir && mentionsAny(code, madeDirs)) continue;
         if (match) {
-          findings.push({ category: 'worktree', rule: rule.rule, file, line: index + 1, message: rule.message, evidence: evidenceWindow(code, match) });
+          const note = rule.note?.(code, match, madeDirs);
+          findings.push({
+            category: 'worktree',
+            rule: rule.rule,
+            file,
+            line: index + 1,
+            message: rule.message,
+            evidence: evidenceWindow(code, match),
+            ...(note ? { note } : {}),
+          });
         }
       }
-      for (const rule of RULES) if (rule.weakQuietAfter?.test(code)) madeQuiet.add(rule.rule);
+      for (const rule of RULES) {
+        if (rule.weakQuietAfter?.test(code)) madeQuiet.add(rule.rule);
+        const made = rule.madeDir?.exec(code)?.[1];
+        if (made) madeDirs.add(made);
+      }
     }
     previous = code;
   }
