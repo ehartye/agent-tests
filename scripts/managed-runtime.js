@@ -114,11 +114,16 @@ export function runNpm(args, { cwd, progress = false } = {}) {
 export function checkDependencies(root) {
   assertNode();
   // Parsing a line proves the platform's native TypeScript binary installed and starts, not just that the packages exist.
+  // Parsing a valid and an invalid Python snippet proves the WASM runtime and grammar load and report errors.
   const probe = [
     "await import('yaml'); await import('zod');",
     "const { openParseSession } = await import('./src/parse.ts');",
     'const session = openParseSession();',
     "try { session.parse('check.test.ts', \"it('x', () => {});\"); } finally { session.close(); }",
+    "const { loadPythonParser } = await import('./src/python/parser.ts');",
+    'const parsePython = await loadPythonParser();',
+    "if (parsePython('def test_x(): pass\\n').hasError) throw new Error('Python parser reported an error for valid source');",
+    "if (!parsePython('def (:\\n').hasError) throw new Error('Python parser missed an error in invalid source');",
   ].join(' ');
   try {
     execFileSync(process.execPath, ['--input-type=module', '-e', probe], { cwd: root, windowsHide: true, stdio: 'pipe', encoding: 'utf8', timeout: 60_000 });

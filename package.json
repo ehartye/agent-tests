@@ -29,7 +29,9 @@
   },
   "license": "MIT",
   "dependencies": {
+    "tree-sitter-python": "0.25.0",
     "typescript": "7.0.2",
+    "web-tree-sitter": "0.27.2",
     "yaml": "2.9.1",
     "zod": "4.6.6"
   },
