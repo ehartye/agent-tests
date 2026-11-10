@@ -490,7 +490,7 @@ export function detectFrequency(root: string, map: RiskMap | null): Finding[] {
               category: 'frequency',
               rule: 'frequency.ci-on-push',
               file,
-              message: `A push-triggered workflow is configured on ${pushRunners.join(', ')} with a path filter. Review potential overlap with local or PR validation; paths alone do not establish complete selection or waive required reporting. Unknown workflow purpose must be established before changing triggers.${platformAdvice(map)}`,
+              message: `A push-triggered workflow is configured on ${pushRunners.join(', ')} with a path filter. Review potential overlap with local or PR validation; paths alone do not establish complete selection or waive required reporting. Unknown workflow purpose must be established before changing triggers. A paths filter is a trigger, not an ownership list; the scan does not map workflow steps to test files.${platformAdvice(map)}`,
               evidence: 'on: push',
             });
           }
