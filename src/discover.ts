@@ -91,7 +91,7 @@ const CENSUS_IGNORED_DIRS = new Set([
   '__pycache__', 'venv', 'env', 'site-packages', '.tox', '.mypy_cache', '.pytest_cache', '.ruff_cache',
   'third_party', 'thirdparty', 'testdata', 'Pods', 'target',
 ]);
-const skipForCensus = (name: string): boolean => CENSUS_IGNORED_DIRS.has(name) || name.endsWith('.egg-info');
+export const skipForCensus = (name: string): boolean => CENSUS_IGNORED_DIRS.has(name) || name.endsWith('.egg-info');
 
 /** The non-JavaScript language whose conventional test-file naming this path follows, or null. JavaScript and TypeScript keep `isTestPath`. */
 export function censusLanguage(rel: string): string | null {
@@ -167,6 +167,15 @@ const readIfPresent = (path: string): string => {
 };
 
 const PYTEST_SECTION = /^\s*\[(?:tool:)?pytest\]/m;
+
+/** The project-root files that can configure pytest, which the scan reads only for text and not for settings. */
+const PYTEST_CONFIG_FILES = ['pytest.ini', 'tox.ini', 'setup.cfg', 'pyproject.toml'];
+
+/**
+ * Whether a pytest config file at the project root mentions `python_files`, the setting that changes which files pytest collects.
+ * The settings are not read, so the scan's name-based discovery (the defaults) may miss or add files when it is set.
+ */
+export const pythonFilesConfigured = (root: string): boolean => PYTEST_CONFIG_FILES.some(name => readIfPresent(join(root, name)).includes('python_files'));
 
 /**
  * The runner of a repo's Python tests, from files only (nothing is executed): pytest when the project root has a pytest config

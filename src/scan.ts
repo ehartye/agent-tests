@@ -6,13 +6,14 @@ import { detectRedundancy } from './detectors/redundancy.ts';
 import { detectShims } from './detectors/shims.ts';
 import { classifiableFiles, detectWiring, unmappedSubjectFinding } from './detectors/wiring.ts';
 import { detectWorktreeHazards } from './detectors/worktree.ts';
-import { detectPythonRunner, detectRunner, discoverTestInfrastructure, discoverTests, inspectCensus, isPythonSupportFile, isPythonTestPath, type Census } from './discover.ts';
+import { detectPythonRunner, detectRunner, discoverTestInfrastructure, discoverTests, inspectCensus, isPythonSupportFile, isPythonTestPath, pythonFilesConfigured, type Census } from './discover.ts';
 import { declaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile } from './parse.ts';
 import { candidateDirs } from './riskdraft.ts';
-import type { PythonFacts } from './python/facts.ts';
-import { createPythonSubjectResolver } from './python/subjects.ts';
+import type { PythonFacts, PythonOpaque } from './python/facts.ts';
+import { createPythonSubjectResolver, facadeScope, mergeScopes, opaqueScope, PYTHON_NOTES } from './python/subjects.ts';
+import { workflowPythonFiles } from './python/workflow.ts';
 import { loadRiskMap, tierFor } from './riskmap.ts';
-import { EVIDENCE_SCHEMA, LaneName, Tier, type EvidenceReport, type FileFlag, type Finding, type Inventory, type RiskMap, type TestFileRecord } from './schema.ts';
+import { EVIDENCE_SCHEMA, LaneName, Tier, type EvidenceReport, type FileFlag, type Finding, type Inventory, type NoteScope, type RiskMap, type TestFileRecord } from './schema.ts';
 
 /** Reads the facts of one Python source text by syntax only. */
 export type PythonReader = (source: string) => PythonFacts;
@@ -146,6 +147,8 @@ interface LoadedPythonFile {
   /** The facts of a file that parsed cleanly; null when it could not be read or parsed, so it is flagged `unparsed`. */
   facts: PythonFacts | null;
   subjects: string[];
+  /** The package `__init__.py` files among the subjects that the file imports through. */
+  facades: string[];
   tags: TestFileRecord['tags'];
 }
 
@@ -169,10 +172,13 @@ function pythonLaneOf(facts: PythonFacts): LaneName | undefined {
 /**
  * Read every Python test file with the facts reader. Like JavaScript, one file that cannot be read or has a syntax error must not stop
  * the scan: it keeps no facts and is flagged `unparsed` (its leading-comment tags are still read when the parser recovered them).
+ *
+ * `candidates` are files a workflow command names whose names are not test names. They are read the same way but join the result only
+ * when their facts show tests: one that is unreadable, has a syntax error or defines no test is not a test file and is dropped.
  */
-function loadPythonTests(root: string, rels: readonly string[], read: PythonReader): LoadedPythonFile[] {
+function loadPythonTests(root: string, rels: readonly string[], candidates: readonly string[], read: PythonReader): LoadedPythonFile[] {
   const resolveSubjectsOf = createPythonSubjectResolver(root);
-  return rels.map(rel => {
+  const load = (rel: string): LoadedPythonFile => {
     let text = '';
     let facts: PythonFacts | null = null;
     let tags: PythonFacts['tags'] = {};
@@ -186,35 +192,63 @@ function loadPythonTests(root: string, rels: readonly string[], read: PythonRead
     }
     const lane = facts ? pythonLaneOf(facts) : tags.lane;
     const declared = declaredSubjects(root, tags.subjects ?? []).filter(path => !isPythonTestPath(path) && !isPythonSupportFile(path));
+    const resolved = facts ? resolveSubjectsOf(rel, facts) : { subjects: [], facades: [] };
     return {
       rel,
       text,
       facts,
-      subjects: [...new Set([...(facts ? resolveSubjectsOf(rel, facts) : []), ...declared])].sort(),
+      subjects: [...new Set([...resolved.subjects, ...declared])].sort(),
+      facades: resolved.facades,
       tags: { ...(lane ? { lane } : {}), ...(tags.risk ? { risk: tags.risk } : {}), ...(tags.subjects ? { subjects: tags.subjects } : {}) },
     };
-  });
+  };
+  return [...rels.map(load), ...candidates.map(load).filter(file => file.facts !== null && file.facts.tests.length > 0)];
 }
 
 /**
- * The language census, or undefined for a repo with no non-JavaScript test-named files, so a JavaScript-only report keeps its
- * exact JSON. Python is inventoried (supported, with its runner and the number of Python test files read); every other language
- * is counted by file name only and is never read, hence detected-unsupported and the inventory incomplete.
+ * The Python incompleteness notes of a scan, in a fixed order (config, facade, opaque), each with its merged scope: the config note
+ * when a pytest config mentions `python_files` (scope all; only when Python tests were inventoried); the facade note for every
+ * package `__init__.py` a test imports through (the package directories); and the opaque-registration note for every file whose
+ * tests the reader cannot fully see (see `opaqueScope`). Empty when nothing makes the Python inventory incomplete.
  */
-function inventoryOf(census: Census, runner: EvidenceReport['runner'], jsFiles: number, python: { runner: string; files: number }): Inventory | undefined {
-  if (census.groups.length === 0) return undefined;
-  const languages: Inventory['languages'] = [
-    { language: 'JavaScript', runner, files: jsFiles, status: 'supported' },
-    ...census.groups.map(({ language, files }) =>
-      language === 'Python'
-        ? { language, runner: python.runner, files: python.files, status: 'supported' as const }
-        : { language, runner: 'unknown', files: files.length, status: 'detected-unsupported' as const }),
-  ];
-  const incomplete = languages.some(entry => entry.status === 'detected-unsupported');
+function pythonNotesOf(root: string, python: readonly LoadedPythonFile[]): NoteScope[] {
+  if (python.length === 0) return [];
+  const notes: NoteScope[] = [];
+  if (pythonFilesConfigured(root)) notes.push({ text: PYTHON_NOTES.config, scope: 'all' });
+  const facades = python.flatMap(file => file.facades.map(facadeScope));
+  if (facades.length > 0) notes.push({ text: PYTHON_NOTES.facade, scope: mergeScopes(facades) });
+  const opaque = python.filter(file => (file.facts?.opaque.length ?? 0) > 0).map(file => opaqueScope(root, file.rel, file.subjects));
+  if (opaque.length > 0) notes.push({ text: PYTHON_NOTES.opaque, scope: mergeScopes(opaque) });
+  return notes;
+}
+
+/** What a Python opaque-registration candidate may hide, as a finding message; the `+?` marker and the opaque rule are the JavaScript ones. */
+const OPAQUE_PYTHON_MESSAGE: Record<PythonOpaque['reason'], string> = {
+  'load_tests': 'This module defines load_tests, which unittest calls to change the tests it collects (pytest ignores it). Recognized declarations may undercount this file; inspect load_tests or compare a native inventory.',
+  'imported-test-class': 'A test class is imported into this module, and the runner collects it here, but its tests are declared elsewhere. Recognized declarations may undercount this file; inspect the class or compare a native inventory.',
+  'non-literal-import': 'A dynamic import names its module by an expression, so the module it loads and any tests or subjects behind it are unknown. Recognized declarations may undercount this file; inspect the import or compare a native inventory.',
+};
+
+/**
+ * The language census, or undefined for a repo with no non-JavaScript test-named files and no Python test file, so a JavaScript-only
+ * report keeps its exact JSON. Python is inventoried (supported, with its runner and the number of Python test files read, which
+ * includes workflow-named files that proved to be tests); every other language is counted by file name only and is never read,
+ * hence detected-unsupported and the inventory incomplete. A Python incompleteness note also makes the inventory incomplete.
+ */
+function inventoryOf(census: Census, runner: EvidenceReport['runner'], jsFiles: number, python: { runner: string; files: number }, pythonNotes: readonly NoteScope[]): Inventory | undefined {
+  const unsupported = census.groups.filter(group => group.language !== 'Python');
+  if (unsupported.length === 0 && python.files === 0) return undefined;
+  const others: Inventory['languages'] = [
+    ...unsupported.map(({ language, files }) => ({ language, runner: 'unknown', files: files.length, status: 'detected-unsupported' as const })),
+    ...(python.files > 0 ? [{ language: 'Python', runner: python.runner, files: python.files, status: 'supported' as const }] : []),
+  ].sort((a, b) => (a.language < b.language ? -1 : a.language > b.language ? 1 : 0));
+  const languages: Inventory['languages'] = [{ language: 'JavaScript', runner, files: jsFiles, status: 'supported' }, ...others];
+  const incomplete = unsupported.length > 0;
   return {
-    complete: !incomplete,
+    complete: !incomplete && pythonNotes.length === 0,
     languages,
-    notes: incomplete ? ['Those files are named like tests and were counted by file name only, never read, so their test counts and the coverage they give are unknown.'] : [],
+    notes: [...(incomplete ? ['Those files are named like tests and were counted by file name only, never read, so their test counts and the coverage they give are unknown.'] : []), ...pythonNotes.map(note => note.text)],
+    ...(pythonNotes.length > 0 ? { noteScopes: pythonNotes.map(note => ({ text: note.text, scope: note.scope })) } : {}),
   };
 }
 
@@ -227,7 +261,14 @@ const byLocation = (a: Finding, b: Finding): number => (a.line ?? 0) - (b.line ?
  */
 export function scan(rootInput: string, options: ScanOptions = {}): EvidenceReport {
   const root = resolve(rootInput);
-  return scanWithCensus(root, options, inspectCensus(root), options.python);
+  const census = inspectCensus(root);
+  return scanWithCensus(root, options, census, workflowCandidates(root, census), options.python);
+}
+
+/** Python files a workflow command names that are not test-named files, which the test-file rule must still read to decide. */
+function workflowCandidates(root: string, census: Census): string[] {
+  const named = new Set(census.groups.find(group => group.language === 'Python')?.files ?? []);
+  return workflowPythonFiles(root).filter(rel => !named.has(rel));
 }
 
 /**
@@ -237,22 +278,25 @@ export function scan(rootInput: string, options: ScanOptions = {}): EvidenceRepo
 export async function scanProject(rootInput: string, options: ScanOptions = {}): Promise<EvidenceReport> {
   const root = resolve(rootInput);
   const census = inspectCensus(root);
+  const candidates = workflowCandidates(root, census);
   let read = options.python;
-  if (!read && census.groups.some(group => group.language === 'Python')) {
+  if (!read && (candidates.length > 0 || census.groups.some(group => group.language === 'Python'))) {
     const [{ loadPythonParser }, { extractPythonFactsWith }] = await Promise.all([import('./python/parser.ts'), import('./python/facts.ts')]);
     const parse = await loadPythonParser();
     read = source => extractPythonFactsWith(parse, source);
   }
-  return scanWithCensus(root, options, census, read);
+  return scanWithCensus(root, options, census, candidates, read);
 }
 
-function scanWithCensus(root: string, options: ScanOptions, census: Census, readPython: PythonReader | undefined): EvidenceReport {
+function scanWithCensus(root: string, options: ScanOptions, census: Census, candidates: string[], readPython: PythonReader | undefined): EvidenceReport {
   const pythonRels = census.groups.find(group => group.language === 'Python')?.files ?? [];
-  if (pythonRels.length > 0 && !readPython) throw new Error(`${pythonRels.length} Python test file(s) need a parser: use scanProject, or pass options.python`);
+  if (pythonRels.length + candidates.length > 0 && !readPython) {
+    throw new Error(`${pythonRels.length} Python test file(s) and ${candidates.length} workflow-named Python file(s) need a parser: use scanProject, or pass options.python`);
+  }
   const map = loadRiskMap(root);
   const sets = commitFileSets(root, options.commitLimit ?? 500);
   const loaded = loadTests(root);
-  const python = readPython ? loadPythonTests(root, pythonRels, readPython) : [];
+  const python = readPython ? loadPythonTests(root, pythonRels, candidates, readPython) : [];
 
   const records = new Map<string, TestFileRecord>();
   const unmappedFindings: Finding[] = [];
@@ -316,6 +360,16 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, read
     attach(detectShims(file.rel, file.parsed).map(finding => ({ ...finding, note: shimNote })));
     attach(detectWorktreeHazards(file.rel, file.lines));
   }
+  for (const file of python) {
+    attach((file.facts?.opaque ?? []).map(opaque => ({
+      category: 'wiring' as const,
+      rule: 'wiring.opaque-test-registration',
+      file: file.rel,
+      line: opaque.line,
+      message: OPAQUE_PYTHON_MESSAGE[opaque.reason],
+      evidence: opaque.name ?? 'non-literal import',
+    })));
+  }
   for (const rel of discoverTestInfrastructure(root)) {
     try {
       attach(detectWorktreeHazards(rel, readFileSync(join(root, rel), 'utf8').split(/\r?\n/)));
@@ -328,7 +382,7 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, read
     pytest: python.some(file => file.facts?.signals.pytest),
     unittest: python.some(file => file.facts?.signals.unittest),
   });
-  const inventory = inventoryOf(census, runner, loaded.length, { runner: pythonRunner, files: python.length });
+  const inventory = inventoryOf(census, runner, loaded.length, { runner: pythonRunner, files: python.length }, pythonNotesOf(root, python));
   const redundancy = detectRedundancy(loaded);
   attach(redundancy.findings);
   attach(
@@ -338,6 +392,7 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, read
       candidateDirs(root),
       dir => classifiableFiles(root, dir),
       inventory?.languages.filter(entry => entry.status === 'detected-unsupported').map(entry => entry.language),
+      inventory?.noteScopes,
     ),
   );
   attach(unmappedFindings);

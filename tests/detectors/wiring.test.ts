@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { classifiableFiles, detectWiring, unmappedSubjectFinding } from '../../src/detectors/wiring.ts';
+import { areaInNoteScope, classifiableFiles, detectWiring, unmappedSubjectFinding } from '../../src/detectors/wiring.ts';
 import { candidateDirs } from '../../src/riskdraft.ts';
 import { defaultRiskMap, loadRiskMap, serializeRiskMap, tierFor } from '../../src/riskmap.ts';
-import type { RiskMap } from '../../src/schema.ts';
+import type { NoteScope, RiskMap } from '../../src/schema.ts';
 import { makeTree } from '../helpers/tree.ts';
 
 const rules = (findings: Array<{ rule: string }>): string[] => findings.map(finding => finding.rule).sort();
@@ -271,16 +271,19 @@ describe('a fixture project with folder/** roots', () => {
 
 describe('detectWiring with tests the scan cannot read', () => {
   const critical = (path: string): RiskMap => ({ ...defaultRiskMap(), areas: [{ path, tier: 'critical' }] });
-  const run = (path: string, files: string[], unsupported: string[], tests: Array<{ rel: string; subjects: string[] }> = []) =>
-    detectWiring(critical(path), tests.map(test => ({ ...test, tier: 'critical' as const, tags: {} })), [], () => files, unsupported)
+  const run = (path: string, files: string[], unsupported: string[], tests: Array<{ rel: string; subjects: string[] }> = [], notes: NoteScope[] = []) =>
+    detectWiring(critical(path), tests.map(test => ({ ...test, tier: 'critical' as const, tags: {} })), [], () => files, unsupported, notes)
       .filter(finding => finding.rule.startsWith('wiring.uncovered') || finding.rule.startsWith('wiring.inventory'));
 
   it.each([
     { name: 'an area of C++ files, with only PowerShell tests detected', area: 'Source/**', files: ['Source/a.cpp', 'Source/a.h'], unsupported: ['PowerShell'], rule: 'wiring.inventory-incomplete' },
-    { name: 'an area mixing TypeScript and Python files', area: 'src/**', files: ['src/a.ts', 'src/b.py'], unsupported: ['Python'], rule: 'wiring.inventory-incomplete' },
+    { name: 'an area mixing Python and C++ files, with Go detected', area: 'src/**', files: ['src/a.py', 'src/b.cpp'], unsupported: ['Go'], rule: 'wiring.inventory-incomplete' },
+    { name: 'an area mixing TypeScript, Python and C++ files, with Go detected', area: 'src/**', files: ['src/a.ts', 'src/b.py', 'src/c.cpp'], unsupported: ['Go'], rule: 'wiring.inventory-incomplete' },
+    { name: 'an area mixing TypeScript and Python files only, with Go detected (both are inventoried languages)', area: 'src/**', files: ['src/a.ts', 'src/b.py'], unsupported: ['Go'], rule: 'wiring.uncovered-critical' },
+    { name: 'an area of Python files only, with Go detected', area: 'tools/**', files: ['tools/a.py', 'tools/b.py'], unsupported: ['Go'], rule: 'wiring.uncovered-critical' },
+    { name: 'a single-file area written in Python, with Go detected', area: 'src/core.py', files: ['src/core.py', 'src/other.ts'], unsupported: ['Go'], rule: 'wiring.uncovered-critical' },
     { name: 'an area of JS and TS files only, although Go is detected', area: 'web/**', files: ['web/a.ts', 'web/b.mjs', 'web/c.tsx'], unsupported: ['Go'], rule: 'wiring.uncovered-critical' },
     { name: 'an area of C++ files when no unsupported language is detected', area: 'Source/**', files: ['Source/a.cpp'], unsupported: [], rule: 'wiring.uncovered-critical' },
-    { name: 'a single-file area written in Python', area: 'src/core.py', files: ['src/core.py', 'src/other.ts'], unsupported: ['Python'], rule: 'wiring.inventory-incomplete' },
   ])('reports $rule for $name', ({ area, files, unsupported, rule }) => {
     const findings = run(area, files, unsupported);
     expect(findings.map(finding => `${finding.rule}@${finding.file}`)).toEqual([`${rule}@${area}`]);
@@ -293,17 +296,67 @@ describe('detectWiring with tests the scan cannot read', () => {
   it('reports nothing for an area that a supported test covers', () => {
     expect(run('Source/**', ['Source/a.cpp'], ['PowerShell'], [{ rel: 'tests/a.test.ts', subjects: ['Source/a.cpp'] }])).toEqual([]);
   });
+
+  const FACADE: NoteScope = { text: 'imports through a package __init__ may reach other modules', scope: ['src/pkg'] };
+  const GLOBAL: NoteScope = { text: 'custom python_files configured; discovery used defaults', scope: 'all' };
+  it.each([
+    { name: 'a Python area inside a note scope', area: 'src/pkg/io.py', files: ['src/pkg/io.py'], unsupported: [], notes: [FACADE], rule: 'wiring.inventory-incomplete', names: ['Python', FACADE.text] },
+    { name: 'a Python area outside every note scope', area: 'tools/untested.py', files: ['tools/untested.py'], unsupported: [], notes: [FACADE], rule: 'wiring.uncovered-critical', names: [] },
+    { name: 'a Python area outside every note scope, with Go detected', area: 'tools/untested.py', files: ['tools/untested.py'], unsupported: ['Go'], notes: [FACADE], rule: 'wiring.uncovered-critical', names: [] },
+    { name: 'a Python area under a global note', area: 'tools/untested.py', files: ['tools/untested.py'], unsupported: [], notes: [GLOBAL], rule: 'wiring.inventory-incomplete', names: ['Python', GLOBAL.text] },
+    { name: 'a Python area in scope of one of two notes names only that note', area: 'src/pkg/**', files: ['src/pkg/a.py'], unsupported: [], notes: [FACADE, { text: 'other note', scope: ['lib'] }], rule: 'wiring.inventory-incomplete', names: ['Python', FACADE.text] },
+    { name: 'a Python area in scope with Go detected (the Python rule, not the language rule)', area: 'src/pkg/**', files: ['src/pkg/a.py'], unsupported: ['Go'], notes: [FACADE], rule: 'wiring.inventory-incomplete', names: ['Python', FACADE.text] },
+    { name: 'an area with no Python files, although a note covers its directory', area: 'src/pkg/**', files: ['src/pkg/a.ts'], unsupported: [], notes: [FACADE], rule: 'wiring.uncovered-critical', names: [] },
+  ])('reports $rule for $name', ({ area, files, unsupported, notes, rule, names }) => {
+    const findings = run(area, files, unsupported, [], notes);
+    expect(findings.map(finding => `${finding.rule}@${finding.file}`)).toEqual([`${rule}@${area}`]);
+    for (const name of names) expect(findings[0]!.message).toContain(name);
+    if (rule === 'wiring.uncovered-critical') expect(findings[0]!.message).not.toContain('Python');
+    if (names.length > 0) expect(findings[0]!.message).not.toContain('other note');
+  });
+
+  it('reports nothing for a Python area that a test covers, whatever the notes say', () => {
+    expect(run('src/pkg/io.py', ['src/pkg/io.py'], [], [{ rel: 'tests/test_io.py', subjects: ['src/pkg/io.py'] }], [GLOBAL])).toEqual([]);
+  });
+});
+
+describe('areaInNoteScope', () => {
+  // An area is in a directory note's scope when its glob base (the literal path before the first wildcard) is that directory or
+  // below it, or when the area can reach below its base (it has a `**`) and the directory lies under that base.
+  it.each([
+    { area: 'src/pkg/io.py', scope: ['src/pkg'], expected: true, why: 'a file under the directory' },
+    { area: 'src/pkg/**', scope: ['src/pkg'], expected: true, why: 'the base is the directory' },
+    { area: 'src/pkg/sub/*.py', scope: ['src/pkg'], expected: true, why: 'the base is under the directory' },
+    { area: 'src/**', scope: ['src/pkg'], expected: true, why: 'a recursive area above the directory' },
+    { area: 'src/**/*.py', scope: ['src/pkg'], expected: true, why: 'a recursive glob above the directory' },
+    { area: '**/*.py', scope: ['src/pkg'], expected: true, why: 'a recursive glob from the root' },
+    { area: 'src/*.py', scope: ['src/pkg'], expected: false, why: 'a one-level glob cannot reach the directory below it' },
+    { area: '*.py', scope: ['src/pkg'], expected: false, why: 'a one-level root glob cannot reach it either' },
+    { area: 'src/pkg/core.py', scope: ['src/other'], expected: false, why: 'a sibling directory' },
+    { area: 'src/package/io.py', scope: ['src/pkg'], expected: false, why: 'a shared name prefix is not containment' },
+    { area: 'tools/untested.py', scope: ['src/pkg'], expected: false, why: 'an unrelated path' },
+    { area: 'main.py', scope: ['src'], expected: false, why: 'a root file outside the directory' },
+    { area: 'lib/**', scope: ['src/pkg', 'lib/deep'], expected: true, why: 'any directory of the list may match' },
+    { area: 'tools/untested.py', scope: 'all' as const, expected: true, why: 'a global note covers every area' },
+    { area: 'tools/untested.py', scope: [], expected: false, why: 'an empty list covers nothing' },
+  ])('$area against $scope is $expected: $why', ({ area, scope, expected }) => {
+    expect(areaInNoteScope(area, scope)).toBe(expected);
+  });
 });
 
 describe('critical area globs through the real classifiableFiles, with Go detected', () => {
-  const tree = { 'main.py': '', 'src/m.py': '', 'src/a.ts': '', 'src/b.py': '', 'lib/deep/c.py': '', 'lib/deep/d.ts': '' };
+  const tree = { 'main.py': '', 'src/m.py': '', 'src/a.ts': '', 'src/b.py': '', 'lib/deep/c.py': '', 'lib/deep/d.ts': '', 'native/k.cpp': '', 'native/k.py': '' };
   const cases: Array<{ area: string; tests?: string[]; expected: string | null }> = [
-    { area: 'src/*.py', expected: 'wiring.inventory-incomplete' },
+    // Python is an inventoried language, so Go alone does not soften an area of Python files; a file of another language does.
+    { area: 'src/*.py', expected: 'wiring.uncovered-critical' },
     { area: 'src/*.ts', expected: 'wiring.uncovered-critical' },
-    { area: 'src/m.py', expected: 'wiring.inventory-incomplete' },
-    { area: 'main.py', expected: 'wiring.inventory-incomplete' },
-    { area: '*.py', expected: 'wiring.inventory-incomplete' },
-    { area: '**/*.py', expected: 'wiring.inventory-incomplete' },
+    { area: 'src/m.py', expected: 'wiring.uncovered-critical' },
+    { area: 'main.py', expected: 'wiring.uncovered-critical' },
+    { area: '*.py', expected: 'wiring.uncovered-critical' },
+    { area: '**/*.py', expected: 'wiring.uncovered-critical' },
+    { area: 'native/*', expected: 'wiring.inventory-incomplete' },
+    { area: 'native/*.py', expected: 'wiring.uncovered-critical' },
+    { area: 'native/*.cpp', expected: 'wiring.inventory-incomplete' },
     { area: 'lib/**/*.ts', expected: 'wiring.uncovered-critical' },
     { area: '**/*.ts', tests: ['src/a.test.ts'], expected: null },
   ];
@@ -318,7 +371,7 @@ describe('critical area globs through the real classifiableFiles, with Go detect
 
   it('lists repo-relative forward-slash paths from the root and from a directory, whatever the platform separator', () => {
     const root = makeTree(tree);
-    expect(classifiableFiles(root, '')).toEqual(['lib/deep/c.py', 'lib/deep/d.ts', 'main.py', 'src/a.ts', 'src/b.py', 'src/m.py']);
+    expect(classifiableFiles(root, '')).toEqual(['lib/deep/c.py', 'lib/deep/d.ts', 'main.py', 'native/k.cpp', 'native/k.py', 'src/a.ts', 'src/b.py', 'src/m.py']);
     expect(classifiableFiles(root, 'lib')).toEqual(['lib/deep/c.py', 'lib/deep/d.ts']);
   });
 });

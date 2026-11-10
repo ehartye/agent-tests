@@ -10,7 +10,6 @@
     ]
   },
   "coverageFindings": [
-    "wiring.inventory-incomplete@go/**",
-    "wiring.inventory-incomplete@py/pkg/**"
+    "wiring.inventory-incomplete@go/**"
   ]
 }

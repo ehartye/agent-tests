@@ -86,6 +86,9 @@ export const Cluster = z.object({
 });
 export type Cluster = z.infer<typeof Cluster>;
 
+export const NoteScope = z.object({ text: z.string(), scope: z.union([z.literal('all'), z.array(z.string())]) });
+export type NoteScope = z.infer<typeof NoteScope>;
+
 /**
  * Which languages' tests the scan could see. Present only when a language other than JavaScript is detected, so a JavaScript-only
  * report is unchanged; its absence does not mean the inventory is complete (the census sees conventional file names only).
@@ -99,7 +102,14 @@ export const Inventory = z.object({
     files: z.number().int().nonnegative(),
     status: z.enum(['supported', 'detected-unsupported']),
   })),
+  /** The plain text of every note: why the inventory is incomplete. */
   notes: z.array(z.string()),
+  /**
+   * The scope of each Python note in `notes`, present only when one exists: `"all"`, or the directories (relative to the project
+   * root, forward slashes, no trailing slash) whose areas the note can affect. A critical area inside a note's scope with no covering
+   * test reads as coverage unknown; outside every scope it is uncovered.
+   */
+  noteScopes: z.array(NoteScope).optional(),
 });
 export type Inventory = z.infer<typeof Inventory>;
 

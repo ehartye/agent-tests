@@ -36,6 +36,8 @@ describe('the inventory-census fixture, through the CLI', () => {
       coverageFindings: coverage.map(finding => `${finding.rule}@${finding.file}`),
     }).toEqual(expected);
     expect(notes.length).toBeGreaterThan(0);
+    // The Python test sits under py/, so py/ is a package root and py/pkg/** is covered; only Go stays coverage-unknown.
+    expect(evidence.files.find(file => file.file === 'py/tests/test_core.py')!.subjects).toEqual(['py/pkg/core.py']);
     for (const finding of coverage) {
       expect(finding.message).toMatch(/Go.*coverage is unknown|coverage is unknown.*Go/);
       expect(finding.message).not.toContain('Python');
