@@ -23,7 +23,8 @@ afterAll(() => {
 
 describe('held Vitest publication controls', () => {
   it('opens a gated callback after sampling the held owner', async () => {
-    const { beforeGate, beforeRelease, final } = await exerciseHeld({ control: 'gate' });
+    const { beforeGate, beforeRelease, final, failure } = await exerciseHeld({ control: 'gate' });
+    if (failure) throw failure;
     expect(beforeGate).toMatchObject({ held: true, released: false, endedOwners: [], caseError: false });
     expect(beforeGate?.reporter.events.map(e => e.event)).toEqual(['ready', 'callback']);
     expect(beforeRelease).toMatchObject({ held: true, released: false, endedOwners: [], caseError: true, echoActual: true, echoExpected: true });
@@ -79,7 +80,7 @@ describe('held Vitest publication controls', () => {
 
   it('produces no incident for a passing qualification', async () => {
     const root = destination();
-    await qualifyHeld(root);
+    await qualifyHeld(root, 'pass');
     expect(existsSync(join(root, 'incident.json'))).toBe(false);
   }, 90000);
 
