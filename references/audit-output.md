@@ -66,4 +66,6 @@ vitest run --reporter=json --outputFile=run.json
 jest --json --outputFile=run.json
 ```
 
+For example, a file running from 1,000 to 1,900 ms occupies 900 ms of a 1,000 ms matched window (90.0%) if the other matched file runs from 1,800 to 2,000 ms. Inspect that file’s cases and setup to see where its elapsed time went. Measure the runner process from launch through exit to establish end-to-end time. Overlapping files can each occupy the full window.
+
 Each measured interval spans one suite's start and end timestamps. The table sorts matched files by elapsed milliseconds and then path. Unmeasured files follow in static order. Overlap prevents summing durations into wall time or cost. Paths can match across revisions with different contents. The Markdown identifies the original JSON by SHA-256 and counts excluded rows and ambiguous files. An unreadable or unsupported report returns `E_TIMINGS` before publication.

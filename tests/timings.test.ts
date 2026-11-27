@@ -34,6 +34,37 @@ it('sorts measured suites across the whole inventory before capping, preserving 
   expect(untimed).toContain('Wait time and CI minutes need a timed run');
 });
 
+it.each([
+  { label: 'overlapping', a: [1000, 1900], b: [1800, 2000], file: 'a', elapsed: '900', window: '1,000', share: '90.0' },
+  { label: 'fractional midpoint', a: [1000, 1583], b: [2800, 3000], file: 'a', elapsed: '583', window: '2,000', share: '29.2' },
+  { label: 'disjoint', a: [1000, 1200], b: [1400, 1500], file: 'a', elapsed: '200', window: '500', share: '40.0' },
+  { label: 'nested', a: [1200, 1300], b: [1000, 1500], file: 'b', elapsed: '500', window: '500', share: '100.0' },
+  { label: 'tied', a: [1000, 1900], b: [1000, 1900], file: 'a', elapsed: '900', window: '900', share: '100.0' },
+])('reports the whole matched window for $label suites before capping', ({ label, a, b, file, elapsed, window, share }) => {
+  const rows = [suite('b.test.ts', b[0]!, b[1]!), suite('a.test.ts', a[0]!, a[1]!, 'failed'),
+    suite('unmatched.test.ts', 1, 10000), suite('dup.test.ts', 1, 12000), suite('dup.test.ts', 2, 3)];
+  const root = makeTree({ 'a.test.ts': clean, 'b.test.ts': clean, 'dup.test.ts': clean, 'run.json': JSON.stringify({ testResults: rows }) });
+  const report = cli(root, '--timings', 'run.json', '--max-files', '1');
+  expect(report.status, report.stderr).toBe(0);
+  const line = report.stdout.split('\n').find(line => line.includes('observed window of matched files'));
+  expect(line).toContain(file + '.test.ts');
+  expect(line).toContain(elapsed + ' ms of the ' + window + ' ms');
+  expect(line).toContain(share + '%');
+  expect(line).toContain('2 matched files');
+  if (label === 'tied') expect(line).toMatch(/tie/i);
+});
+
+it.each([
+  { rows: [], why: 'fewer than two matched files' },
+  { rows: [suite('a.test.ts', 100, 200)], why: 'fewer than two matched files' },
+  { rows: [suite('a.test.ts', 100, 100), suite('b.test.ts', 100, 100)], why: 'zero-width matched window' },
+])('explains an unavailable percentage', ({ rows, why }) => {
+  const root = makeTree({ 'a.test.ts': clean, 'b.test.ts': clean, 'run.json': JSON.stringify({ testResults: rows }) });
+  const line = cli(root, '--timings', 'run.json').stdout.split('\n').find(line => line.includes('Percentage unavailable'));
+  expect(line).toContain(why);
+  expect(line).not.toContain('%');
+});
+
 it.each(['vitest', 'jest'])('reads the portable %s JSON reporter capture', runner => {
   const root = makeTree({ 'sample.test.js': clean });
   const capture = JSON.parse(readFileSync(join('tests/fixtures/timings', runner + '.json'), 'utf8'));
@@ -49,18 +80,24 @@ it('guides a slow-suite audit to a saved run and documents collection with eithe
   const skill = readFileSync('skills/test-audit/SKILL.md', 'utf8');
   expect(skill).toMatch(/existing.*(?:saved|JSON).*report/i);
   expect(skill).toContain('--timings');
+  expect(skill).toMatch(/matched window.*end-to-end/i);
+  expect(readFileSync('references/audit-output.md', 'utf8')).toMatch(/900 ms.*1,000 ms.*90\.0%/);
   expect(skill).toMatch(/static order.*unparsed/i);
   expect(readFileSync('references/audit-output.md', 'utf8')).toMatch(/vitest run --reporter=json[\s\S]+jest --json/);
 });
 
 it('saves the measured view with timing identity while preserving existing evidence', () => {
-  const input = JSON.stringify({testResults: [suite('sample.test.js', 50, 100)]});
+  const input = JSON.stringify({testResults: [suite('sample.test.js', 1000, 1900), suite('other.test.js', 1800, 2000)]});
   const root = makeTree({ 'package.json': JSON.stringify({ scripts: { test: 'vitest', pretest: 'vitest run' } }), 'other.test.js': clean, 'sample.test.js': clean, 'run.json': input, 'unsupported.json': '{}', 'broken.json': '{' });
   const args = ['--timings', 'run.json', '--max-files', '1'];
   const stdout = cli(root, ...args).stdout;
   const saved = cli(root, ...args, '--out', 'audit.md');
   expect(saved.status, saved.stderr).toBe(0);
   const artifact = readFileSync(join(root, 'audit.md'), 'utf8');
+  const observation = stdout.split('\n').find(line => line.includes('90.0%'));
+  expect(observation).toContain('2 matched files');
+  expect(artifact).toContain(observation);
+  expect(artifact).toContain(stdout.split('\n').find(line => line.includes('unmatched rows'))!);
   expect(artifact).toContain(stdout.trimEnd().split('## Test files')[1]);
   expect(artifact).toMatch(/## Project findings \([2-9]\d*\)/);
   expect(artifact).toMatch(/omitted[^\n]*runner JSON[^\n]*scan/i);

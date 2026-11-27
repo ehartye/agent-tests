@@ -5,11 +5,12 @@ import { CliError } from './errors.ts';
 import { relPosix } from './paths.ts';
 
 type Outcome = 'passed' | 'failed' | 'unknown';
-type Interval = { elapsed: number; outcome: Outcome };
+type Interval = { start: number; end: number; elapsed: number; outcome: Outcome };
 export interface Timings {
   sha256: string;
   outcome: Outcome;
   files: Map<string, Interval>;
+  windowMs: number | null;
   ambiguous: number;
   invalid: number;
   skipped: number;
@@ -51,7 +52,7 @@ export function importTimings(root: string, input: string | TimingInput, invento
   const ambiguous = new Set<string>();
   const result: Timings = {
     sha256, outcome,
-    files: new Map(), ambiguous: 0, invalid: 0, skipped: 0, unmatched: 0,
+    files: new Map(), windowMs: null, ambiguous: 0, invalid: 0, skipped: 0, unmatched: 0,
   };
   for (const row of rows) {
     if (record(row) && (skippedStatus(row.status) || (row.status !== 'failed' && Array.isArray(row.assertionResults) && row.assertionResults.length &&
@@ -83,10 +84,16 @@ export function importTimings(root: string, input: string | TimingInput, invento
         result.files.delete(file);
         ambiguous.add(file);
       } else {
-        result.files.set(file, { elapsed: row.endTime - row.startTime, outcome: row.status === 'passed' || row.status === 'failed' ? row.status : 'unknown' });
+        result.files.set(file, { start: row.startTime, end: row.endTime, elapsed: row.endTime - row.startTime, outcome: row.status === 'passed' || row.status === 'failed' ? row.status : 'unknown' });
       }
     }
   }
+  let earliest = Infinity, latest = -Infinity;
+  for (const { start, end } of result.files.values()) {
+    earliest = Math.min(earliest, start);
+    latest = Math.max(latest, end);
+  }
+  if (result.files.size) result.windowMs = latest - earliest;
   result.ambiguous = ambiguous.size;
   return result;
 }

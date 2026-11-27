@@ -119,6 +119,27 @@ function rankFiles(files: TestFileRecord[]): TestFileRecord[] {
     .map(entry => entry.file);
 }
 
+const milliseconds = new Intl.NumberFormat('en-US', { maximumSignificantDigits: 21 });
+
+const percentage = new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+function timingObservation(timings: Timings, firstFile?: string): string {
+  const { files, windowMs } = timings;
+  const longest = firstFile === undefined ? undefined : files.get(firstFile);
+  if (!longest || windowMs === null) return '- Percentage unavailable with fewer than two matched files (0 matched files).';
+  const count = files.size;
+  let ties = 0;
+  for (const interval of files.values()) if (interval.elapsed === longest.elapsed) ties++;
+  const observation = `- ${span(firstFile!)} occupied ${milliseconds.format(longest.elapsed)} ms of the ${milliseconds.format(windowMs)} ms observed window of matched files`;
+  const population = count === 1 ? '1 matched file' : count + ' matched files';
+  const tie = ties > 1 ? ` A tie for longest duration includes ${ties} files.` : '';
+  if (count < 2 || windowMs === 0) {
+    const reason = count < 2 ? 'fewer than two matched files' : 'a zero-width matched window';
+    return `${observation} (${population}). Percentage unavailable with ${reason}.${tie}`;
+  }
+  return `${observation} (${percentage.format(longest.elapsed / windowMs)}, ${population}).${tie}`;
+}
+
 function messageOf(finding: Finding): string {
   const text = flat(finding.message);
   return finding.confidence === 'possible' && !/^possible\b/i.test(text) ? `Possible: ${text}` : text;
@@ -144,6 +165,12 @@ function fileLine(finding: Finding, showMessage: boolean): string {
  */
 export function renderMarkdown(report: EvidenceReport, options: ReportOptions = {}): string {
   const timings = options.timings;
+  const ranked = rankFiles(report.files);
+  if (timings) ranked.sort((a, b) => {
+    const left = timings.files.get(a.file), right = timings.files.get(b.file);
+    if (left && right) return right.elapsed - left.elapsed || compare(a.file, b.file);
+    return Number(Boolean(right)) - Number(Boolean(left));
+  });
   const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
   const maxPerRule = options.maxPerRule ?? DEFAULT_MAX_PER_RULE;
   const perFile = report.files.flatMap(file => file.findings);
@@ -173,6 +200,7 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
   if (timings) out.push(
     `- Timing input SHA-256: ${timings.sha256} (run outcome: ${timings.outcome})`,
     `- Matched files: ${timings.files.size}, unmatched rows: ${timings.unmatched}, invalid rows: ${timings.invalid}, skipped rows: ${timings.skipped}, ambiguous files: ${timings.ambiguous}`,
+    timingObservation(timings, ranked[0]?.file),
   );
   if (report.inventory) {
     const { languages, complete, notes } = report.inventory;
@@ -202,7 +230,7 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
     '**How to read this.** Findings are evidence, not verdicts: judge each one against the risk map and the test itself.',
     timings ? 'Measured files rank first by descending elapsed milliseconds, with path breaking ties. Unmeasured files retain static evidence order.' : 'Files are ranked with unparsed files first, then opaque registration candidates, then by confirmed distinct finding rules, the largest title-word overlap with a same-subject file, total confirmed findings and agent tokens.',
     'Agent is the estimated tokens in the file. Churn/edits counts edits that touched the test without the code it covers, over all edits that modified it; n/a means no git history or no resolvable subject.',
-    timings ? 'The static scan imports suite intervals by path. Matching paths across revisions do not establish identical contents. Overlapping spans cannot be added to derive wall time, CI minutes, price or savings.' : 'Wait time and CI minutes need a timed run and are not in this report.',
+    timings ? 'The static scan imports suite intervals by path. Matching paths across revisions do not establish identical contents. Measure the runner from launch through exit for end-to-end time. Overlapping spans cannot be added to derive wall time, CI minutes, price or savings.' : 'Wait time and CI minutes need a timed run and are not in this report.',
     'Flags: tautological, snapshot-only, mock-only, no-direct-assertions (possibly assertions in a helper), unparsed.',
     'Recognized declarations are static calls, not native expanded case counts. A count marked +? has opaque helper registration candidates; inspect their provider before treating it as complete.',
     '',
@@ -218,12 +246,6 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
   if (report.projectFindings.length === 0) out.push('None.');
   else for (const finding of [...report.projectFindings].sort(byProjectOrder)) out.push(projectLine(finding));
 
-  const ranked = rankFiles(report.files);
-  if (timings) ranked.sort((a, b) => {
-    const left = timings.files.get(a.file), right = timings.files.get(b.file);
-    if (left && right) return right.elapsed - left.elapsed || compare(a.file, b.file);
-    return Number(Boolean(right)) - Number(Boolean(left));
-  });
   const shown = ranked.slice(0, maxFiles);
   out.push('', `## Test files (top ${shown.length} of ${ranked.length}, ${timings ? 'measured files first' : 'most evidence first'})`, '');
   if (ranked.length === 0) out.push('None.');
