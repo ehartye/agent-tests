@@ -32,6 +32,13 @@ const CONFIG_NOTE = 'custom python_files configured; discovery used defaults';
 const coverageOf = (evidence: EvidenceReport): string[] =>
   evidence.projectFindings.filter(finding => ['wiring.inventory-incomplete', 'wiring.uncovered-critical'].includes(finding.rule)).map(finding => `${finding.rule}@${finding.file}`).sort();
 
+it('reports explicitly excluded Python tests and support without assigning coverage', async () => {
+  const root = makeTree({ 'test_sample.py': '# @subject test_other.py\n# @subject conftest.py\ndef test_one(): pass\n', 'test_other.py': '', 'conftest.py': '' });
+  const file = (await scanProject(root)).files.find(f => f.file === 'test_sample.py')!;
+  expect(file.subjects).toEqual([]);
+  expect(file.findings.filter(f => f.rule === 'wiring.invalid-subject')).toMatchObject([{ evidence: expect.stringMatching(/test_other\.py.*test\/support.*conftest\.py.*test\/support/) }]);
+});
+
 describe('the python-mixed fixture, through the CLI', () => {
   const scanned = cli('scan', '--root', FIXTURE);
   const evidence = JSON.parse(scanned.stdout) as EvidenceReport;
