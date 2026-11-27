@@ -127,6 +127,12 @@ export function createWorkerCpuProfile({ outputDirectory, ownerId }) {
   };
 }
 
+function sampleValue(value) {
+  if (value === null || ['number', 'boolean', 'undefined'].includes(typeof value)) return String(value);
+  if (typeof value === 'string') return JSON.stringify(value.length <= 32 ? value : value.slice(0, 32) + '...');
+  return Array.isArray(value) ? '<array>' : '<' + typeof value + '>';
+}
+
 /** Time-weighted generated-frame locations; neither source mapping nor wall savings. */
 export function summarizeCpuProfile(profile) {
   const invalid = message => { throw new Error(`Invalid CPU profile: ${message}`); };
@@ -163,9 +169,11 @@ export function summarizeCpuProfile(profile) {
   if (visited.size !== nodes.size) invalid('disconnected or cyclic graph');
   let totalSampledUs = 0;
   for (let index = 0; index < profile.samples.length; index++) {
-    const sampled = nodes.get(profile.samples[index]);
+    const id = profile.samples[index];
+    const sampled = nodes.get(id);
+    if (!sampled) invalid(`sample[${index}] unknown node ID ${sampleValue(id)}`);
     const delta = profile.timeDeltas[index];
-    if (!sampled || !finite(delta)) invalid('invalid sample reference or duration');
+    if (!finite(delta)) invalid(`sample[${index}] invalid delta ${sampleValue(delta)}`);
     totalSampledUs += delta;
     sampled.selfUs += delta;
     for (let id = sampled.id; id !== undefined; id = parents.get(id)) nodes.get(id).inclusiveUs += delta;
