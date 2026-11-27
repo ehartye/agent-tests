@@ -20,15 +20,7 @@ function sensor(path: string) {
 }
 
 function worker(control?: Control) {
-  // Give controlled failures their own result batch. The genuine qualification keeps its synchronous assertion.
-  const barrier = control && control !== 'early-exit' ? `
-    writeFileSync('.local/assertion-ready', 'yes');
-    const deadline = Date.now() + 30000;
-    while (!existsSync('.local/run-assertion')) {
-      if (Date.now() > deadline) throw Error('controlled assertion handshake timed out');
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
-  ` : '';
+  const controlledBatch = control && control !== 'early-exit';
   return `import { test, expect } from 'vitest';
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 let seq = 0;
@@ -36,15 +28,21 @@ function trace(event) {
   try { appendFileSync('.local/worker.jsonl', JSON.stringify({ event, seq: ++seq, pid: process.pid, at: new Date().toISOString(), attempt: process.env.AGENT_TESTS_PROGRESS_ATTEMPT, name: 'early assertion' }) + '\\n'); } catch {}
 }
 trace('ready');
-test('early assertion', ${barrier ? 'async ' : ''}() => {
-  ${barrier}
+test('early assertion', () => {
   try { expect('prompt actual').toBe('prompt expected'); }
   catch (error) { trace('assertion-threw'); throw error; }
   trace('assertion-returned');
 });
-test('held later case', async () => {
+test${controlledBatch ? '.concurrent' : ''}('held later case', async () => {
   ${held.replace('15000', '45000').replace("writeFileSync('.local/b-held','yes');", "writeFileSync('.local/b-held','yes');trace('held');")}
-});`;
+});
+${controlledBatch ? `test.concurrent('flush pending native updates', async () => {
+  const deadline = Date.now() + 30000;
+  while (!existsSync('.local/flush-result')) {
+    if (Date.now() >= deadline) throw Error('controlled flush handshake timed out');
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+});` : ''}`;
 }
 
 // Faults live in private fixture configs. The real reporter and writer run in every control.
@@ -123,14 +121,13 @@ export async function exerciseHeld(options: { control?: Control } = {}) {
   let beforeGate, beforeRelease;
   let failure: unknown;
   try {
-    if (control && control !== 'early-exit') {
-      await wait('assertion-ready', () => existsSync(join(f.root, '.local/assertion-ready')));
-      // The pinned runner batches updates for 100 ms. Separate the controlled assertion
-      // from test preparation before allowing the worker to complete it.
-      await new Promise(resolve => setTimeout(resolve, 250));
-      writeFileSync(join(f.root, '.local/run-assertion'), 'yes');
-    }
     await wait('held-marker', () => existsSync(marker));
+    if (control && control !== 'early-exit') {
+      // A second native completion flushes any batched case update while the held case
+      // remains open. Allow a full 100 ms transport interval before releasing the peer.
+      await new Promise(resolve => setTimeout(resolve, 250));
+      writeFileSync(join(f.root, '.local/flush-result'), 'yes');
+    }
     if (control === 'gate' || control === 'late') {
       await wait('callback-gate', () => sensor(reporterPath).events.some(e => e.event === 'callback'));
       beforeGate = snapshot();
