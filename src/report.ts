@@ -119,6 +119,25 @@ function rankFiles(files: TestFileRecord[]): TestFileRecord[] {
     .map(entry => entry.file);
 }
 
+const milliseconds = new Intl.NumberFormat('en-US', { maximumSignificantDigits: 21 });
+
+function timingObservation(timings: Timings, firstFile?: string): string {
+  const { files, windowMs } = timings;
+  const longest = firstFile === undefined ? undefined : files.get(firstFile);
+  if (!longest || windowMs === null) return '- Percentage unavailable with fewer than two matched files (0 matched files).';
+  const count = files.size;
+  let ties = 0;
+  for (const interval of files.values()) if (interval.elapsed === longest.elapsed) ties++;
+  const observation = `- ${span(firstFile!)} occupied ${milliseconds.format(longest.elapsed)} ms of the ${milliseconds.format(windowMs)} ms observed window of matched files`;
+  const population = count === 1 ? '1 matched file' : count + ' matched files';
+  const tie = ties > 1 ? ` A tie for longest duration includes ${ties} files.` : '';
+  if (count < 2 || windowMs === 0) {
+    const reason = count < 2 ? 'fewer than two matched files' : 'a zero-width matched window';
+    return `${observation} (${population}). Percentage unavailable with ${reason}.${tie}`;
+  }
+  return `${observation} (${(longest.elapsed / windowMs * 100).toFixed(1)}%, ${population}).${tie}`;
+}
+
 function messageOf(finding: Finding): string {
   const text = flat(finding.message);
   return finding.confidence === 'possible' && !/^possible\b/i.test(text) ? `Possible: ${text}` : text;
@@ -144,6 +163,12 @@ function fileLine(finding: Finding, showMessage: boolean): string {
  */
 export function renderMarkdown(report: EvidenceReport, options: ReportOptions = {}): string {
   const timings = options.timings;
+  const ranked = rankFiles(report.files);
+  if (timings) ranked.sort((a, b) => {
+    const left = timings.files.get(a.file), right = timings.files.get(b.file);
+    if (left && right) return right.elapsed - left.elapsed || compare(a.file, b.file);
+    return Number(Boolean(right)) - Number(Boolean(left));
+  });
   const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
   const maxPerRule = options.maxPerRule ?? DEFAULT_MAX_PER_RULE;
   const perFile = report.files.flatMap(file => file.findings);
@@ -173,6 +198,7 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
   if (timings) out.push(
     `- Timing input SHA-256: ${timings.sha256} (run outcome: ${timings.outcome})`,
     `- Matched files: ${timings.files.size}, unmatched rows: ${timings.unmatched}, invalid rows: ${timings.invalid}, skipped rows: ${timings.skipped}, ambiguous files: ${timings.ambiguous}`,
+    timingObservation(timings, ranked[0]?.file),
   );
   if (report.inventory) {
     const { languages, complete, notes } = report.inventory;
@@ -218,12 +244,6 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
   if (report.projectFindings.length === 0) out.push('None.');
   else for (const finding of [...report.projectFindings].sort(byProjectOrder)) out.push(projectLine(finding));
 
-  const ranked = rankFiles(report.files);
-  if (timings) ranked.sort((a, b) => {
-    const left = timings.files.get(a.file), right = timings.files.get(b.file);
-    if (left && right) return right.elapsed - left.elapsed || compare(a.file, b.file);
-    return Number(Boolean(right)) - Number(Boolean(left));
-  });
   const shown = ranked.slice(0, maxFiles);
   out.push('', `## Test files (top ${shown.length} of ${ranked.length}, ${timings ? 'measured files first' : 'most evidence first'})`, '');
   if (ranked.length === 0) out.push('None.');
