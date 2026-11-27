@@ -36,6 +36,7 @@ it('sorts measured suites across the whole inventory before capping, preserving 
 
 it.each([
   { label: 'overlapping', a: [1000, 1900], b: [1800, 2000], file: 'a', elapsed: '900', window: '1,000', share: '90.0' },
+  { label: 'fractional midpoint', a: [1000, 1583], b: [2800, 3000], file: 'a', elapsed: '583', window: '2,000', share: '29.2' },
   { label: 'disjoint', a: [1000, 1200], b: [1400, 1500], file: 'a', elapsed: '200', window: '500', share: '40.0' },
   { label: 'nested', a: [1200, 1300], b: [1000, 1500], file: 'b', elapsed: '500', window: '500', share: '100.0' },
   { label: 'tied', a: [1000, 1900], b: [1000, 1900], file: 'a', elapsed: '900', window: '900', share: '100.0' },

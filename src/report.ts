@@ -121,6 +121,8 @@ function rankFiles(files: TestFileRecord[]): TestFileRecord[] {
 
 const milliseconds = new Intl.NumberFormat('en-US', { maximumSignificantDigits: 21 });
 
+const percentage = new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
 function timingObservation(timings: Timings, firstFile?: string): string {
   const { files, windowMs } = timings;
   const longest = firstFile === undefined ? undefined : files.get(firstFile);
@@ -135,7 +137,7 @@ function timingObservation(timings: Timings, firstFile?: string): string {
     const reason = count < 2 ? 'fewer than two matched files' : 'a zero-width matched window';
     return `${observation} (${population}). Percentage unavailable with ${reason}.${tie}`;
   }
-  return `${observation} (${(longest.elapsed / windowMs * 100).toFixed(1)}%, ${population}).${tie}`;
+  return `${observation} (${percentage.format(longest.elapsed / windowMs)}, ${population}).${tie}`;
 }
 
 function messageOf(finding: Finding): string {
