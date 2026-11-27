@@ -4,50 +4,16 @@
  * @subject scripts/candidate-vitest-reporter.mjs
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { pathToFileURL } from 'node:url';
+import { describe, expect, it } from 'vitest';
 import { startAttempt, openProgressWriter, sealProgress } from '../scripts/candidate-progress.mjs';
 import { createHash } from 'node:crypto';
 import { nodeErrorFact } from '../scripts/candidate-node-reporter.mjs';
 import { installRuntime } from '../scripts/managed-runtime.js';
-import { physicalTemp } from './helpers/physical-temp.ts';
-const checkout = fileURLToPath(new URL('../', import.meta.url));
-const script = join(checkout, 'scripts/candidate-evidence.mjs');
-const made: string[] = [];
-afterEach(() => { for (const p of made.splice(0)) rmSync(p, { recursive: true, force: true }); });
-function git(root: string, ...args: string[]) {
-  const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true });
-  expect(r.status, r.stderr).toBe(0); return r.stdout.trim();
-}
-function fixture(files: Record<string, string>, vitest = false) {
-  const parent = process.env.AGENT_TESTS_NATIVE_EVIDENCE_DIR ?? tmpdir(); mkdirSync(parent, { recursive: true });
-  const base = physicalTemp('native-owner-', parent);
-  if (!process.env.AGENT_TESTS_NATIVE_EVIDENCE_DIR) made.push(base);
-  const root = join(base, 'repo'); mkdirSync(root);
-  for (const [name, body] of Object.entries({ '.gitignore': 'node_modules/\n.local/\n', 'package.json': '{"name":"native-fixture","type":"module"}', ...files })) writeFileSync(join(root, name), body);
-  mkdirSync(join(root, '.local'));
-  if (vitest) { mkdirSync(join(root, 'node_modules')); symlinkSync(join(checkout, 'node_modules/vitest'), join(root, 'node_modules/vitest'), process.platform === 'win32' ? 'junction' : 'dir'); }
-  git(root, 'init', '-q'); git(root, 'add', '.'); git(root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture');
-  return { root, out: join(base, 'attempt'), base, sha: git(root, 'rev-parse', 'HEAD') };
-}
-function run(args: string[], env = process.env) { return spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', windowsHide: true, timeout: 20000, env }); }
-const progress = (out: string) => run(['progress', '--attempt', out]);
-const json = (out: string, file = 'receipt.json') => JSON.parse(readFileSync(join(out, file), 'utf8'));
-async function waitFor(predicate: () => boolean, context: () => string, timeout = 12000) {
-  const start = Date.now();
-  while (!predicate()) { if (Date.now() - start > timeout) throw Error(`Marker deadline: ${context()}`); await new Promise(resolve => setTimeout(resolve, 25)); }
-}
-function controlled(f: ReturnType<typeof fixture>, mode: string, args: string[], extra: string[] = []) {
-  const child = spawn(process.execPath, [script, 'observe', mode, '--root', f.root, '--out', f.out, ...extra, '--', ...args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-  let output = ''; child.stdout.on('data', b => { output += b; }); child.stderr.on('data', b => { output += b; });
-  const closed = new Promise<number | null>(resolve => child.once('close', code => resolve(code)));
-  return { child, closed, output: () => output };
-}
-const held = "const{existsSync,writeFileSync}=await import('node:fs');writeFileSync('.local/b-held','yes');await new Promise((resolve,reject)=>{const started=Date.now();const timer=setInterval(()=>{if(existsSync('.local/release')){clearInterval(timer);resolve();}else if(Date.now()-started>15000){clearInterval(timer);reject(Error('fixture release deadline'));}},20)});";
-
+import { checkout, script, made, fixture, run, progress, json, waitFor, controlled, held } from './helpers/native-fixture.ts';
+import { exerciseHeld } from './helpers/held-vitest.ts';
 describe('native durable candidate diagnostics', () => {
   it('admits only the exact per-action grammar before touching paths', () => {
     for (const args of [ ['progress', '--attempt=x'], ['progress', '--attempt', 'missing', '--root', 'missing'], ['progress', '--attempt', 'missing', '--attempt', 'other'], ['progress', '--attempt', 'missing', '--', 'tail'], ['check', '--root', 'missing', '--out', 'other'], ['observe', 'node-test', '--root', 'missing', '--root', 'other'] ]) {
@@ -222,22 +188,7 @@ describe('native durable candidate diagnostics', () => {
     const refused = invoke('progress', '--attempt', f.out); expect(refused.status).toBe(1); expect(refused.stdout).toBe(''); expect(refused.stderr).toMatch(/E_RUNTIME_MISSING/);
   });
   it('publishes completed Vitest case diagnostics while its own module is still held', async () => {
-    // The fixture's own held case runs under Vitest's default 5 s test timeout, which would end the owner
-    // (owner-ended) if the batched worker-to-main update is delayed. Give the fixture a 60 s test timeout and
-    // a 45 s held deadline, and the waits 30 s, so only the callback publication can satisfy the barrier.
-    const f = fixture({ 'owner.test.mjs': `import{test,expect}from'vitest';test('early assertion',()=>expect('prompt actual').toBe('prompt expected'));test('held later case',async()=>{${held.replace('15000', '45000')}});` }, true);
-    const c = controlled(f, 'vitest', ['owner.test.mjs', '--testTimeout=60000']);
-    try {
-      await waitFor(() => existsSync(join(f.root, '.local/b-held')), c.output, 30000);
-      // Native worker result transport is batched; the callback publication is the evidence barrier.
-      await waitFor(() => readdirSync(join(f.out, 'progress')).filter(n => n.endsWith('.json')).some(n => json(join(f.out, 'progress'), n).kind === 'native-error'), c.output, 30000);
-      const p = JSON.parse(progress(f.out).stdout); expect(p.endedOwners).toEqual([]);
-      expect(p.records.some((r: any) => r.kind === 'native-error' && r.errors.some((e: any) => e.scope === 'case' && e.error.message.includes('prompt actual')))).toBe(true);
-      // The record is durable before the echoed text crosses the observer's stdout pipe, so wait for the pipe too.
-      await waitFor(() => /prompt actual/.test(c.output()) && /prompt expected/.test(c.output()), c.output, 30000);
-      expect(c.output()).toMatch(/prompt actual/); expect(c.output()).toMatch(/prompt expected/);
-    } finally { writeFileSync(join(f.root, '.local/release'), 'yes'); await c.closed; }
-    expect(await c.closed).toBe(1);
+    await exerciseHeld();
   }, 90000);
   it('retains real A publication when the actual recorder handle is interrupted before B ends', async () => {
     const f = fixture({
