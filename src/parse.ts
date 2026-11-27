@@ -445,12 +445,13 @@ function displayDeclaration(value: string): string {
 export function inspectDeclaredSubjects(root: string, declared: string[], languageExcluded?: (rel: string) => boolean) {
   const found = new Set<string>();
   const rejected: string[] = [];
+  let omitted = 0;
   const excluded = (rel: string) => isTestPath(rel) || isSupportPath(rel) || languageExcluded?.(rel);
   let physicalRoot: string | undefined;
   for (const raw of new Set(declared)) {
     const path = raw.replaceAll('\\', '/');
     const foreign = /^[A-Za-z]:(?!\/)/.test(path) || (process.platform !== 'win32' && /^(?:[A-Za-z]:|\/\/)/.test(path)) ||
-      (process.platform === 'win32' && /^\/(?!\/)/.test(path));
+      (process.platform === 'win32' ? /^\/(?!\/)/.test(raw) : raw.startsWith('\\'));
     const absolute = foreign ? undefined : resolve(root, path);
     const rel = absolute === undefined ? undefined : relPosix(root, absolute);
     let label = raw;
@@ -474,11 +475,11 @@ export function inspectDeclaredSubjects(root: string, declared: string[], langua
         }
       } catch { reason = 'unavailable regular file'; }
     }
-    rejected.push(displayDeclaration(label) + ' (' + reason + ')');
+    if (rejected.length < 5) rejected.push(displayDeclaration(label) + ' (' + reason + ')');
+    else omitted++;
   }
-  const visible = rejected.slice(0, 5);
-  if (rejected.length > visible.length) visible.push((rejected.length - visible.length) + ' omitted');
-  return { subjects: [...found].sort(), invalidEvidence: visible.join(', ') };
+  if (omitted) rejected.push(omitted + ' omitted');
+  return { subjects: [...found].sort(), invalidEvidence: rejected.join(', ') };
 }
 
 export function declaredSubjects(root: string, declared: string[]): string[] {

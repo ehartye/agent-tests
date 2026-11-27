@@ -373,6 +373,13 @@ describe('declaredSubjects', () => {
     expect(declaredSubjects(tree(), ['src\\x.ts'])).toEqual(['src/x.ts']);
   });
 
+  it.skipIf(process.platform !== 'win32')('retains paths rooted on the current project drive', () => {
+    const root = tree();
+    const absolute = join(root, 'src/x.ts');
+    expect(declaredSubjects(root, [absolute, absolute.replace(/^[A-Za-z]:/, '')])).toEqual(['src/x.ts']);
+    expect(declaredSubjects(root, [absolute.replace(/^[A-Za-z]:/, '')])).toEqual(['src/x.ts']);
+  });
+
   it('allows a non-code file such as a SQL migration, and sorts', () => {
     expect(declaredSubjects(tree(), ['src/y.sql', 'src/x.ts'])).toEqual(['src/x.ts', 'src/y.sql']);
   });
