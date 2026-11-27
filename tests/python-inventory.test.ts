@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { auditArtifact } from '../src/audit-output.ts';
 import { failureFor } from '../src/cli.ts';
 import { extractPythonFactsWith } from '../src/python/facts.ts';
+import { createPythonSubjectResolver } from '../src/python/subjects.ts';
 import { loadPythonParser } from '../src/python/parser.ts';
 import { MAX_RUN_LENGTH, MAX_TOKEN_LENGTH, pythonTargetsOfRun } from '../src/python/workflow.ts';
 import { renderMarkdown } from '../src/report.ts';
@@ -257,6 +258,51 @@ describe('workflow-named Python files', () => {
 
   it('refuses a workflow-named file without a parser, like a name-matched one, since it may be a test', () => {
     expect(() => scan(makeTree({ 'checks/suite.py': SUITE, '.github/workflows/ci.yml': WORKFLOW('python -m unittest checks.suite') }), { commitLimit: 1 })).toThrow(/scanProject/);
+  });
+});
+
+describe('exact spelling of inferred Python subjects', () => {
+  const files = {
+    'pkg/Service.py': '', 'pkg/child.py': '', 'pkg/__init__.py': '', 'src/pkg/service.py': '',
+    'api/adapter.PY': '', 'legacy/__INIT__.py': '', 'app/Support.py': '', 'app/conftest.py': '',
+  };
+  for (const [module, level, subject] of [
+    ['pkg.Service', 0, 'pkg/Service.py'], ['pkg.service', 0, 'src/pkg/service.py'],
+    ['PKG.Service', 0, null], ['pkg.SERVICE', 0, null], ['api.adapter', 0, null],
+    ['legacy', 0, null], ['Support', 1, 'app/Support.py'], ['support', 1, null],
+  ] as const) {
+    it(`resolves ${'.'.repeat(level)}${module} by directory entry spelling`, () => {
+      const resolver = createPythonSubjectResolver(makeTree(files));
+      const test = 'app/test_a.py';
+      const expected = subject === null ? [] : [subject];
+      const direct = resolver(test, { imports: [{ module, level, names: [] }], dynamicImports: [] });
+      expect(direct.subjects).toEqual(expected);
+      expect(resolver.isProjectModule(test, module, level)).toBe(subject !== null);
+      if (level === 0) expect(resolver(test, { imports: [], dynamicImports: [{ module }] }).subjects).toEqual(expected);
+    });
+  }
+
+  it('keeps the exact facade fallback and recognizes local support without granting coverage', () => {
+    const resolver = createPythonSubjectResolver(makeTree(files));
+    const test = 'app/test_a.py';
+    expect(resolver(test, { imports: [{ module: 'pkg', names: ['Child'], level: 0 }], dynamicImports: [] }))
+      .toEqual({ subjects: ['pkg/__init__.py'], facades: ['pkg/__init__.py'] });
+    expect(resolver.isProjectModule(test, 'conftest', 1)).toBe(true);
+    expect(resolver(test, { imports: [{ module: 'conftest', names: [], level: 1 }], dynamicImports: [] }).subjects).toEqual([]);
+  });
+
+  it('credits the critical area only when the import matches its module', async () => {
+    const risk = readFileSync(join(FIXTURE, '.testing/risk.yml'), 'utf8').split('areas:')[0]
+      + 'areas:\n  - {path: "pkg/**", tier: critical, why: project code}\n';
+    const test = (module: string) => py(`import pkg.${module}`, 'def test_svc(): assert 1');
+    const root = makeTree({ '.testing/risk.yml': risk, 'pkg/Service.py': '', 'tests/test_svc.py': test('service') });
+    const missed = await scanProject(root);
+    expect(missed.files[0].subjects).toEqual([]);
+    expect(coverageOf(missed)).toEqual(['wiring.uncovered-critical@pkg/**']);
+    writeFileSync(join(root, 'tests/test_svc.py'), test('Service'));
+    const covered = await scanProject(root);
+    expect(covered.files[0].subjects).toEqual(['pkg/Service.py']);
+    expect(coverageOf(covered)).toEqual([]);
   });
 });
 
