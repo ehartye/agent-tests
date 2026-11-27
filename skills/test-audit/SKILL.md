@@ -39,11 +39,12 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
      names the bad field. Reuse decisions already confirmed in the session.
    - Present: read it. Treat `phase`, `consumers` and `areas` as the owner's decisions.
 3. **Evidence.** `node "<plugin-root>/scripts/run-managed.js" report --root "<project>"` prints ranked Markdown (`--max-files <n>` extends the table); `scan` prints full JSON.
+   For slow suites, look first for an existing Vitest or Jest JSON report. Import it with `node "<plugin-root>/scripts/run-managed.js" report --root "<project>" --timings run.json` and inspect the slowest files. If needed, show the owner their runner's [collection command](../../references/audit-output.md).
    For requested saved evidence, use `--out <new-file>` and cite its identity/receipt; [saved audit artifacts](../../references/audit-output.md) defines parent-directory and no-overwrite requirements.
    - The report opens with a header and counts. Python tests are inventoried, but some unknowns remain (custom markers, `+?` files, collection hooks); if it says the inventory is incomplete, read `<plugin-root>/references/inventory.md`.
      Project findings (CI, hooks, scripts, agent instructions, risk-map gaps) follow, then a table of test files.
-   - The table ranks unparsed files first, then possible opaque registrations (inventory may be incomplete), then files
-     with the most distinct finding rules. Read the first two directly. The Rules column shows which rules fired. A `redundancy.shared-subject`
+   - Static order puts unparsed files first, then possible opaque registrations (inventory may be incomplete), then files
+     with the most distinct finding rules. Inspect unparsed files from the header when measured files fill the table. Read opaque registrations directly. The Rules column shows which rules fired. A `redundancy.shared-subject`
      finding that lists shared title words (and a numeric `overlap` in the scan JSON) is stronger and ranks first among
      ties; one that shares only a subject is weak, and several of those together stay weak. One `worktree.*` or `shim.*`
      rule on a real hazard is strong. Every rule is a review hint, not a verdict.
@@ -51,8 +52,7 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
      `worktree.timestamp-tmp-path`, `worktree.cwd-write`, `worktree.cwd-locate` and `wiring.unmapped-subject`, and the
      changed `shim.title-marker` (title-only; bare "fallback" or "compat" no longer match), `redundancy.shared-subject`
      and `wiring.drift` (a bare directory covered by a `folder/**` area or its descendants' areas is not reported).
-   - This version never runs the tests, so wait time and CI minutes are absent. Agent cost is estimated tokens in the
-     file. Churn/edits is edits that touched the test without the code it covers, over all edits that modified it;
+   - Imported suite intervals may overlap. Wall time and CI minutes remain unknown. Agent cost estimates tokens in the file. Churn/edits is edits that touched the test without the code it covers, over all edits that modified it;
      `n/a` means no git history (a shallow clone has none) or no resolvable subject.
    - Optional and opt-in: `worktree-check --root "<project>"` runs the tests alone and then in the root and a second checkout at once to
      confirm a `worktree.*` hazard. It runs the project's tests, so ask the owner first; the install dominates its cost,
@@ -65,7 +65,7 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    and the files in each cluster. Pattern matches produce false positives: a test titled "falls back to the default" may
    guard real behavior. Read the code under test too: a test of a one-line pass-through, or a bound the code can never
    reach, protects nothing however it is tagged, and a loose bound can hide a real bug.
-   On a large suite do not open every file. A file with no findings, no flags, a tier, and either no lane tag or a lane
+   On a large suite do not open every file. An unmeasured file with no findings, no flags, a tier, and either no lane tag or a lane
    that fits its tier gets `keep` without being opened; count these files and report the count, not rows. A flagged file
    is never kept unread: the flags are the evidence for question 4 of the rubric.
 5. **Architecture advisory.** Read `<plugin-root>/references/architecture-cost.md`. Trace expensive tests to dependency

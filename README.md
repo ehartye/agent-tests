@@ -84,7 +84,7 @@ Skills run the CLI through the checked launcher, never from PATH:
 | `capabilities` | Name, version, standalone CLI `commands`; checked launcher adds `launcherCommands` from its helper dispatch map |
 | `risk-draft [--write]` | A draft risk map; `--write` creates `.testing/risk.yml` if absent |
 | `scan [--out <new-file>]` | Evidence report as JSON (`agent-tests/evidence@1`); `--out` saves an artifact with producer identity and prints a byte/hash receipt |
-| `report [--max-files n] [--max-per-rule n] [--out <new-file>]` | The same evidence as ranked, capped Markdown; `--out` saves a citable artifact with producer identity and prints a byte/hash receipt |
+| `report [--timings <file>] [--max-files n] [--max-per-rule n] [--out <new-file>]` | Ranked, capped Markdown with optional saved Vitest/Jest file timings; `--out` saves a citable artifact with producer identity and prints a byte/hash receipt |
 | `worktree-check [--runs n] [--command "<cmd>"] [--timeout-seconds n] [--no-install]` | Opt-in: runs the test command alone, then in the root and a second worktree of HEAD at the same time, and prints JSON (`agent-tests/worktree-check@1`) with a verdict of `hazard-observed`, `no-hazard-observed` or `baseline-failed`. It runs the project's tests and never runs from `scan` or `report`; see [references/worktree-check.md](references/worktree-check.md) |
 
 Standalone CLI failures are one JSON line on stderr (`{"error":{"code","message","hint"}}`), with exit code 2 for a

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { CliError } from './errors.ts';
 import { admitOutput, auditArtifact, publishAudit } from './audit-output.ts';
+import { importTimings } from './timings.ts';
 import { renderMarkdown } from './report.ts';
 import { draftRiskMap } from './riskdraft.ts';
 import { RISK_MAP_PATH, serializeRiskMap } from './riskmap.ts';
@@ -12,7 +13,7 @@ import { MAX_RUNS, worktreeCheck } from './worktree-check.ts';
 
 export const COMMANDS = ['capabilities', 'risk-draft', 'scan', 'report', 'worktree-check'] as const;
 
-const USAGE = `Usage: tests <${COMMANDS.join('|')}> [--root <dir>] [--out <new-file> (scan/report only)] [--write] [--max-files <n>] [--max-per-rule <n>] [--runs <n>] [--command "<cmd>"] [--timeout-seconds <n>] [--no-install]`;
+const USAGE = `Usage: tests <${COMMANDS.join('|')}> [--root <dir>] [--out <new-file> (scan/report only)] [--timings <file> (report only)] [--write] [--max-files <n>] [--max-per-rule <n>] [--runs <n>] [--command "<cmd>"] [--timeout-seconds <n>] [--no-install]`;
 
 const HINTS: Record<string, string> = {
   E_USAGE: USAGE,
@@ -114,6 +115,7 @@ async function run(args: string[]): Promise<void> {
   }
   let values: {
     root?: string;
+    timings?: string[];
     out?: string;
     write?: boolean;
     'max-files'?: string;
@@ -128,6 +130,7 @@ async function run(args: string[]): Promise<void> {
       args: rest,
       options: {
         root: { type: 'string' },
+        timings: { type: 'string', multiple: true },
         out: { type: 'string' },
         write: { type: 'boolean' },
         'max-files': { type: 'string' },
@@ -142,6 +145,10 @@ async function run(args: string[]): Promise<void> {
   } catch (error) {
     throw new CliError('E_USAGE', (error as Error).message);
   }
+  if (values.timings && (command !== 'report' || values.timings.length !== 1 || !values.timings[0]?.trim())) {
+    throw new CliError('E_USAGE', '--timings requires one file and only applies to report');
+  }
+  if (values.timings && values.write) throw new CliError('E_USAGE', '--write cannot be used with --timings');
   if (command !== 'worktree-check') {
     for (const option of ['runs', 'command', 'timeout-seconds', 'no-install'] as const) {
       if (values[option] !== undefined) throw new CliError('E_USAGE', `--${option} only applies to worktree-check`);
@@ -201,6 +208,7 @@ async function run(args: string[]): Promise<void> {
   const maxPerRule = positiveInteger('max-per-rule', values['max-per-rule']);
   const evidence = await scanProject(root);
   const reportOptions = {
+      ...(values.timings ? { timings: importTimings(root, values.timings[0]!, evidence.files) } : {}),
       ...(maxFiles !== undefined ? { maxFiles } : {}),
       ...(maxPerRule !== undefined ? { maxPerRule } : {}),
     };

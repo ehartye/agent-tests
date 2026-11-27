@@ -25,9 +25,9 @@ const noSupportedRunner = (evidence: EvidenceReport): boolean =>
 export function auditArtifact(evidence: EvidenceReport, command: 'scan' | 'report', options: ReportOptions = {}, producer = producerIdentity()): string {
   const artifact = {
     schema: 'agent-tests/audit-output@1', producer, command, root: evidence.root,
-    options: command === 'report' ? { maxFiles: options.maxFiles ?? DEFAULT_MAX_FILES, maxPerRule: options.maxPerRule ?? DEFAULT_MAX_PER_RULE } : {},
+    options: command === 'report' ? { maxFiles: options.maxFiles ?? DEFAULT_MAX_FILES, maxPerRule: options.maxPerRule ?? DEFAULT_MAX_PER_RULE, ...(options.timings ? { timingsSha256: options.timings.sha256 } : {}) } : {},
     limits: [
-      'Static evidence only; project tests were not executed. Audited inputs are not an immutable snapshot.',
+      options.timings ? 'Static scan with imported file intervals. Project tests were not executed by the audit. Path matches do not establish identical revisions. Intervals may overlap and do not measure wall time or CI cost.' : 'Static evidence only; project tests were not executed. Audited inputs are not an immutable snapshot.',
       ...(noSupportedRunner(evidence) ? ['No supported runner detected; a zero static test count does not prove that the project has no tests.'] : []),
     ],
   };

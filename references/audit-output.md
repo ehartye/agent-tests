@@ -48,3 +48,20 @@ No global `tests` wrapper is installed, and no existing global link is changed. 
 from the host's selected plugin, check its managed runtime normally, and cite the saved artifact's
 producer identity rather than a versioned cache path. A separate versionless launcher remains a
 possible usability follow-up; it is not required to cite or validate these saved outputs.
+
+## Import saved suite timings
+
+For a duration investigation, start with an existing Vitest or Jest JSON report. Supply one file, relative to the project root or absolute.
+
+```sh
+node "<plugin-root>/scripts/run-managed.js" report --root "<project>" --timings run.json --max-files 10 --out audit.md
+```
+
+To collect a report, run the appropriate command in the project with its installed runner and normal test selection.
+
+```sh
+vitest run --reporter=json --outputFile=run.json
+jest --json --outputFile=run.json
+```
+
+Each measured interval spans one suite's start and end timestamps. The table sorts matched files by elapsed milliseconds and then path. Unmeasured files follow in static order. Overlap prevents summing durations into wall time or cost. Paths can match across revisions with different contents. The Markdown identifies the original JSON by SHA-256 and counts excluded rows and ambiguous files. An unreadable or unsupported report returns `E_TIMINGS` before publication.
