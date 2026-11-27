@@ -1,6 +1,9 @@
 import { Category, type EvidenceReport, type Finding, type TestFileRecord } from './schema.ts';
 
+import type { Timings } from './timings.ts';
+
 export interface ReportOptions {
+  timings?: Timings;
   /** How many test files the table lists. */
   maxFiles?: number;
   /** How many findings one rule lists in the per-file section. */
@@ -122,6 +125,7 @@ function fileLine(finding: Finding): string {
  * so the evidence that matters comes first; the scan JSON holds everything. Pure and deterministic.
  */
 export function renderMarkdown(report: EvidenceReport, options: ReportOptions = {}): string {
+  const timings = options.timings;
   const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
   const maxPerRule = options.maxPerRule ?? DEFAULT_MAX_PER_RULE;
   const perFile = report.files.flatMap(file => file.findings);
@@ -136,6 +140,10 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
     `- Risk map: ${report.riskMapPresent ? 'present' : 'missing'}`,
     `- Test files: ${report.files.length}`,
   ];
+  if (timings) out.push(
+    `- Timing input SHA-256: ${timings.sha256} (run outcome: ${timings.outcome})`,
+    `- Matched files: ${timings.files.size}, unmatched rows: ${timings.unmatched}, invalid rows: ${timings.invalid}, skipped rows: ${timings.skipped}, ambiguous files: ${timings.ambiguous}`,
+  );
   if (report.inventory) {
     const { languages, complete, notes } = report.inventory;
     out.push(`- Languages: ${languages.map(entry => `${flat(entry.language)} (${entry.status === 'supported' ? flat(entry.runner) : entry.status}, ${entry.files} files)`).join(', ')}`);
@@ -162,9 +170,9 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
   out.push(
     '',
     '**How to read this.** Findings are evidence, not verdicts: judge each one against the risk map and the test itself.',
-    'Files are ranked with unparsed files first, then opaque registration candidates, then by distinct finding rules, the largest title-word overlap with a same-subject file, total findings and agent tokens.',
+    timings ? 'Measured files rank first by descending elapsed milliseconds, with path breaking ties. Unmeasured files retain static evidence order.' : 'Files are ranked with unparsed files first, then opaque registration candidates, then by distinct finding rules, the largest title-word overlap with a same-subject file, total findings and agent tokens.',
     'Agent is the estimated tokens in the file. Churn/edits counts edits that touched the test without the code it covers, over all edits that modified it; n/a means no git history or no resolvable subject.',
-    'Wait time and CI minutes need a timed run and are not in this report.',
+    timings ? 'The static scan imports suite intervals by path. Matching paths across revisions do not establish identical contents. Overlapping spans cannot be added to derive wall time, CI minutes, price or savings.' : 'Wait time and CI minutes need a timed run and are not in this report.',
     'Flags: tautological, snapshot-only, mock-only, no-direct-assertions (possibly assertions in a helper), unparsed.',
     'Recognized declarations are static calls, not native expanded case counts. A count marked +? has opaque helper registration candidates; inspect their provider before treating it as complete.',
     '',
@@ -181,17 +189,24 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
   else for (const finding of [...report.projectFindings].sort(byProjectOrder)) out.push(projectLine(finding));
 
   const ranked = rankFiles(report.files);
+  if (timings) ranked.sort((a, b) => {
+    const left = timings.files.get(a.file), right = timings.files.get(b.file);
+    if (left && right) return right.elapsed - left.elapsed || compare(a.file, b.file);
+    return Number(Boolean(right)) - Number(Boolean(left));
+  });
   const shown = ranked.slice(0, maxFiles);
-  out.push('', `## Test files (top ${shown.length} of ${ranked.length}, most evidence first)`, '');
+  out.push('', `## Test files (top ${shown.length} of ${ranked.length}, ${timings ? 'measured files first' : 'most evidence first'})`, '');
   if (ranked.length === 0) out.push('None.');
   else {
-    out.push('| File | Tier | Lane | Tests | Asserts | Flags | Agent tokens | Churn/edits | Rules |', '|---|---|---|---|---|---|---|---|---|');
+    out.push(`| File |${timings ? ' Elapsed ms | Suite outcome |' : ''} Tier | Lane | Tests | Asserts | Flags | Agent tokens | Churn/edits | Rules |`, `|${'---|'.repeat(timings ? 11 : 9)}`);
     for (const [index, file] of shown.entries()) {
+      const interval = timings?.files.get(file.file);
+      const measurement = timings ? ` ${interval?.elapsed ?? 'unknown'} | ${interval?.outcome ?? 'unknown'} |` : '';
       const tier = file.tier ?? (report.riskMapPresent ? 'untiered' : 'no map');
       const structure = isUnparsed(file) ? ['?', '?'] : [`${file.tests}${hasOpaqueRegistration(file) ? '+?' : ''}`, String(file.assertions)];
       const churn = file.cost.churn !== null && file.cost.edits !== null ? `${file.cost.churn}/${file.cost.edits}` : 'n/a';
       out.push(
-        `| ${cell(file.file)} | ${tier} | ${file.tags.lane ?? '-'} | ${structure[0]} | ${structure[1]} | ${cell(file.flags.join(', ')) || '-'} | ${file.cost.agent} | ${churn} | ${rulesCell(file, index < MAX_OVERLAP_ROWS)} |`,
+        `| ${cell(file.file)} |${measurement} ${tier} | ${file.tags.lane ?? '-'} | ${structure[0]} | ${structure[1]} | ${cell(file.flags.join(', ')) || '-'} | ${file.cost.agent} | ${churn} | ${rulesCell(file, index < MAX_OVERLAP_ROWS)} |`,
       );
     }
   }
@@ -199,7 +214,7 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
   if (omitted.length > 0) {
     const findings = omitted.reduce((sum, file) => sum + file.findings.length, 0);
     const none = omitted.filter(file => file.findings.length === 0).length;
-    out.push('', `${omitted.length} more files omitted (${findings} findings, ${none} with none); the full data is in the JSON from the scan command.`);
+    out.push('', `${omitted.length} more files omitted (${findings} findings, ${none} with none); ${timings ? 'see the original runner JSON for timings and scan JSON for full static findings.' : 'the full data is in the JSON from the scan command.'}`);
   }
 
   // Every flagged file, not only those in the table: table order first, then the files the table cut, by path.
