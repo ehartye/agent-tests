@@ -2,7 +2,7 @@ import { resourceUses } from './detectors/resource-use.ts';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, resolve } from 'node:path';
 import { SyntaxKind, type ArrowFunction, type CallExpression, type FunctionExpression, type ImportDeclaration, type NoSubstitutionTemplateLiteral, type Node, type PropertyAccessExpression, type SourceFile, type StringLiteral } from 'typescript/unstable/ast';
-import { isArrowFunction, isCallExpression, isFunctionExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isObjectBindingPattern, isPropertyAccessExpression, isStringLiteral, isTaggedTemplateExpression } from 'typescript/unstable/ast/is';
+import { isArrowFunction, isAsExpression, isCallExpression, isFunctionExpression, isIdentifier, isImportDeclaration, isNamedImports, isNonNullExpression, isNoSubstitutionTemplateLiteral, isObjectBindingPattern, isParenthesizedExpression, isPropertyAccessExpression, isSatisfiesExpression, isStringLiteral, isTaggedTemplateExpression, isTypeAssertion } from 'typescript/unstable/ast/is';
 import { createVirtualFileSystem } from 'typescript/unstable/fs';
 import { API } from 'typescript/unstable/sync';
 import { isSupportPath, isTestPath } from './discover.ts';
@@ -109,6 +109,14 @@ function calleeName(node: Node): string {
 
 const isLiteralText = (node: Node | undefined): node is StringLiteral | NoSubstitutionTemplateLiteral => !!node && (isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node));
 const isFunctionLike = (node: Node | undefined): node is ArrowFunction | FunctionExpression => !!node && (isArrowFunction(node) || isFunctionExpression(node));
+
+/** Parentheses and erased types preserve the identity of an inline registration callback. */
+function inlineCallback(node: Node): ArrowFunction | FunctionExpression | undefined {
+  while (isParenthesizedExpression(node) || isAsExpression(node) || isSatisfiesExpression(node) || isNonNullExpression(node) || isTypeAssertion(node)) {
+    node = node.expression;
+  }
+  return isFunctionLike(node) ? node : undefined;
+}
 
 /**
  * A Playwright-style conditional skip: `test.skip(isCI, 'flaky on CI')`, `test.skip(isCI, REASON)`,
@@ -276,11 +284,12 @@ function extractFacts(sourceFile: SourceFile, text: string, fileName: string): P
         // Titles, tables and options are evaluated outside the suite registration callback.
         inheritDisabled = false;
         if (disabled || name === 'xdescribe' || name.split('.').includes('skip')) {
-          const callback = node.arguments.slice(1).find(isFunctionLike);
+          const callback = node.arguments.slice(1).map(inlineCallback).find(callback => callback !== undefined);
           if (callback) disabledBodies.add(callback.body);
         }
-      } else if (disabled && isPropertyAccessExpression(callee) && callee.name.text === 'forEach' && isFunctionLike(specifier)) {
-        disabledBodies.add(specifier.body);
+      } else if (disabled && isPropertyAccessExpression(callee) && callee.name.text === 'forEach' && specifier) {
+        const callback = inlineCallback(specifier);
+        if (callback) disabledBodies.add(callback.body);
       } else if (isInlineSkip(node, name)) {
         const reason = skipReason(node, true);
         if (current) noteBodySkip(current.test, node, true);

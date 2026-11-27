@@ -31,6 +31,17 @@ it('inherits a disabled registration scope only in suite and forEach callback bo
   ]);
 });
 
+it('recognizes inline registration callbacks through transparent expression wrappers', () => {
+  const parsed = parseTestFile('wrapped.test.ts', [
+    "describe.skip('wrapped', ((() => rows.forEach(((row => it('row', fn)) satisfies Handler)!))) as Handler);",
+    "xdescribe('typed', <Handler>(function () { it('typed child', fn); }));",
+    "describe.skip('factory', makeHandler(() => it('helper child', fn)));",
+  ].join('\n'));
+  expect(parsed.tests.map(test => [test.name, test.skipped])).toEqual([
+    ['row', true], ['typed child', true], ['helper child', false],
+  ]);
+});
+
 const SAMPLE = `/**
  * @lane merge
  * @risk critical
