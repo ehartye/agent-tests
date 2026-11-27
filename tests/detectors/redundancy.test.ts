@@ -134,7 +134,7 @@ describe('detectRedundancy', () => {
     });
 
     it('does not count a commented-out sweep', () => {
-      const text = `// ${sweep}\n * ${sweep}`;
+      const text = `// ${sweep}\n/*\n * ${sweep}\n */`;
       expect(sweepFindings([file('tests/a.test.ts', ['src/s.ts'], text), file('tests/b.test.ts', ['src/s.ts'], sweep)])).toEqual([]);
     });
 

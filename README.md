@@ -236,7 +236,7 @@ It supplies evidence and validation, rather than a common game director or input
 - Churn needs git history. It is `n/a` in a shallow clone (the usual CI checkout), outside a repository, and for tests with
   no resolvable subject. A test's creation commit is not counted as an edit.
 - The parser reads files through TypeScript 7's JS API, which its authors label `unstable`; the dependency is pinned
-  exactly and only `src/parse.ts` uses it. A file it cannot parse is reported with the `unparsed` flag, not skipped.
+  exactly. The parser and resource-use detector share the syntax tree. A file it cannot parse is reported with the `unparsed` flag, not skipped.
 - Test counts are recognized static declarations, not native expanded cases. `wiring.opaque-test-registration` flags
   literal-title curried calls with inline callbacks at module/recognized-suite scope; the provider is unknown and
   `+?` marks that uncertainty. Ordinary callback APIs can match, and other helper shapes can remain undetected.

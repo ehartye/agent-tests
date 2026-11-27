@@ -1,3 +1,4 @@
+import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -11,6 +12,8 @@ describe('server', () => {
     const head = join(process.cwd(), '.git', 'HEAD');
     const home = homedir();
     const db = 'test.sqlite';
+    void fetch(url);
+    writeFileSync(scratch, readFileSync(checkout));
     expect(start(3000)).toBe(3000);
     expect([url, checkout, scratch, head, home, db].length).toBe(6);
   });

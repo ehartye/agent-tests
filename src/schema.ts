@@ -41,6 +41,7 @@ export const Finding = z.object({
   message: z.string().min(1),
   evidence: z.string(),
   note: z.string().optional(),
+  confidence: z.literal('possible').optional(),
   /** Shared title words with the closest other file (redundancy.shared-subject only); absent when the files share only a subject. */
   overlap: z.number().int().positive().optional(),
 });
