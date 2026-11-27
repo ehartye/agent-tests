@@ -1,3 +1,4 @@
+import { openParseSession } from '../parse.ts';
 import type { Finding } from '../schema.ts';
 
 interface Rule {
@@ -76,14 +77,7 @@ function unresolvedDirNote(code: string, match: RegExpExecArray, madeDirs: Reado
   return `Path uniqueness unresolved: ${untraced.join(', ')} has no earlier assignment from mkdtemp in this file, so the path may be shared; confirm the caller passes a per-run directory.`;
 }
 
-const RULES: Rule[] = [
-  {
-    rule: 'worktree.fixed-port',
-    // A name that is `port` or ends in `_PORT` or `Port` (not report, passport, viewport), a loopback host, or a listen call, then a 4-5 digit literal.
-    pattern:
-      /(?:\blisten\(\s*|(?:\b(?:port|PORT|Port)|[A-Za-z0-9]Port|_(?:port|PORT))['"`]?\s*(?::|=(?!=))\s*['"`]?|localhost:|127\.0\.0\.1:|0\.0\.0\.0:|\[::1\]:)(\d{4,5})\b/,
-    message: 'Hard-coded port: two worktrees running tests at once collide. Use port 0 or a per-run port.',
-  },
+const UNPARSED_PATHS: Rule[] = [
   {
     rule: 'worktree.absolute-path',
     pattern: /['"`](?:[A-Za-z]:[\\/]|\/(?:Users|home)\/)[^'"`]*['"`]/,
@@ -98,6 +92,9 @@ const RULES: Rule[] = [
     unless: new RegExp(`${TMP_PROPERTY_ROW.source}|${TMP_ABSENCE_CHECK.source}`),
     message: 'Fixed temp path shared by every worktree and every parallel run. Use mkdtemp for a unique directory.',
   },
+];
+
+const RULES: Rule[] = [
   {
     rule: 'worktree.dot-git-dir',
     pattern: /['"`/\\]\.git(?:['"`/\\])/,
@@ -203,8 +200,15 @@ function evidenceWindow(code: string, match: RegExpExecArray): string {
 }
 
 /** Hazards that make a test pass alone in one checkout and fail beside a second worktree. */
-export function detectWorktreeHazards(file: string, lines: string[]): Finding[] {
-  const findings: Finding[] = [];
+export function detectWorktreeHazards(file: string, lines: string[], resources?: Finding[] | null): Finding[] {
+  if (resources === undefined) {
+    const session = openParseSession();
+    try { resources = session.parse(file, lines.join('\n')).resourceFindings ?? []; }
+    catch { resources = null; }
+    finally { session.close(); }
+  }
+  const findings: Finding[] = [...(resources ?? [])];
+  const rules = resources === null ? [...UNPARSED_PATHS, ...RULES] : RULES;
   let inBlock = false;
   let previous = '';
   const madeQuiet = new Set<string>();
@@ -221,7 +225,7 @@ export function detectWorktreeHazards(file: string, lines: string[]): Finding[] 
     inBlock = stripped.inBlock;
     const code = stripped.code.trim();
     if (code) {
-      for (const rule of RULES) {
+      for (const rule of rules) {
         if (rule.skip && (rule.skip.test(code) || rule.skip.test(previous))) continue;
         if (rule.unless?.test(code)) continue;
         let match = rule.pattern.exec(code);
@@ -234,13 +238,15 @@ export function detectWorktreeHazards(file: string, lines: string[]): Finding[] 
             rule: rule.rule,
             file,
             line: index + 1,
-            message: rule.message,
+            ...(UNPARSED_PATHS.includes(rule)
+              ? { confidence: 'possible' as const, message: 'Possible path use: the file could not be parsed to identify the operation.' }
+              : { message: rule.message }),
             evidence: evidenceWindow(code, match),
             ...(note ? { note } : {}),
           });
         }
       }
-      for (const rule of RULES) {
+      for (const rule of rules) {
         if (rule.weakQuietAfter?.test(code)) madeQuiet.add(rule.rule);
         const made = rule.madeDir?.exec(code)?.[1];
         if (made) madeDirs.add(made);
@@ -248,5 +254,5 @@ export function detectWorktreeHazards(file: string, lines: string[]): Finding[] 
     }
     previous = code;
   }
-  return findings;
+  return findings.sort((a, b) => a.line! - b.line!);
 }

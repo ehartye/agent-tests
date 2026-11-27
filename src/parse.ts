@@ -1,3 +1,4 @@
+import { resourceUses } from './detectors/resource-use.ts';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, resolve } from 'node:path';
 import { SyntaxKind, type ArrowFunction, type CallExpression, type FunctionExpression, type ImportDeclaration, type NoSubstitutionTemplateLiteral, type Node, type PropertyAccessExpression, type SourceFile, type StringLiteral } from 'typescript/unstable/ast';
@@ -6,7 +7,7 @@ import { createVirtualFileSystem } from 'typescript/unstable/fs';
 import { API } from 'typescript/unstable/sync';
 import { isSupportPath, isTestPath } from './discover.ts';
 import { relPosix } from './paths.ts';
-import type { LaneName } from './schema.ts';
+import type { Finding, LaneName } from './schema.ts';
 
 export interface ParsedTest {
   name: string;
@@ -31,6 +32,7 @@ interface TestScope {
 }
 
 export interface ParsedFile {
+  resourceFindings?: Finding[];
   /** Possible helper registrations, whose provider semantics are not known statically. */
   opaqueTestCalls?: Array<{ callee: string; line: number }>;
   /** Playwright-style `test.skip(condition, reason)` calls outside any test body: conditional skips of a suite, not tests. */
@@ -220,7 +222,7 @@ function lineIndex(text: string): (position: number) => number {
   };
 }
 
-function extractFacts(sourceFile: SourceFile, text: string): ParsedFile {
+function extractFacts(sourceFile: SourceFile, text: string, fileName: string): ParsedFile {
   const out: ParsedFile = {
     imports: [],
     tests: [],
@@ -233,6 +235,8 @@ function extractFacts(sourceFile: SourceFile, text: string): ParsedFile {
     tags: parseTags(text),
   };
   const lineAt = lineIndex(text);
+  const resources = resourceUses(sourceFile, fileName, text, lineAt);
+  if (resources.length) out.resourceFindings = resources;
   const lineOf = (node: Node): number => lineAt(node.getStart());
 
   const visit = (node: Node, current: TestScope | null): void => {
@@ -352,9 +356,11 @@ export function openParseSession({ restartEvery = RESTART_EVERY }: { restartEver
       previous = { config, source };
       const snapshot = api.updateSnapshot({ openProjects: [config], closeProjects: stale ? [stale.config] : [] });
       try {
-        const sourceFile = snapshot.getProject(config)?.program.getSourceFile(source);
+        const program = snapshot.getProject(config)?.program;
+        const sourceFile = program?.getSourceFile(source);
         if (!sourceFile) throw new Error(`TypeScript could not parse ${fileName}`);
-        return extractFacts(sourceFile, text);
+        if (program!.getSyntacticDiagnostics(source).length) throw new Error(`TypeScript could not parse ${fileName}`);
+        return extractFacts(sourceFile, text, fileName);
       } finally {
         snapshot.dispose();
         if (stale) {

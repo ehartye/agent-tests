@@ -94,30 +94,38 @@ function rulesCell(file: TestFileRecord, showOverlap = false): string {
 /** Unparsed files first (their structure is unknown), then the breadth of evidence, its volume, the file's size, and the path. */
 function rankFiles(files: TestFileRecord[]): TestFileRecord[] {
   return files
-    .map(file => ({ file, distinct: ruleCounts(file).length }))
+    .map(file => {
+      const confirmed = file.findings.filter(finding => finding.confidence !== 'possible');
+      return { file, distinct: new Set(confirmed.map(finding => finding.rule)).size, total: confirmed.length };
+    })
     .sort(
       (a, b) =>
         Number(isUnparsed(b.file)) - Number(isUnparsed(a.file)) ||
         Number(hasOpaqueRegistration(b.file)) - Number(hasOpaqueRegistration(a.file)) ||
         b.distinct - a.distinct ||
         overlapOf(b.file) - overlapOf(a.file) ||
-        b.file.findings.length - a.file.findings.length ||
+        b.total - a.total ||
         b.file.cost.agent - a.file.cost.agent ||
         compare(a.file.file, b.file.file),
     )
     .map(entry => entry.file);
 }
 
+function messageOf(finding: Finding): string {
+  const text = flat(finding.message);
+  return finding.confidence === 'possible' && !/^possible\b/i.test(text) ? `Possible: ${text}` : text;
+}
+
 function projectLine(finding: Finding): string {
   const evidence = finding.evidence ? ` Evidence: ${span(clip(finding.evidence))}.` : '';
   const note = finding.note ? ` Note: ${flat(finding.note)}` : '';
-  return `- ${span(where(finding))} **${flat(finding.rule)}**: ${flat(finding.message)}${evidence}${note}`;
+  return `- ${span(where(finding))} **${flat(finding.rule)}**: ${messageOf(finding)}${evidence}${note}`;
 }
 
-function fileLine(finding: Finding): string {
+function fileLine(finding: Finding, showMessage: boolean): string {
   const evidence = finding.evidence ? ` ${span(clip(finding.evidence))}` : '';
   const note = finding.note ? ` (${flat(finding.note)})` : '';
-  return `- ${span(where(finding))}${evidence}${note}`;
+  return `- ${span(where(finding))}${evidence}${showMessage ? " " + messageOf(finding) : ""}${note}`;
 }
 
 /**
@@ -170,7 +178,7 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
   out.push(
     '',
     '**How to read this.** Findings are evidence, not verdicts: judge each one against the risk map and the test itself.',
-    timings ? 'Measured files rank first by descending elapsed milliseconds, with path breaking ties. Unmeasured files retain static evidence order.' : 'Files are ranked with unparsed files first, then opaque registration candidates, then by distinct finding rules, the largest title-word overlap with a same-subject file, total findings and agent tokens.',
+    timings ? 'Measured files rank first by descending elapsed milliseconds, with path breaking ties. Unmeasured files retain static evidence order.' : 'Files are ranked with unparsed files first, then opaque registration candidates, then by confirmed distinct finding rules, the largest title-word overlap with a same-subject file, total confirmed findings and agent tokens.',
     'Agent is the estimated tokens in the file. Churn/edits counts edits that touched the test without the code it covers, over all edits that modified it; n/a means no git history or no resolvable subject.',
     timings ? 'The static scan imports suite intervals by path. Matching paths across revisions do not establish identical contents. Overlapping spans cannot be added to derive wall time, CI minutes, price or savings.' : 'Wait time and CI minutes need a timed run and are not in this report.',
     'Flags: tautological, snapshot-only, mock-only, no-direct-assertions (possibly assertions in a helper), unparsed.',
@@ -250,8 +258,10 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
     const rules = [...new Set(perFile.filter(finding => finding.category === category).map(finding => finding.rule))].sort(compare);
     for (const rule of rules) {
       const group = perFile.filter(finding => finding.category === category && finding.rule === rule).sort(byLocation);
-      out.push(`### ${flat(rule)}`, '', flat(group[0]!.message), '');
-      for (const finding of group.slice(0, maxPerRule)) out.push(fileLine(finding));
+      const messages = new Set(group.map(messageOf));
+      out.push(`### ${flat(rule)}`, '');
+      if (messages.size === 1) out.push(messageOf(group[0]!), '');
+      for (const finding of group.slice(0, maxPerRule)) out.push(fileLine(finding, messages.size > 1));
       if (group.length > maxPerRule) out.push(`- +${group.length - maxPerRule} more (see the scan JSON)`);
       out.push('');
     }

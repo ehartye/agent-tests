@@ -125,11 +125,30 @@ describe('scan edge cases', () => {
     expect(file.area).toBe('src/lib/screens/**');
   });
 
+  it('qualifies parse-failed infrastructure and test paths, omits unread evidence, and preserves confidence in JSON', () => {
+    const root = makeTree({'tests/support/hidden.mjs': "readFileSync('/tmp/hidden')",
+      'tests/support/broken.mjs': "const where = '/tmp/shared'; const bad = ;",
+      'tests/broken.test.mjs': "const where = 'C:/shared'; const bad = ;",
+      'tests/case.test.mjs': "import {writeFileSync as write} from 'node:fs';\nexport const path = '/tmp/unknown';\nwrite('out', '/tmp/bytes');\nwrite('C:/shared/out', data);"
+    });
+    const raw = scan(root, { readInfrastructure(path) {
+      if (path.endsWith('hidden.mjs')) throw new Error('controlled unreadable helper');
+      return readFileSync(path, 'utf8');
+    } });
+    const report = EvidenceReport.parse(JSON.parse(JSON.stringify(raw)));
+    const worktree = everyFinding(report).filter(f => f.category === 'worktree');
+    expect(worktree.map(f => [f.file, f.line, f.confidence])).toEqual([
+      ['tests/broken.test.mjs',1,'possible'],['tests/case.test.mjs',2,'possible'],['tests/case.test.mjs',4,undefined],
+      ['tests/support/broken.mjs',1,'possible']]);
+    expect(report.files.find(f => f.file === 'tests/broken.test.mjs')?.flags).toContain('unparsed');
+    expect(worktree.at(-1)?.message).toMatch(/pars/i);
+  });
+
   it('finds worktree hazards in browser configuration and shared test infrastructure', () => {
     const root = makeTree({
       'tests/live.test.mjs': "import test from 'node:test'; test('live',()=>{});",
       'playwright.phaser.config.mjs': "export default {use:{baseURL:'http://127.0.0.1:5327'}};",
-      'tests/support/server.mjs': 'export const port = 5332;',
+      'tests/support/server.mjs': 'server.listen(5332);',
       'src/app.mjs': 'export const port = 5432;',
     });
     const report = scan(root);

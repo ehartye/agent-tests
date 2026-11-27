@@ -30,6 +30,7 @@ export type PythonReader = (source: string) => PythonFacts;
 
 export interface ScanOptions {
   commitLimit?: number;
+  readInfrastructure?: (absolute: string) => string;
   /**
    * How Python test files are read. `scan` is synchronous and cannot load the parser, so it needs this whenever the repo has Python
    * test files; `scanProject` loads the parser itself (only then) and is what the CLI uses.
@@ -129,10 +130,10 @@ const emptyParsed = (): ParsedFile => ({
  * must not stop the scan or hide the others: it keeps empty parse facts and is flagged `unparsed`. Its leading-comment tags
  * and line-based detectors still work when its text was read.
  */
-function loadTests(root: string): LoadedFile[] {
+function loadJavaScript(root: string, readInfrastructure = (path: string) => readFileSync(path, 'utf8')) {
   const session = openParseSession();
   try {
-    return discoverTests(root).map(rel => {
+    const loaded: LoadedFile[] = discoverTests(root).map(rel => {
       let text = '';
       let parsed = emptyParsed();
       let unparsed = false;
@@ -146,6 +147,18 @@ function loadTests(root: string): LoadedFile[] {
       const subjects = [...new Set([...resolveSubjects(root, rel, parsed.imports), ...declaredSubjects(root, parsed.tags.subjects ?? [])])].sort();
       return { rel, text, lines: text.split(/\r?\n/), parsed, subjects, unparsed };
     });
+    // A successful read supplies literal evidence even when parsing fails. A failed read supplies none.
+    const infrastructure = new Map<string, Finding[]>();
+    for (const rel of discoverTestInfrastructure(root)) {
+      let text: string;
+      try { text = readInfrastructure(join(root, rel)); }
+      catch { continue; }
+      let resources: Finding[] | null;
+      try { resources = session.parse(rel, text).resourceFindings ?? []; }
+      catch { resources = null; }
+      infrastructure.set(rel, detectWorktreeHazards(rel, text.split(/\r?\n/), resources));
+    }
+    return { loaded, infrastructure };
   } finally {
     session.close();
   }
@@ -337,7 +350,7 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, cand
   }
   const map = loadRiskMap(root);
   const sets = commitFileSets(root, options.commitLimit ?? 500);
-  const loaded = loadTests(root);
+  const { loaded, infrastructure } = loadJavaScript(root, options.readInfrastructure);
   const python = readPython ? loadPythonTests(root, pythonRels, candidates, readPython) : [];
 
   const records = new Map<string, TestFileRecord>();
@@ -400,7 +413,7 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, cand
       evidence: call.callee,
     })));
     attach(detectShims(file.rel, file.parsed).map(finding => ({ ...finding, note: shimNote })));
-    attach(detectWorktreeHazards(file.rel, file.lines));
+    attach(detectWorktreeHazards(file.rel, file.lines, file.unparsed ? null : file.parsed.resourceFindings ?? []));
   }
   for (const file of python) {
     attach(file.opaque.map(opaque => ({
@@ -412,13 +425,7 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, cand
       evidence: opaque.name ?? 'non-literal import',
     })));
   }
-  for (const rel of discoverTestInfrastructure(root)) {
-    try {
-      attach(detectWorktreeHazards(rel, readFileSync(join(root, rel), 'utf8').split(/\r?\n/)));
-    } catch {
-      // Infrastructure may be unreadable; tests still have their own parse diagnostics.
-    }
-  }
+  for (const findings of infrastructure.values()) attach(findings);
   const runner = detectRunner(root, loaded.flatMap(file => file.parsed.imports));
   const pythonTests = python.flatMap(file => file.facts?.tests ?? []);
   const pythonRunner = detectPythonRunner(root, census.conftests.length > 0, {

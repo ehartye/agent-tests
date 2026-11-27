@@ -85,7 +85,7 @@ describe('renderMarkdown on the fixtures', () => {
   it('groups per-file findings by rule and keeps project findings apart', () => {
     const perFile = section(bloated, 'Per-file findings');
     expect(perFile).toContain('### worktree.fixed-port');
-    expect(perFile).toContain('`tests/net/server.test.ts:8`');
+    expect(perFile).toContain('`tests/net/server.test.ts:9`');
     expect(perFile).not.toContain('frequency.');
     expect(perFile).not.toContain('src/auth/**');
     expect(section(bloated, 'Files sharing a subject')).toContain('tests/persistence/store.unit.test.ts');
@@ -109,6 +109,20 @@ describe('renderMarkdown on the fixtures', () => {
 });
 
 describe('renderMarkdown ranking', () => {
+  it('uses confirmed distinct rules and confirmed volume independently, retaining possible and varied detail', () => {
+    const row = (file: string, strengths: Array<[string, boolean]>) => record(file, {findings: strengths.map(([rule, possible], i) =>
+      finding({file, rule, line: i + 1, ...(possible ? {confidence:'possible' as const} : {}),
+        message: possible ? 'Possible path use: exported to an unknown consumer.' : 'Reads a shared location.'}))});
+    const tmp = 'worktree.shared-tmp', path = 'worktree.absolute-path';
+    // Different rule breadth among equally many findings, then different volume on the same confirmed rule.
+    const files = [row('d.test.ts', [[tmp, false], [path, true]]), row('a.test.ts', [[tmp, false]]),
+      row('c.test.ts', [[tmp, false], [tmp, true]]), row('z.test.ts', [[tmp, false], [path, false]]),
+      row('0.test.ts', [[path, true]])];
+    const md = renderMarkdown(report({files}));
+    expect(tableRows(md).map(line => line.split(' |')[0])).toEqual(['| z.test.ts','| a.test.ts','| c.test.ts','| d.test.ts','| 0.test.ts']);
+    expect(md).toMatch(/\x60d\.test\.ts:2\x60[^\n]*[Pp]ossible/);
+    expect(md).toMatch(/\x60d\.test\.ts:1\x60[^\n]*Reads a shared location/);
+  });
   it('puts an unparsed file first even with no findings, and lists it in the header', () => {
     const md = renderMarkdown(
       report({

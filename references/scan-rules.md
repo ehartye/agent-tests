@@ -36,36 +36,21 @@ const db2 = join(tmpdir(), `t-${randomUUID()}.db`);
 const started = Date.now();
 ```
 
-## worktree.shared-tmp
+## worktree.fixed-port
 
-Means: a fixed `/tmp/...` string literal, or a fixed name after `tmpdir(),` that is not a `mkdtemp` prefix (one ending in
-`-` or `_`). Every worktree and every parallel run builds the same path, so they share or clobber what is there. The rule
-reads one line at a time and stays quiet when `mkdtemp` is on the same or the previous line.
+A listener with a fixed port can collide with another run. A client using a fixed loopback URL depends on that endpoint. The scan recognizes direct listener arguments, fetch and browser navigation, and exported Playwright endpoint configuration such as `use.baseURL` and `webServer.port`. Use port zero or an endpoint allocated for the current run. Origin headers and rejection tables can contain the same strings as fixture data.
 
-Recommend: create the directory with `mkdtemp` (see above) and put the file inside it.
+## worktree.absolute-path and worktree.shared-tmp
 
-Flagged:
+A recognized Node filesystem operation or child-process working directory uses a machine-specific path or a fixed temp path. The scan identifies the source and destination of a copy or move and follows one earlier local constant. A path may also be a fixed name joined to `tmpdir()`. Keep temporary outputs in a unique directory created with `mkdtemp`.
 
 ```ts
-writeFileSync('/tmp/out.log', x);
-const dir = '/tmp/work';
-mkdirSync("/tmp/fixed");
-const p = join(tmpdir(), 'fixed');
+import { readFileSync, writeFileSync } from 'node:fs';
+const destination = '/tmp/out.log';
+writeFileSync(destination, readFileSync('C:/shared/input'));
 ```
 
-An array row (`'/tmp/assets',` alone on its line) and the argument line of a call split over several lines
-(`writeFileSync(`, then `'/tmp/out.log',`, then `data)`) stay flagged, and the finding is on the literal's line. Such a
-line looks the same as a write, and a silent miss on a real hazard is worse than a hit to read past.
-
-Quiet (a value that is not written, or a path only checked for absence):
-
-```ts
-{ path: '/tmp/assets' },
-expect(existsSync('/tmp/gone')).toBe(false);
-```
-
-Only an object-property data row (`key: '/tmp/x'`, alone on its line) and an absence check (`existsSync` or `exists` of
-the literal asserted false) are quiet, besides the existing `mkdtemp` cases.
+The finding cites the literal and identifies its operation. An exported path with an unknown consumer, or a path recovered after parsing failed, appears as **possible** with the reason. Possible findings remain in the detail. Only confirmed findings count toward the breadth and volume used in the file ranking. A path appearing only in a write payload or in a check for absence supplies no such warning.
 
 ## worktree.fixed-db-file
 
@@ -174,7 +159,7 @@ when the suite runs from another directory, a package subfolder or another workt
 `worktree.cwd-write` instead.
 
 Recommend: build the path from the test file's own location (`import.meta.url` with `fileURLToPath`, or `__dirname`) or
-from the repository root, and keep any output in a `mkdtemp` directory.
+from the repository root, and keep any output in a `mkdtemp` directory. For runners that always start at the root, verify the launch contract first. When replacing a literal that identifies a subprocess dependency, preserve that dependency with an `@subject` header.
 
 Flagged:
 
