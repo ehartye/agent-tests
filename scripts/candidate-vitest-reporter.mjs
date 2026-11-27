@@ -1,10 +1,22 @@
 // Exact Vitest 5.0.3 public reporter adapter. No private runner/task graph access.
+import { appendFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { boundedDetails, echoErrors, reporterTransport } from './candidate-progress.mjs';
 
 const transport = reporterTransport();
+// Only the explicitly named qualification attempt records this side channel.
+const tracing = process.env.AGENT_TESTS_HELD_TRACE === transport.directory;
+let traceSequence = 0;
+function trace(event, facts = {}) {
+  if (!tracing) return;
+  try {
+    const entry = { event, seq: ++traceSequence, at: new Date().toISOString(), pid: process.pid, attempt: transport.start.attemptId, ...facts };
+    appendFileSync(join(transport.directory, 'held-reporter.jsonl'), JSON.stringify(entry) + '\n');
+  } catch { /* An unavailable sensor cannot change the native outcome. */ }
+}
+trace('ready');
 const requireConsumer = createRequire(pathToFileURL(join(transport.start.command.cwd, 'package.json')));
 const { JsonReporter } = await import(pathToFileURL(requireConsumer.resolve('vitest/node')).href);
 const text = value => typeof value === 'string' ? value.slice(0, 4096) : null;
@@ -65,9 +77,21 @@ export default class CandidateJsonReporter extends JsonReporter {
   onTestCaseResult(test) {
     this.safely(() => {
       const result = test.result(), details = boundedDetails();
+      if (tracing && result.state === 'failed') trace('callback', { id: text(test.id), name: text(test.name) });
       for (const error of result.errors ?? []) details.error({ scope: 'case', id: text(test.id), ownerId: owner(test.module).id, nativeState: text(result.state) }, error);
       const value = details.result();
-      if (value.errors.length) { transport.writer.append('native-error', value); echoErrors(value); }
+      if (value.errors.length) {
+        const directory = join(transport.directory, 'progress');
+        if (tracing) trace('append', { directory, id: text(test.id) });
+        try {
+          const ref = transport.writer.append('native-error', value);
+          if (tracing) trace('published', { path: join(directory, ref.file), sequence: Number.parseInt(ref.file, 10) });
+        } catch (error) {
+          if (tracing) trace('append-error', { message: String(error?.message ?? error).slice(0, 256) });
+          throw error;
+        }
+        echoErrors(value);
+      }
     });
   }
   onTestModuleEnd(module) {
