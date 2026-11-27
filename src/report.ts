@@ -48,9 +48,9 @@ function shellPath(path: string): string {
   return `'${escaped}'`;
 }
 
-function clip(text: string): string {
+function clip(text: string, limit = MAX_EVIDENCE): string {
   const chars = [...flat(text)];
-  return chars.length > MAX_EVIDENCE ? `${chars.slice(0, MAX_EVIDENCE - 1).join('')}…` : chars.join('');
+  return chars.length > limit ? `${chars.slice(0, limit - 1).join('')}…` : chars.join('');
 }
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -131,7 +131,9 @@ function projectLine(finding: Finding): string {
 }
 
 function fileLine(finding: Finding, showMessage: boolean): string {
-  const evidence = finding.evidence ? ` ${span(clip(finding.evidence))}` : '';
+  // Five bounded declarations, each with a rejection reason and one omission count.
+  const limit = finding.rule === 'wiring.invalid-subject' ? 800 : MAX_EVIDENCE;
+  const evidence = finding.evidence ? ` ${span(clip(finding.evidence, limit))}` : '';
   const note = finding.note ? ` (${flat(finding.note)})` : '';
   return `- ${span(where(finding))}${evidence}${showMessage ? " " + messageOf(finding) : ""}${note}`;
 }
