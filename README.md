@@ -8,7 +8,7 @@ unnecessary. The measure is efficiency: protection per unit of cost, not test co
 
 ## Install
 
-Once published to the hartye-plugins marketplace:
+Install from the hartye-plugins marketplace in Claude Code.
 
     /plugin marketplace add ehartye/hartye-claude-plugins
     /plugin install agent-tests@hartye-plugins
@@ -17,15 +17,13 @@ Before managed commands, run the `tests-setup` skill. It copies a managed runtim
 its dependencies. Node.js 24 or newer is required for those commands. A bounded manual source-only audit needs no
 managed setup; see [source-only audit](references/source-only-audit.md) for inspected-scope and evidence limits.
 
-On this host, Codex CLI 0.162.1 supports the existing `.claude-plugin/plugin.json` manifest and native installation:
+In Codex, refresh the marketplace and install the plugin.
 
     codex plugin marketplace upgrade hartye-plugins --json
     codex plugin add agent-tests@hartye-plugins --json
     codex plugin list --marketplace hartye-plugins --json
 
-Inspect the returned version, then run `tests-setup` before managed commands. This host check establishes packaging
-support; it does not establish another host's installation or end-to-end skill behavior. Restart the conversation
-when needed to discover updated skills.
+Check the installed version and run `tests-setup` before managed commands. Start a new conversation if the updated skills have yet to appear.
 
 ## Skills
 
@@ -52,8 +50,7 @@ their time, risk, complexity and maintenance implications before recommending a 
 
 ## References
 
-Every rule the skills teach is cited to a public source or labeled as opinion, so nothing depends on a private note or
-on this machine.
+The skills cite public sources for their rules and label opinions.
 
 | File | Covers |
 |---|---|
@@ -148,6 +145,8 @@ Exact serialized bot continuation is unsupported in contract version 1.
 
 ## Status
 
+Version 0.15.0 imports Vitest and Jest suite timings and reports the longest file’s share of the matched window. Audits identify rejected `@subject` declarations, standalone browser drivers, and worktree hazards tied to resource operations. Native qualification now retains held Vitest publication incidents and rejected worker CPU profiles for investigation. See [saved audit artifacts](references/audit-output.md).
+
 Version 0.14.0 reads Python tests. Test files named `test_*.py` or `*_test.py`, and files a workflow command names (`python -m unittest a.b`, `pytest tests/x.py`) that define tests, are parsed statically with a WASM tree-sitter parser (nothing executes Python): tests, assertions, subjects from project imports, `# @lane` tags and lanes from lane-named pytest markers, and the pytest or unittest runner inferred from the tests. Python is now `supported` in the `inventory` object, and an area it cannot fully see (`load_tests`, an imported test class from a project module, a non-literal dynamic import, a facade import through `__init__.py`, a custom `python_files`, an unparsed file) is reported as `wiring.inventory-incomplete` inside the scope of that note rather than as uncovered. A parse failure never aborts a scan, and a parser that cannot load is reported as a broken runtime. The managed install now runs `npm ci --ignore-scripts`. JavaScript-only repositories never load the parser and their output is unchanged. See [test inventory](references/inventory.md).
 
 Version 0.13.0 reports an incomplete test inventory instead of false "uncovered critical" findings. A language census counts test-named files in Python, Go, Ruby, PowerShell, Java, Kotlin, C# and PHP by file name only; when any are found the scan JSON gains an optional `inventory` object, `report` adds `Languages` and `Inventory incomplete` lines, and a critical area with no covering test that holds a file other than JavaScript or TypeScript is reported as `wiring.inventory-incomplete` (coverage unknown) rather than `wiring.uncovered-critical`. A report that finds no tests with an unknown runner now says a zero count does not prove the project has none. JavaScript-only output is unchanged. See [test inventory](references/inventory.md).
@@ -200,8 +199,7 @@ an optional Node reporter, and explicitly invoked observational candidate eviden
 report never run tests. Candidate observation does not select lanes, suppress checks or authorize integration.
 CI charges and statistical flakiness are not measured; remediation and wider runner/language support remain separate work.
 
-Version 0.3.1 adds explicit Svelte component subjects and advisory evidence for full test suites chained into build scripts,
-based on the APcademy Government case study.
+Version 0.3.1 adds explicit Svelte component subjects and advisory evidence for full test suites chained into build scripts.
 
 Version 0.3.2 marks possible helper-based test registrations as incomplete inventory (`+?` in Markdown), preserving the
 JSON count of recognized declarations. Its skills distinguish audit-only requests from authorized implementation and
@@ -245,9 +243,6 @@ It supplies evidence and validation, rather than a common game director or input
   has its own area; add areas by hand for anything nested deeper than the draft looks.
 
 ## Development
-
-The [APcademy Government case study](docs/case-studies/apcademy-government.md) records the real inputs, audit changes,
-and remaining execution-scope limitations that motivated component subjects and build-gate evidence.
 
     npm ci
 
