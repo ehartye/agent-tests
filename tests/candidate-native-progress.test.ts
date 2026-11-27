@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { nodeErrorFact } from '../scripts/candidate-node-reporter.mjs';
 import { installRuntime } from '../scripts/managed-runtime.js';
 import { checkout, script, made, fixture, run, progress, json, waitFor, controlled, held } from './helpers/native-fixture.ts';
-import { exerciseHeld } from './helpers/held-vitest.ts';
+import { qualifyHeld } from './helpers/held-vitest.ts';
 describe('native durable candidate diagnostics', () => {
   it('admits only the exact per-action grammar before touching paths', () => {
     for (const args of [ ['progress', '--attempt=x'], ['progress', '--attempt', 'missing', '--root', 'missing'], ['progress', '--attempt', 'missing', '--attempt', 'other'], ['progress', '--attempt', 'missing', '--', 'tail'], ['check', '--root', 'missing', '--out', 'other'], ['observe', 'node-test', '--root', 'missing', '--root', 'other'] ]) {
@@ -188,7 +188,7 @@ describe('native durable candidate diagnostics', () => {
     const refused = invoke('progress', '--attempt', f.out); expect(refused.status).toBe(1); expect(refused.stdout).toBe(''); expect(refused.stderr).toMatch(/E_RUNTIME_MISSING/);
   });
   it('publishes completed Vitest case diagnostics while its own module is still held', async () => {
-    await exerciseHeld();
+    await qualifyHeld(process.env.AGENT_TESTS_HELD_INCIDENT_DIR);
   }, 90000);
   it('retains real A publication when the actual recorder handle is interrupted before B ends', async () => {
     const f = fixture({

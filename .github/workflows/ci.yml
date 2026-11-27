@@ -56,6 +56,7 @@ jobs:
       - run: npm test
         id: qualification
         env:
+          AGENT_TESTS_HELD_INCIDENT_DIR: ${{ runner.temp }}/held-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ runner.os }}
           AGENT_TESTS_PROFILE_EVIDENCE_DIR: ${{ github.event_name == 'pull_request' && format('{0}/worker-profile-{1}-{2}', runner.temp, github.run_id, github.run_attempt) || '' }}
       - name: Check for completed profile evidence
         id: incidents
@@ -80,6 +81,24 @@ jobs:
             ${{ runner.temp }}/worker-profile-${{ github.run_id }}-${{ github.run_attempt }}/complete/*/worker.cpuprofile
             ${{ runner.temp }}/worker-profile-${{ github.run_id }}-${{ github.run_attempt }}/complete/*/descriptor.json
             ${{ runner.temp }}/worker-profile-${{ github.run_id }}-${{ github.run_attempt }}/complete/*/replay.json
+      - name: Check for completed held Vitest incident
+        id: held
+        if: failure() && steps.qualification.outcome == 'failure'
+        shell: bash
+        env:
+          INCIDENT_DIR: ${{ runner.temp }}/held-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ runner.os }}
+        run: |
+          if [[ -f "$INCIDENT_DIR/incident.json" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Retain held Vitest incident
+        if: failure() && steps.held.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: held-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ runner.os }}
+          retention-days: 7
+          if-no-files-found: error
+          path: ${{ runner.temp }}/held-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ runner.os }}/incident.json
       - run: npm run typecheck
 
   os-matrix:
@@ -103,4 +122,25 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       - run: npm test
+        id: qualification
+        env:
+          AGENT_TESTS_HELD_INCIDENT_DIR: ${{ runner.temp }}/held-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ runner.os }}
+      - name: Check for completed held Vitest incident
+        id: held
+        if: failure() && steps.qualification.outcome == 'failure'
+        shell: bash
+        env:
+          INCIDENT_DIR: ${{ runner.temp }}/held-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ runner.os }}
+        run: |
+          if [[ -f "$INCIDENT_DIR/incident.json" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Retain held Vitest incident
+        if: failure() && steps.held.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: held-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ runner.os }}
+          retention-days: 7
+          if-no-files-found: error
+          path: ${{ runner.temp }}/held-vitest-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ runner.os }}/incident.json
       - run: npm run typecheck

@@ -21,6 +21,7 @@ describe('held Vitest publication controls', () => {
     expect(beforeGate).toMatchObject({ held: true, released: false, endedOwners: [], caseError: false });
     expect(beforeGate?.reporter.events.map(e => e.event)).toEqual(['ready', 'callback']);
     expect(beforeRelease).toMatchObject({ held: true, released: false, endedOwners: [], caseError: true, echoActual: true, echoExpected: true });
+    if (!('worker' in beforeRelease)) throw Error('Unavailable fixture snapshot');
     expect(beforeRelease.worker.events.map(e => e.event)).toEqual(['ready', 'assertion-threw', 'held']);
     expect(beforeRelease.reporter.events.map(e => e.event)).toEqual(['ready', 'callback', 'append', 'published']);
     expect(final.code).toBe(1);
@@ -29,6 +30,7 @@ describe('held Vitest publication controls', () => {
   it('records the real append exception and releases the owner', async () => {
     const { beforeRelease, final } = await exerciseHeld({ control: 'append-error' });
     expect(beforeRelease).toMatchObject({ phase: 'durable-error', held: true, released: false, endedOwners: [], caseError: false });
+    if (!('reporter' in beforeRelease)) throw Error('Unavailable fixture snapshot');
     expect(beforeRelease.reporter.events.at(-1)).toMatchObject({ event: 'append-error', message: 'controlled native-error write failure' });
     expect(final.code).toBe(1);
   }, 90000);

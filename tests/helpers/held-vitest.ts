@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { controlled, fixture, held, progress } from './native-fixture.ts';
 
@@ -53,7 +53,9 @@ function config(control?: Control) {
 
 export async function exerciseHeld(options: { control?: Control } = {}) {
   const { control } = options;
-  const f = fixture({ 'owner.test.mjs': worker, 'vitest.config.mjs': config(control) }, true);
+  const files: Record<string, string> = { 'owner.test.mjs': worker };
+  if (control) files['vitest.config.mjs'] = config(control);
+  const f = fixture(files, true);
   const marker = join(f.root, '.local/b-held'), release = join(f.root, '.local/release');
   const gate = join(f.root, '.local/open-gate'), directory = join(f.out, 'progress');
   const reporterPath = join(f.out, 'held-reporter.jsonl'), workerPath = join(f.root, '.local/worker.jsonl');
@@ -79,6 +81,10 @@ export async function exerciseHeld(options: { control?: Control } = {}) {
       echoActual: /prompt actual/.test(c.output()), echoExpected: /prompt expected/.test(c.output()),
       output: lines.slice(0, 8).map(line => line.slice(0, 256)), outputTruncated: lines.length > 8 || lines.some(l => l.length > 256),
     };
+  }
+  function inspect() {
+    try { return snapshot(); }
+    catch { return { phase, at: new Date().toISOString(), marker, release, directory, observer: observer(), unavailable: true }; }
   }
   async function wait(name: string, predicate: () => boolean) {
     phase = name;
@@ -111,15 +117,45 @@ export async function exerciseHeld(options: { control?: Control } = {}) {
     if (state().endedOwners.length || c.child.exitCode !== null || c.child.signalCode !== null) throw Error('Owner closed before echo');
   } catch (error) { failure = error; }
   finally {
-    try { beforeRelease = snapshot(); }
+    try { beforeRelease = inspect(); }
     finally {
       try { writeFileSync(release, 'yes'); }
+      catch (error) { failure ??= error; }
       finally { await c.closed; }
     }
   }
-  const final = observer();
+  const final = { ...observer(), at: new Date().toISOString(), released: existsSync(release) };
   if (!failure && final.code !== 1) { phase = 'final-exit'; failure = Error('Expected observer exit 1, got ' + final.code); }
-  const expectedFault = (control === 'append-error' && phase === 'durable-error') || (control === 'early-exit' && phase === 'held-marker');
-  if (failure && !expectedFault) throw failure;
-  return { beforeGate, beforeRelease, final };
+  if (process.env.AGENT_TESTS_NATIVE_EVIDENCE_DIR) {
+    try { writeFileSync(join(f.base, 'held-samples.json'), JSON.stringify({ control, beforeGate, beforeRelease, final })); }
+    catch { /* Optional local certification copy. */ }
+  }
+  return { beforeGate, beforeRelease, final, failure, phase };
+}
+
+export async function qualifyHeld(destination?: string, control?: Control) {
+  const { beforeRelease, final, failure, phase } = await exerciseHeld({ control });
+  if (!failure) return;
+  if (destination) {
+    try {
+      const incident = { schema: 'agent-tests/held-vitest-incident@1', phase, beforeRelease, final };
+      let bytes = JSON.stringify(incident);
+      if (Buffer.byteLength(bytes) > 65536) {
+        bytes = JSON.stringify({ ...incident, truncated: true, beforeRelease: {
+          phase: beforeRelease.phase, at: beforeRelease.at, observer: beforeRelease.observer,
+          held: 'held' in beforeRelease ? beforeRelease.held : null,
+          released: 'released' in beforeRelease ? beforeRelease.released : null,
+          worker: 'worker' in beforeRelease ? beforeRelease.worker.status : 'unavailable',
+          reporter: 'reporter' in beforeRelease ? beforeRelease.reporter.status : 'unavailable',
+        } });
+      }
+      mkdirSync(destination, { recursive: true });
+      const temporary = join(destination, 'incident.tmp');
+      writeFileSync(temporary, bytes, { flag: 'wx' });
+      renameSync(temporary, join(destination, 'incident.json'));
+    } catch (error) {
+      console.error('Held Vitest incident write failed:', error instanceof Error ? error.message : 'unknown');
+    }
+  }
+  throw failure;
 }
