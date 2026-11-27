@@ -79,18 +79,24 @@ it('guides a slow-suite audit to a saved run and documents collection with eithe
   const skill = readFileSync('skills/test-audit/SKILL.md', 'utf8');
   expect(skill).toMatch(/existing.*(?:saved|JSON).*report/i);
   expect(skill).toContain('--timings');
+  expect(skill).toMatch(/matched window.*end-to-end/i);
+  expect(readFileSync('references/audit-output.md', 'utf8')).toMatch(/900 ms.*1,000 ms.*90\.0%/);
   expect(skill).toMatch(/static order.*unparsed/i);
   expect(readFileSync('references/audit-output.md', 'utf8')).toMatch(/vitest run --reporter=json[\s\S]+jest --json/);
 });
 
 it('saves the measured view with timing identity while preserving existing evidence', () => {
-  const input = JSON.stringify({testResults: [suite('sample.test.js', 50, 100)]});
+  const input = JSON.stringify({testResults: [suite('sample.test.js', 1000, 1900), suite('other.test.js', 1800, 2000)]});
   const root = makeTree({ 'package.json': JSON.stringify({ scripts: { test: 'vitest', pretest: 'vitest run' } }), 'other.test.js': clean, 'sample.test.js': clean, 'run.json': input, 'unsupported.json': '{}', 'broken.json': '{' });
   const args = ['--timings', 'run.json', '--max-files', '1'];
   const stdout = cli(root, ...args).stdout;
   const saved = cli(root, ...args, '--out', 'audit.md');
   expect(saved.status, saved.stderr).toBe(0);
   const artifact = readFileSync(join(root, 'audit.md'), 'utf8');
+  const observation = stdout.split('\n').find(line => line.includes('90.0%'));
+  expect(observation).toContain('2 matched files');
+  expect(artifact).toContain(observation);
+  expect(artifact).toContain(stdout.split('\n').find(line => line.includes('unmatched rows'))!);
   expect(artifact).toContain(stdout.trimEnd().split('## Test files')[1]);
   expect(artifact).toMatch(/## Project findings \([2-9]\d*\)/);
   expect(artifact).toMatch(/omitted[^\n]*runner JSON[^\n]*scan/i);
