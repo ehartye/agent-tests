@@ -228,7 +228,7 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
     '**How to read this.** Findings are evidence, not verdicts: judge each one against the risk map and the test itself.',
     timings ? 'Measured files rank first by descending elapsed milliseconds, with path breaking ties. Unmeasured files retain static evidence order.' : 'Files are ranked with unparsed files first, then opaque registration candidates, then by confirmed distinct finding rules, the largest title-word overlap with a same-subject file, total confirmed findings and agent tokens.',
     'Agent is the estimated tokens in the file. Churn/edits counts edits that touched the test without the code it covers, over all edits that modified it; n/a means no git history or no resolvable subject.',
-    timings ? 'The static scan imports suite intervals by path. Matching paths across revisions do not establish identical contents. Overlapping spans cannot be added to derive wall time, CI minutes, price or savings.' : 'Wait time and CI minutes need a timed run and are not in this report.',
+    timings ? 'The static scan imports suite intervals by path. Matching paths across revisions do not establish identical contents. Measure the runner from launch through exit for end-to-end time. Overlapping spans cannot be added to derive wall time, CI minutes, price or savings.' : 'Wait time and CI minutes need a timed run and are not in this report.',
     'Flags: tautological, snapshot-only, mock-only, no-direct-assertions (possibly assertions in a helper), unparsed.',
     'Recognized declarations are static calls, not native expanded case counts. A count marked +? has opaque helper registration candidates; inspect their provider before treating it as complete.',
     '',
