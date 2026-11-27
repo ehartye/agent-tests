@@ -6,7 +6,7 @@ import { detectRedundancy } from './detectors/redundancy.ts';
 import { detectShims } from './detectors/shims.ts';
 import { classifiableFiles, detectWiring, unmappedSubjectFinding } from './detectors/wiring.ts';
 import { detectWorktreeHazards } from './detectors/worktree.ts';
-import { detectPythonRunner, detectRunner, discoverTestInfrastructure, discoverTests, inspectCensus, isPythonSupportFile, isPythonTestPath, pythonFilesConfigured, type Census } from './discover.ts';
+import { detectPythonRunner, detectRunner, discoverBrowserDrivers, discoverTestInfrastructure, discoverTests, inspectCensus, isPythonSupportFile, isPythonTestPath, pythonFilesConfigured, type Census } from './discover.ts';
 import { declaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile } from './parse.ts';
 import { candidateDirs } from './riskdraft.ts';
 import type { PythonFacts, PythonOpaque } from './python/facts.ts';
@@ -452,6 +452,9 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, cand
 
   for (const record of records.values()) record.findings.sort(byLocation);
   projectFindings.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : byLocation(a, b)));
+  const standaloneBrowserDrivers = discoverBrowserDrivers(root)
+    .filter(({ file }) => !records.has(file))
+    .map(driver => ({ ...driver, inspection: infrastructure.has(driver.file) ? 'infrastructure-only' as const : 'uninspected' as const }));
 
   return {
     schema: EVIDENCE_SCHEMA,
@@ -464,5 +467,6 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, cand
     clusters: redundancy.clusters,
     projectFindings,
     ...(inventory ? { inventory } : {}),
+    ...(standaloneBrowserDrivers.length ? { standaloneBrowserDrivers } : {}),
   };
 }

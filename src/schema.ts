@@ -126,5 +126,10 @@ export const EvidenceReport = z.object({
   clusters: z.array(Cluster),
   projectFindings: z.array(Finding),
   inventory: Inventory.optional(),
+  standaloneBrowserDrivers: z.array(z.object({
+    file: z.string().min(1),
+    scripts: z.array(z.string().min(1)).min(1),
+    inspection: z.enum(['uninspected', 'infrastructure-only']),
+  })).optional(),
 });
 export type EvidenceReport = z.infer<typeof EvidenceReport>;

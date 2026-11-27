@@ -8,6 +8,30 @@ Kotlin, C# and PHP) are counted by file name only and never parsed. This page sa
 that tests it cannot read may exist, and how to read the result. Per-rule detail is in [scan-rules.md](scan-rules.md);
 saved artifacts are in [audit-output.md](audit-output.md).
 
+## Standalone browser drivers
+
+A root `package.json` can declare a browser test outside the recognized test files. For example,
+`"test:browser:smoke": "node ./tests/browser.mjs --mode smoke"` names `tests/browser.mjs`.
+The scan recognizes `test:browser` and its colon-delimited variants when the whole command directly
+invokes `node` with a relative `.js`, `.mjs` or `.cjs` file and optional literal arguments. Words can
+contain Unicode letters and numbers and the punctuation `_.,@+/:=-`. Single or double quotes around
+a whole word also allow spaces and tabs inside it. The scan skips `node tests/browser.mjs "smoke!"`
+because the exclamation mark falls outside this character set even inside quotes.
+
+The entry path uses forward slashes, cannot start with a hyphen or slash, and cannot contain a colon.
+Each component must stay within the audit root and pass the usual directory and link checks.
+Node flags before the file, shell operators, expansions, substitutions, escapes and script wrappers fall
+outside this grammar.
+
+The optional scan JSON field `standaloneBrowserDrivers` lists each eligible file outside the ordinary
+inventory once, with its sorted `scripts` aliases and `inspection` status. An `infrastructure-only` file
+received the scan's infrastructure hazard check. An `uninspected` file still needs its contents read,
+including when an infrastructure read failed. The field is omitted when there are no eligible entries.
+
+The report shows up to ten drivers beside the test file count. When more exist, its scan command prints
+the complete list. Saved scan JSON also includes every entry. Read the named driver to establish what it
+exercises. The declaration alone establishes neither native case counts, overlapping coverage, nor a port collision.
+
 ## The language census
 
 Besides discovering JavaScript and TypeScript tests, the scan runs a census: it counts files whose name follows the

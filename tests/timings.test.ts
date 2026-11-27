@@ -109,3 +109,12 @@ it.skipIf(process.platform === 'win32')('declines colliding native POSIX and nor
   const exact = importTimings(root, join(input, 'run.json'), inventory.slice(1));
   expect([...exact.files.keys()]).toEqual(['a\\b.test.js']);
 });
+
+it('validates the timing input before starting the project scan', () => {
+  const root = makeTree({ 'bad.json': '{}', '.testing/risk.yml': 'invalid: [' });
+  const result = cli(root, '--timings', 'bad.json', '--out', 'audit.md');
+  expect(result.status).toBe(1);
+  expect(JSON.parse(result.stderr).error.code).toBe('E_TIMINGS');
+  expect(result.stdout).toBe('');
+  expect(existsSync(join(root, 'audit.md'))).toBe(false);
+});

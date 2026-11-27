@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { CliError } from './errors.ts';
 import { admitOutput, auditArtifact, publishAudit } from './audit-output.ts';
-import { importTimings } from './timings.ts';
+import { importTimings, readTimingInput } from './timings.ts';
 import { renderMarkdown } from './report.ts';
 import { draftRiskMap } from './riskdraft.ts';
 import { RISK_MAP_PATH, serializeRiskMap } from './riskmap.ts';
@@ -206,9 +206,10 @@ async function run(args: string[]): Promise<void> {
   }
   const maxFiles = positiveInteger('max-files', values['max-files']);
   const maxPerRule = positiveInteger('max-per-rule', values['max-per-rule']);
+  const timingInput = values.timings ? readTimingInput(root, values.timings[0]!) : undefined;
   const evidence = await scanProject(root);
   const reportOptions = {
-      ...(values.timings ? { timings: importTimings(root, values.timings[0]!, evidence.files) } : {}),
+      ...(timingInput ? { timings: importTimings(root, timingInput, evidence.files) } : {}),
       ...(maxFiles !== undefined ? { maxFiles } : {}),
       ...(maxPerRule !== undefined ? { maxPerRule } : {}),
     };

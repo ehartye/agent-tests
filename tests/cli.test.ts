@@ -4,7 +4,7 @@
  * @subject scripts/tests.mjs
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -175,6 +175,66 @@ describe('tests CLI', () => {
   });
 
   describe('report caps', () => {
+    it('adds only the declared browser driver beside the ordinary count in stdout and saved Markdown', () => {
+      const root = makeTree({
+        'first.test.mjs': "import { test } from 'node:test'; test('first', () => {});",
+        'second.test.mjs': "import { test } from 'node:test'; test('second', () => {});",
+        'tests/browser.mjs': "import { writeFileSync } from 'node:fs'; writeFileSync(new URL('../executed', import.meta.url), 'yes');",
+        'package.json': '{}',
+        'web/service.ts': 'export const service = 1;',
+        '.testing/risk.yml': readFileSync(join(FIXTURES, 'inventory-census/.testing/risk.yml'), 'utf8'),
+      });
+      const args = ['report', '--root', root, '--max-files', '1'];
+      const before = tests(...args);
+      expect(before.status, before.stderr).toBe(0);
+      expect(before.stdout).toContain('- Runner: node:test');
+      expect(before.stdout).toContain('| worktree | 0 |');
+      expect(before.stdout).toContain('wiring.uncovered-critical');
+      expect(before.stdout).not.toContain('Standalone browser drivers');
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { 'test:browser': 'node tests/browser.mjs' } }));
+      const report = tests(...args);
+      expect(report.status, report.stderr).toBe(0);
+      const lines = report.stdout.split('\n');
+      const count = lines.indexOf('- Test files: 2');
+      expect(lines[count + 1]).toContain('Standalone browser drivers');
+      expect(lines[count + 2]).toContain('`tests/browser.mjs`');
+      expect(lines[count + 2]).toContain('`test:browser`');
+      expect(lines[count + 2]).toContain('uninspected');
+      lines.splice(count + 1, 2);
+      expect(lines.join('\n')).toBe(before.stdout);
+
+      const saved = tests(...args, '--out', 'audit.md');
+      expect(saved.status, saved.stderr).toBe(0);
+      expect(JSON.parse(saved.stdout)).toMatchObject({ bytes: expect.any(Number), sha256: expect.any(String) });
+      expect(readFileSync(join(root, 'audit.md'), 'utf8')).toContain(report.stdout);
+      expect(existsSync(join(root, 'executed'))).toBe(false);
+    });
+
+    it('shows ten browser drivers, points to the full scan, and saves all eleven declarations', () => {
+      const root = join(makeTree(), 'sample  project');
+      mkdirSync(root);
+      const scripts: Record<string, string> = {};
+      for (let i = 0; i < 11; i++) {
+        const id = String(i).padStart(2, '0');
+        scripts[`test:browser:${id}`] = `node driver-${id}.js`;
+        writeFileSync(join(root, `driver-${id}.js`), '');
+      }
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts }));
+      const report = tests('report', '--root', root, '--max-files', '1');
+      expect(report.status, report.stderr).toBe(0);
+      expect(report.stdout.match(/driver-\d+\.js/g)).toHaveLength(10);
+      expect(report.stdout).not.toContain('driver-10.js');
+      expect(report.stdout).toMatch(/1 (?:driver )?omitted/);
+      expect(report.stdout).toContain('node "<plugin-root>/scripts/run-managed.js" scan --root');
+      expect(report.stdout).toContain(root);
+      expect(report.stdout).toContain('No supported runner detected');
+      const result = tests('scan', '--root', root, '--out', 'scan.json');
+      expect(result.status, result.stderr).toBe(0);
+      const saved = JSON.parse(readFileSync(join(root, 'scan.json'), 'utf8'));
+      expect(saved.standaloneBrowserDrivers).toHaveLength(11);
+      expect(saved.standaloneBrowserDrivers[10].file).toBe('driver-10.js');
+    });
+
     it('--max-files caps the test-file table and says how many were omitted', () => {
       const result = tests('report', '--root', join(FIXTURES, 'bloated'), '--max-files', '1');
       expect(result.status).toBe(0);

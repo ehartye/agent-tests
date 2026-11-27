@@ -19,7 +19,14 @@ export interface Timings {
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const skippedStatus = (status: unknown) => status === 'skipped' || status === 'pending' || status === 'todo';
 
-export function importTimings(root: string, input: string, inventory: readonly { file: string }[]): Timings {
+interface TimingInput {
+  sha256: string;
+  outcome: Outcome;
+  rows: unknown[];
+}
+
+/** Decode and identify one input before opening the audited project's parser session. */
+export function readTimingInput(root: string, input: string): TimingInput {
   let bytes: Buffer;
   let data: unknown;
   try {
@@ -31,13 +38,22 @@ export function importTimings(root: string, input: string, inventory: readonly {
     throw new CliError('E_TIMINGS', `Cannot read timing input: ${(error as Error).message}`);
   }
   if (!record(data) || !Array.isArray(data.testResults)) throw new CliError('E_TIMINGS', 'Expected a JSON object with a testResults array');
+  return {
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    outcome: data.success === true ? 'passed' : data.success === false ? 'failed' : 'unknown',
+    rows: data.testResults,
+  };
+}
+
+export function importTimings(root: string, input: string | TimingInput, inventory: readonly { file: string }[]): Timings {
+  const { sha256, outcome, rows } = typeof input === 'string' ? readTimingInput(root, input) : input;
   const known = new Set(inventory.map(entry => entry.file));
   const ambiguous = new Set<string>();
   const result: Timings = {
-    sha256: createHash('sha256').update(bytes).digest('hex'), outcome: data.success === true ? 'passed' : data.success === false ? 'failed' : 'unknown',
+    sha256, outcome,
     files: new Map(), ambiguous: 0, invalid: 0, skipped: 0, unmatched: 0,
   };
-  for (const row of data.testResults) {
+  for (const row of rows) {
     if (record(row) && (skippedStatus(row.status) || (row.status !== 'failed' && Array.isArray(row.assertionResults) && row.assertionResults.length &&
       row.assertionResults.every((item: unknown) => record(item) && skippedStatus(item.status))))) {
       result.skipped++;

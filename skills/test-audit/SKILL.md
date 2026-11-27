@@ -42,7 +42,7 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
    For slow suites, look first for an existing Vitest or Jest JSON report. Import it with `node "<plugin-root>/scripts/run-managed.js" report --root "<project>" --timings run.json` and inspect the slowest files. If needed, show the owner their runner's [collection command](../../references/audit-output.md).
    For requested saved evidence, use `--out <new-file>` and cite its identity/receipt; [saved audit artifacts](../../references/audit-output.md) defines parent-directory and no-overwrite requirements.
    - The report opens with a header and counts. Python tests are inventoried, but some unknowns remain (custom markers, `+?` files, collection hooks); if it says the inventory is incomplete, read `<plugin-root>/references/inventory.md`.
-     Project findings (CI, hooks, scripts, agent instructions, risk-map gaps) follow, then a table of test files.
+     Open standalone browser drivers named beside the test count to establish coverage, overlap or shared resources. An `infrastructure-only` entry received the hazard check. An `uninspected` entry still needs its contents read.
    - Static order puts unparsed files first, then possible opaque registrations (inventory may be incomplete), then files
      with the most distinct finding rules. Inspect unparsed files from the header when measured files fill the table. Read opaque registrations directly. The Rules column shows which rules fired. A `redundancy.shared-subject`
      finding that lists shared title words (and a numeric `overlap` in the scan JSON) is stronger and ranks first among
@@ -58,7 +58,7 @@ Quote the project path (`"<project>"`) so a Windows path with spaces survives.
      confirm a `worktree.*` hazard. It runs the project's tests, so ask the owner first; the install dominates its cost,
      the second checkout is HEAD while root runs use the working tree (`rootDirty` flags it), and `scan` and `report` never run it. See
      [worktree-check](../../references/worktree-check.md) for options, verdicts, errors and limits.
-   - The CLI checks hooks, scripts and workflows for frequency only. Also read the CI workflow and `package.json`
+   - The CLI checks hooks, scripts and workflows for frequency. Also read the CI workflow and `package.json`
      yourself: a `pretest` that repeats `test` runs the suite twice, and a workflow with no install step or cache
      fails or wastes minutes.
 4. **Read before judging.** Findings are evidence, not verdicts. Open the test files behind the highest-ranked findings

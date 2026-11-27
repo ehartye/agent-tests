@@ -14,6 +14,7 @@ export const DEFAULT_MAX_FILES = 40;
 export const DEFAULT_MAX_PER_RULE = 30;
 const MAX_EVIDENCE = 160;
 const MAX_UNPARSED_LISTED = 10;
+const MAX_BROWSER_DRIVERS = 10;
 const MAX_RULES_PER_ROW = 4;
 /** The No direct assertions section names at most this many tests per file and lists this many files; the Skips section lists at most as many files. */
 const MAX_NAMED_PER_FILE = 5;
@@ -32,12 +33,19 @@ const flat = (text: string): string => text.replace(/\s+/g, ' ').trim();
 const cell = (text: string): string => flat(text).replace(/\|/g, '\\|');
 
 /** An inline code span whose fence is longer than any backtick run inside, so the text cannot break out of it. */
-function span(text: string): string {
-  const body = flat(text);
-  const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map(run => run.length));
+function literalSpan(body: string): string {
+  const longest = (body.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0);
   const fence = '`'.repeat(longest + 1);
   const pad = body.startsWith('`') || body.endsWith('`') ? ' ' : '';
   return `${fence}${pad}${body}${pad}${fence}`;
+}
+
+const span = (text: string): string => literalSpan(flat(text));
+
+/** Single-quote a path for PowerShell on Windows or a POSIX shell elsewhere. */
+function shellPath(path: string): string {
+  const escaped = process.platform === 'win32' ? path.replace(/['\u2018-\u201b]/g, quote => "'" + quote) : path.replaceAll("'", "'\\''");
+  return `'${escaped}'`;
 }
 
 function clip(text: string): string {
@@ -148,6 +156,18 @@ export function renderMarkdown(report: EvidenceReport, options: ReportOptions = 
     `- Risk map: ${report.riskMapPresent ? 'present' : 'missing'}`,
     `- Test files: ${report.files.length}`,
   ];
+  const drivers = report.standaloneBrowserDrivers;
+  if (drivers?.length) {
+    out.push('- Standalone browser drivers outside the test file count');
+    for (const driver of drivers.slice(0, MAX_BROWSER_DRIVERS)) {
+      out.push(`  - ${literalSpan(driver.file)} (${driver.scripts.map(literalSpan).join(', ')}), ${driver.inspection}`);
+    }
+    if (drivers.length > MAX_BROWSER_DRIVERS) {
+      const omitted = drivers.length - MAX_BROWSER_DRIVERS;
+      const command = `node "<plugin-root>/scripts/run-managed.js" scan --root ${shellPath(report.root)}`;
+      out.push(`  - ${omitted} omitted. For the full list, run ${literalSpan(command)}.`);
+    }
+  }
   if (timings) out.push(
     `- Timing input SHA-256: ${timings.sha256} (run outcome: ${timings.outcome})`,
     `- Matched files: ${timings.files.size}, unmatched rows: ${timings.unmatched}, invalid rows: ${timings.invalid}, skipped rows: ${timings.skipped}, ambiguous files: ${timings.ambiguous}`,
