@@ -175,6 +175,12 @@ const cli = resolve('scripts/sprite.js');
 
 Quiet: `join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'x.mjs')` and a bare `const cwd = process.cwd();`.
 
+## Inferred Python subjects
+
+Each directory and filename in a candidate import must match its on-disk spelling, including `.py` and `__init__.py`.
+The scanner tries later package roots if a candidate misses. For `from pkg import Child`, an exact `pkg/__init__.py`
+can still be a facade when the only submodule is `pkg/child.py`.
+
 ## wiring.unmapped-subject
 
 Means: a test has at least one subject covered by a risk-map area and at least one other subject that no area covers.

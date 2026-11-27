@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { isPythonSupportFile, isPythonTestPath, isSupportPath } from '../discover.ts';
 import type { PythonFacts } from './facts.ts';
@@ -84,11 +84,29 @@ function packageRoots(testRel: string): string[] {
  */
 export function createPythonSubjectResolver(root: string): PythonSubjectResolver {
   const files = new Map<string, boolean>();
+  const directories = new Map<string, Set<string>>();
+  const matchesSpelling = (rel: string): boolean => {
+    let directory = root;
+    for (const part of rel.split('/')) {
+      let entries = directories.get(directory);
+      if (!entries) {
+        try {
+          entries = new Set(readdirSync(directory));
+        } catch {
+          entries = new Set();
+        }
+        directories.set(directory, entries);
+      }
+      if (!entries.has(part)) return false;
+      directory = join(directory, part);
+    }
+    return true;
+  };
   const isFile = (rel: string): boolean => {
     let known = files.get(rel);
     if (known === undefined) {
       try {
-        known = statSync(join(root, rel)).isFile();
+        known = matchesSpelling(rel) && statSync(join(root, rel)).isFile();
       } catch {
         known = false;
       }
