@@ -82,7 +82,7 @@ Recommend: build the path inside a `mkdtemp` directory and remove it in cleanup.
 
 A file flag, not a rule with its own finding. It is set when at least one test in the file has no assertion in its own
 body (`expect`, `assert` or another recognized form). A helper the test calls may assert for it, so the flag is a reason
-to read the test, not proof that it checks nothing. A `todo` test and a declared skip (`it.skip`, `test.skip`) are
+to read the test, not proof that it checks nothing. A `todo` test and a declared skip (including a case in a disabled suite) are
 exempt: a stub body is a placeholder or never runs, so it is not named. Python tests use the same flag (assertions are
 `assert`, `self.assert*`, `self.fail`, `pytest.raises`, `pytest.warns` and `pytest.fail`); skip and xfail marks are not
 read, so a skipped Python test with no assertion is still named.
@@ -99,7 +99,11 @@ one line each, `<file>: "does nothing" (line 12)`, then `and K more` with K the 
 The scan records skips in an optional `skips` field on a test file: `{ declared, conditional, reasons }`. A file without
 skips has no `skips` key.
 
-- Declared: the test is declared with `it.skip` or `test.skip`. It never runs.
+- Declared skips include `it.skip`, `test.skip`, bare `xit` (including a literal title alone), and cases registered
+  in an inline `describe.skip` or `xdescribe` callback. Nested suites and inline `.forEach` registration callbacks
+  inherit that state. Each case declaration counts once, including a table template, conditional or todo inside a
+  disabled suite. Only active scopes contribute conditional counts and reasons. Unrelated helper bodies and
+  expressions supplying suite titles, tables or options retain their own classification.
 - Conditional: it is declared with `it.skipIf(cond)` or `it.runIf(cond)`, or its body skips it at run time with
   `ctx.skip('no network')` on the context parameter (any name: `ctx`, `context`, `t`) or a destructured `skip(...)`.
   A Playwright-style `test.skip(isCI, 'flaky on CI')` inside a test body is not a test: a `test.skip` or `it.skip` call

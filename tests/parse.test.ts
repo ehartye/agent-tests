@@ -1,8 +1,46 @@
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { declaredSubjects, openParseSession, parseTags, resolveSubjects } from '../src/parse.ts';
 import { parseTestFile } from './helpers/parse.ts';
 import { makeTree } from './helpers/tree.ts';
+
+it('keeps case titles, locations and declared skips through disabled registration scopes', () => {
+  const source = readFileSync(new URL('./fixtures/skipped-suites/example.test.js', import.meta.url), 'utf8');
+  const parsed = parseTestFile('example.test.js', source);
+  expect(parsed.tests.map(test => [test.name, test.line, test.skipped])).toEqual([
+    ['empty', 2, true], ['explicit', 3, true], ['conditional', 4, true], ['todo', 5, true],
+    ['alias child', 8, true], ['pending', 9, true], ['active empty', 11, false], ['active conditional', 12, false],
+  ]);
+  expect(parsed.tests[3]?.todo).toBe(true);
+  expect(parsed.titles.filter(title => title.text === 'aliases')).toHaveLength(1);
+});
+
+it('inherits a disabled registration scope only in suite and forEach callback bodies', () => {
+  const parsed = parseTestFile('bounds.test.ts', [
+    "describe.skip.each([1, 2])('table', { label: it('options', fn) }, () => {",
+    "  describe(it('title', fn), () => rows.forEach(row => it('loop', fn)));",
+    "  function helper() { it('helper', fn); }",
+    "  defer(() => it('other callback', fn));",
+    "});",
+    "xdescribe('empty suite', () => {});",
+    "xit('alias', fn);",
+  ].join('\n'));
+  expect(parsed.tests.map(test => [test.name, test.skipped])).toEqual([
+    ['options', false], ['title', false], ['loop', true], ['helper', false], ['other callback', false], ['alias', true],
+  ]);
+});
+
+it('recognizes inline registration callbacks through transparent expression wrappers', () => {
+  const parsed = parseTestFile('wrapped.test.ts', [
+    "describe.skip('wrapped', ((() => rows.forEach(((row => it('row', fn)) satisfies Handler)!))) as Handler);",
+    "xdescribe('typed', <Handler>(function () { it('typed child', fn); }));",
+    "describe.skip('factory', makeHandler(() => it('helper child', fn)));",
+  ].join('\n'));
+  expect(parsed.tests.map(test => [test.name, test.skipped])).toEqual([
+    ['row', true], ['typed child', true], ['helper child', false],
+  ]);
+});
 
 const SAMPLE = `/**
  * @lane merge

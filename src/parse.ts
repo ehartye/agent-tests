@@ -2,7 +2,7 @@ import { resourceUses } from './detectors/resource-use.ts';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, resolve } from 'node:path';
 import { SyntaxKind, type ArrowFunction, type CallExpression, type FunctionExpression, type ImportDeclaration, type NoSubstitutionTemplateLiteral, type Node, type PropertyAccessExpression, type SourceFile, type StringLiteral } from 'typescript/unstable/ast';
-import { isArrowFunction, isCallExpression, isFunctionExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isObjectBindingPattern, isPropertyAccessExpression, isStringLiteral, isTaggedTemplateExpression } from 'typescript/unstable/ast/is';
+import { isArrowFunction, isAsExpression, isCallExpression, isFunctionExpression, isIdentifier, isImportDeclaration, isNamedImports, isNonNullExpression, isNoSubstitutionTemplateLiteral, isObjectBindingPattern, isParenthesizedExpression, isPropertyAccessExpression, isSatisfiesExpression, isStringLiteral, isTaggedTemplateExpression, isTypeAssertion } from 'typescript/unstable/ast/is';
 import { createVirtualFileSystem } from 'typescript/unstable/fs';
 import { API } from 'typescript/unstable/sync';
 import { isSupportPath, isTestPath } from './discover.ts';
@@ -14,7 +14,7 @@ export interface ParsedTest {
   line: number;
   assertions: number;
   todo: boolean;
-  /** Declared with `.skip`: the test never runs. */
+  /** The case or its enclosing suite is statically disabled. */
   skipped: boolean;
   /** Declared with `.skipIf` or `.runIf`: whether it runs depends on a condition. */
   conditional: boolean;
@@ -60,10 +60,10 @@ export interface ParseSession {
   close(): void;
 }
 
-const TEST_CALLEE = /^(?:it|test)(?:\.(?:only|skip|todo|concurrent|sequential|fails|skipIf|runIf|each|for))*$/;
+const TEST_CALLEE = /^(?:xit|(?:it|test)(?:\.(?:only|skip|todo|concurrent|sequential|fails|skipIf|runIf|each|for))*)$/;
 /** `it.skip(...)` and `test.skip(...)` exactly: the only forms that may be a call inside a body rather than a declaration. */
 const INLINE_SKIP_CALLEE = /^(?:it|test)\.skip$/;
-const SUITE_CALLEE = /^describe(?:\.(?:only|skip|todo|concurrent|sequential|each|for|skipIf|runIf))*$/;
+const SUITE_CALLEE = /^(?:xdescribe|describe(?:\.(?:only|skip|todo|concurrent|sequential|each|for|skipIf|runIf))*)$/;
 const MOCK_CALLEE = /^(?:vi|jest)\.(?:mock|doMock|fn|spyOn)$/;
 /** `expect(x)`, `expect.soft(x)` and `expect.poll(fn)` start an assertion; `expect.assertions(n)` does not. */
 const EXPECT_CALLEE = /^expect(?:\.(?:soft|poll))?$/;
@@ -110,6 +110,14 @@ function calleeName(node: Node): string {
 const isLiteralText = (node: Node | undefined): node is StringLiteral | NoSubstitutionTemplateLiteral => !!node && (isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node));
 const isFunctionLike = (node: Node | undefined): node is ArrowFunction | FunctionExpression => !!node && (isArrowFunction(node) || isFunctionExpression(node));
 
+/** Parentheses and erased types preserve the identity of an inline registration callback. */
+function inlineCallback(node: Node): ArrowFunction | FunctionExpression | undefined {
+  while (isParenthesizedExpression(node) || isAsExpression(node) || isSatisfiesExpression(node) || isNonNullExpression(node) || isTypeAssertion(node)) {
+    node = node.expression;
+  }
+  return isFunctionLike(node) ? node : undefined;
+}
+
 /**
  * A Playwright-style conditional skip: `test.skip(isCI, 'flaky on CI')`, `test.skip(isCI, REASON)`,
  * `test.skip(({ browserName }) => ..., 'reason')` or `test.skip(cond)`. It has no string-literal title and no function body.
@@ -129,7 +137,7 @@ function isInlineSkip(call: CallExpression, name: string): boolean {
  */
 function isDeclaration(call: CallExpression, name: string): boolean {
   if (isInlineSkip(call, name)) return false;
-  return call.arguments.length >= 2 || (call.arguments.length === 1 && name.endsWith('.todo'));
+  return call.arguments.length >= 2 || (call.arguments.length === 1 && (name.endsWith('.todo') || (name === 'xit' && isLiteralText(call.arguments[0]))));
 }
 
 /**
@@ -239,8 +247,12 @@ function extractFacts(sourceFile: SourceFile, text: string, fileName: string): P
   if (resources.length) out.resourceFindings = resources;
   const lineOf = (node: Node): number => lineAt(node.getStart());
 
-  const visit = (node: Node, current: TestScope | null): void => {
+  const disabledBodies = new WeakSet<Node>();
+  const visit = (node: Node, current: TestScope | null, disabled: boolean): void => {
     let next = current;
+    let inheritDisabled = disabled;
+    if (disabled && (isFunctionLike(node) || [SyntaxKind.FunctionDeclaration, SyntaxKind.MethodDeclaration,
+      SyntaxKind.Constructor, SyntaxKind.GetAccessor, SyntaxKind.SetAccessor].includes(node.kind))) inheritDisabled = false;
     if (isImportDeclaration(node) && isStringLiteral(node.moduleSpecifier) && !isTypeOnlyImport(node)) out.imports.push(node.moduleSpecifier.text);
     if (isCallExpression(node)) {
       const callee = node.expression;
@@ -259,7 +271,7 @@ function extractFacts(sourceFile: SourceFile, text: string, fileName: string): P
           line: lineOf(node),
           assertions: 0,
           todo: name.endsWith('.todo'),
-          skipped: segments.includes('skip'),
+          skipped: disabled || name === 'xit' || segments.includes('skip'),
           conditional: segments.includes('skipIf') || segments.includes('runIf'),
           bodySkip: false,
           skipReasons: [],
@@ -269,10 +281,19 @@ function extractFacts(sourceFile: SourceFile, text: string, fileName: string): P
         out.titles.push({ text: title, line: test.line });
       } else if (SUITE_CALLEE.test(name) && isDeclaration(node, name)) {
         out.titles.push({ text: titleOf(node), line: lineOf(node) });
+        // Titles, tables and options are evaluated outside the suite registration callback.
+        inheritDisabled = false;
+        if (disabled || name === 'xdescribe' || name.split('.').includes('skip')) {
+          const callback = node.arguments.slice(1).map(inlineCallback).find(callback => callback !== undefined);
+          if (callback) disabledBodies.add(callback.body);
+        }
+      } else if (disabled && isPropertyAccessExpression(callee) && callee.name.text === 'forEach' && specifier) {
+        const callback = inlineCallback(specifier);
+        if (callback) disabledBodies.add(callback.body);
       } else if (isInlineSkip(node, name)) {
         const reason = skipReason(node, true);
         if (current) noteBodySkip(current.test, node, true);
-        else (out.suiteSkips ??= []).push(reason === undefined ? {} : { reason });
+        else if (!disabled) (out.suiteSkips ??= []).push(reason === undefined ? {} : { reason });
       } else if (!current && isCallExpression(callee) && specifier
         && (isStringLiteral(specifier) || isNoSubstitutionTemplateLiteral(specifier))
         && node.arguments[1] && (isArrowFunction(node.arguments[1]) || isFunctionExpression(node.arguments[1]))
@@ -304,10 +325,10 @@ function extractFacts(sourceFile: SourceFile, text: string, fileName: string): P
     }
     // forEachChild stops early when its callback returns a value, so the callback must not return one.
     node.forEachChild(child => {
-      visit(child, next);
+      visit(child, next, inheritDisabled || disabledBodies.has(child));
     });
   };
-  visit(sourceFile, null);
+  visit(sourceFile, null, false);
   return out;
 }
 
