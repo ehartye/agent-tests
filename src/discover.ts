@@ -1,5 +1,5 @@
-import { type Dirent, existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { type Dirent, existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { relPosix } from './paths.ts';
 import { openParseSession } from './parse.ts';
 
@@ -159,8 +159,7 @@ export function discoverTestInfrastructure(root: string): string[] {
 export type PythonRunner = 'pytest' | 'unittest' | 'unknown';
 
 /**
- * The text of a Python config file, or '' when it is missing, unreadable or a symbolic link: like `walk`, the Python reads never
- * follow links. Used only for Python config, so JavaScript config reads are unchanged.
+ * Text from a regular file, or '' when it is missing, unreadable or a symbolic link.
  */
 const readIfPresent = (path: string): string => {
   try {
@@ -170,6 +169,67 @@ const readIfPresent = (path: string): string => {
     return '';
   }
 };
+
+/** A direct node invocation with whole literal words. Quotes may surround a word containing spaces. */
+function browserEntry(command: string): string | undefined {
+  const node = /^[ \t]*node[ \t]+/.exec(command);
+  if (!node) return;
+  const word = /(?:(['"])([\p{L}\p{N}_.,@+/:= \t-]*)\1|([\p{L}\p{N}_.,@+/:=-]+))(?=[ \t]|$)[ \t]*/uy;
+  word.lastIndex = node[0].length;
+  let entry: string | undefined;
+  while (word.lastIndex < command.length) {
+    const match = word.exec(command);
+    if (!match) return;
+    entry ??= match[2] ?? match[3];
+  }
+  if (entry && !/^[-/]|:/.test(entry) && /\.[cm]?js$/.test(entry)) return entry;
+}
+
+/** Verify each hop before processing "..", so even an intermediate link or ignored directory stays outside discovery. */
+function localDriver(root: string, entry: string): string | undefined {
+  const parts = entry.split('/');
+  const names: string[] = [];
+  try {
+    for (const [index, part] of parts.entries()) {
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        if (!names.pop()) return;
+        continue;
+      }
+      const path = join(root, ...names, part);
+      const stat = lstatSync(path);
+      const final = index === parts.length - 1;
+      if (final ? !stat.isFile() : !stat.isDirectory()) return;
+      const name = basename(realpathSync.native(path));
+      if (!final && IGNORED_DIRS.has(name)) return;
+      names.push(name);
+    }
+    return names.join('/');
+  } catch {
+    return;
+  }
+}
+
+/** Group eligible declarations in the root manifest without opening the declared entry points. */
+export function discoverBrowserDrivers(root: string): Array<{ file: string; scripts: string[] }> {
+  let scripts: unknown;
+  try {
+    scripts = JSON.parse(readIfPresent(join(root, 'package.json'))).scripts;
+  } catch { return []; }
+  if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) return [];
+  const byFile = new Map<string, string[]>();
+  for (const [name, command] of Object.entries(scripts)) {
+    if (!/^test:browser(?::[^:\s\x00-\x1f]+)*$/u.test(name) || typeof command !== 'string') continue;
+    const entry = browserEntry(command);
+    if (!entry) continue;
+    const file = localDriver(root, entry);
+    if (!file) continue;
+    const aliases = byFile.get(file);
+    if (aliases) aliases.push(name);
+    else byFile.set(file, [name]);
+  }
+  return [...byFile.keys()].sort().map(file => ({ file, scripts: byFile.get(file)!.sort() }));
+}
 
 const isRealFile = (path: string): boolean => {
   try {
