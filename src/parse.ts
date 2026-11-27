@@ -451,7 +451,7 @@ export function inspectDeclaredSubjects(root: string, declared: string[], langua
   for (const raw of new Set(declared)) {
     const path = raw.replaceAll('\\', '/');
     const foreign = /^[A-Za-z]:(?!\/)/.test(path) || (process.platform !== 'win32' && /^(?:[A-Za-z]:|\/\/)/.test(path)) ||
-      (process.platform === 'win32' ? /^\/(?!\/)/.test(raw) : raw.startsWith('\\'));
+      (process.platform !== 'win32' && raw.startsWith('\\'));
     const absolute = foreign ? undefined : resolve(root, path);
     const rel = absolute === undefined ? undefined : relPosix(root, absolute);
     let label = raw;
