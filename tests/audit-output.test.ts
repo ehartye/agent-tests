@@ -30,6 +30,22 @@ describe('stable audit artifacts',()=>{
     const second=cli('scan','--root',root,'--out','scan2.json');expect(second.status).toBe(0);
     expect(readFileSync(join(root,'scan2.json'))).toEqual(bytes);
   });
+  it('preserves bounded declaration repair evidence in stdout and saved Markdown', () => {
+    const long = 'a'.repeat(160);
+    const tags = ['src/valid.sql', long, 'two', 'three', 'four', 'five', 'six', 'six'];
+    const root = makeTree({ 'src/valid.sql': '', 'use.test.ts': '/** ' + tags.map(t => '@subject ' + t).join(' ') + ' */' });
+    const report = EvidenceReport.parse(JSON.parse(cli('scan', '--root', root).stdout));
+    const issue = report.files[0]!.findings.filter(f => f.rule === 'wiring.invalid-subject');
+    expect(issue).toHaveLength(1);
+    expect(report.files[0]!.subjects).toEqual(['src/valid.sql']);
+    expect(issue[0]!.evidence).toContain('a'.repeat(119) + '…');
+    expect(issue[0]!.evidence).not.toContain('a'.repeat(120));
+    expect(issue[0]!.evidence).toMatch(/five.*1 omitted/);
+    const stdout = cli('report', '--root', root);
+    const save = cli('report', '--root', root, '--out', 'audit.md');
+    expect(save.status, save.stderr).toBe(0);
+    for (const text of [stdout.stdout, readFileSync(join(root, 'audit.md'), 'utf8')]) expect(text).toContain(issue[0]!.evidence);
+  });
   it('writes capped Markdown with unknown-runner limits; absolute destination is explicit',()=>{
     const root=makeTree(),dest=join(makeTree(),'report.md'),evidence=scan(root);
     expect(cli('report','--root',root).stdout).toBe(renderMarkdown(evidence));

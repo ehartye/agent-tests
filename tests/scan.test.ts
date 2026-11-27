@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, symlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -178,6 +178,7 @@ describe('scan edge cases', () => {
       'tests/cli.test.ts': '/**\n * @subject src/cli.ts\n * @subject src/missing.ts\n */\nit("runs", () => { expect(1).toBe(2); });',
     });
     const report = scan(root);
+    expect(report.files[0]?.findings.filter(f => f.rule === 'wiring.invalid-subject')).toMatchObject([{ evidence: expect.stringContaining('src/missing.ts') }]);
     expect(report.files[0]?.subjects).toEqual(['src/cli.ts']);
     expect(report.files[0]?.tier).toBe('critical');
     expect(report.projectFindings.map(finding => finding.rule)).not.toContain('wiring.uncovered-critical');
@@ -198,6 +199,35 @@ describe('scan edge cases', () => {
 });
 
 describe('scan of declared subjects', () => {
+  it('bounds distinct rejections in order, keeps SQL and inferred subjects and hides external prefixes', () => {
+    const long = 'x'.repeat(140);
+    const tags = ['migration.sql', 'missing', 'missing', 'src', 'other.test.ts', 'Q:/private-machine/tree/file.ts', '//machine/share/private/other.ts', long];
+    const root = makeTree({
+      'mixed.test.ts': '/** ' + tags.map(t => '@subject ' + t).join(' ') + ' */\nimport "../ignored"; import "./src/app";',
+      'other.test.ts': 'import "./unknown";', 'migration.sql': '', 'src/app.ts': '',
+    });
+    const report = scan(root);
+    const file = report.files.find(f => f.file === 'mixed.test.ts')!;
+    expect(file.subjects).toEqual(['migration.sql', 'src/app.ts']);
+    const issues = file.findings.filter(f => f.rule === 'wiring.invalid-subject');
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.evidence).toMatch(/missing.*unavailable.*src.*directory.*other\.test\.ts.*test\/support.*file\.ts.*outside.*other\.ts.*outside.*1 omitted/);
+    expect(issues[0]?.evidence).not.toMatch(/private-machine|machine\/share|xxxxx/);
+    expect(report.files.find(f => f.file === 'other.test.ts')!.findings.some(f => f.rule === 'wiring.invalid-subject')).toBe(false);
+  });
+
+  it('checks the physical target and keeps the in-root alias spelling', () => {
+    const external = makeTree({ 'hidden.ts': '' });
+    const root = makeTree({ 'src/allowed.ts': '', 'links.test.ts': '/** @subject internal/allowed.ts @subject escaping/hidden.ts */' });
+    const type = process.platform === 'win32' ? 'junction' : 'dir';
+    symlinkSync(join(root, 'src'), join(root, 'internal'), type);
+    symlinkSync(external, join(root, 'escaping'), type);
+    const file = scan(root).files.find(f => f.file === 'links.test.ts')!;
+    expect(file.subjects).toEqual(['internal/allowed.ts']);
+    const issue = file.findings.find(f => f.rule === 'wiring.invalid-subject');
+    expect(issue?.evidence).toMatch(/escaping\/hidden\.ts.*outside/);
+    expect(JSON.stringify(issue)).not.toContain(external);
+  });
   it('drops an @subject that points outside the root, at a directory or at a test file', () => {
     const root = makeTree({
       'src/cli.ts': '',

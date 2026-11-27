@@ -1,5 +1,7 @@
 # Saved audit artifacts
 
+A `wiring.invalid-subject` finding names the test file and up to five rejected `@subject` paths in declaration order. Each entry gives the reason and the finding counts additional entries. Check misspellings against the project root. Valid declared and inferred subjects still determine coverage and tier.
+
 After normal tests-setup readiness, use the checked launcher from the currently selected plugin:
 
 ```sh

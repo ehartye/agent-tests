@@ -1,5 +1,5 @@
 import { resourceUses } from './detectors/resource-use.ts';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, resolve } from 'node:path';
 import { SyntaxKind, type ArrowFunction, type CallExpression, type FunctionExpression, type ImportDeclaration, type NoSubstitutionTemplateLiteral, type Node, type PropertyAccessExpression, type SourceFile, type StringLiteral } from 'typescript/unstable/ast';
 import { isArrowFunction, isCallExpression, isFunctionExpression, isIdentifier, isImportDeclaration, isNamedImports, isNoSubstitutionTemplateLiteral, isObjectBindingPattern, isPropertyAccessExpression, isStringLiteral, isTaggedTemplateExpression } from 'typescript/unstable/ast/is';
@@ -425,27 +425,63 @@ export function resolveSubjects(root: string, testRel: string, imports: string[]
   return [...found].sort();
 }
 
-const isRegularFile = (path: string): boolean => {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-};
+const outsideRoot = (rel: string) => rel === '..' || rel.startsWith('../') || isAbsolute(rel);
 
-/**
- * Repo-relative files a test declares with `@subject`. Paths are normalised (backslashes, `./`, `..` segments) and kept only
- * when they name a regular file inside the root that is neither a test nor test support code. Any file type is allowed,
- * because a SQL migration or a JSON config can be a deliberate subject.
- */
-export function declaredSubjects(root: string, declared: string[]): string[] {
+function externalLabel(path: string): string {
+  const parts = path.replace(/^[A-Za-z]:/, '').split('/').filter(Boolean);
+  const leaf = parts.at(-1);
+  if (!leaf || leaf === '..' || (path.startsWith('//') && parts.length <= 2)) return '<outside>';
+  return '<outside>/' + leaf;
+}
+
+function displayDeclaration(value: string): string {
+  const escaped = JSON.stringify(value).slice(1, -1).replace(/[\p{Cf}\u007f-\u009f\u2028\u2029]/gu,
+    char => '\\u{' + char.codePointAt(0)!.toString(16) + '}');
+  const chars = Array.from(escaped);
+  return chars.length > 120 ? chars.slice(0, 119).join('') + '…' : escaped;
+}
+
+/** A declaration's admission and its diagnostic share the same path checks in both language adapters. */
+export function inspectDeclaredSubjects(root: string, declared: string[], languageExcluded?: (rel: string) => boolean) {
   const found = new Set<string>();
-  for (const path of declared) {
-    const absolute = resolve(root, path.replaceAll('\\', '/'));
-    const rel = relPosix(root, absolute);
-    if (rel === '' || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) continue;
-    if (!isRegularFile(absolute) || isTestPath(rel) || isSupportPath(rel)) continue;
-    found.add(rel);
+  const rejected: string[] = [];
+  let omitted = 0;
+  const excluded = (rel: string) => isTestPath(rel) || isSupportPath(rel) || languageExcluded?.(rel);
+  let physicalRoot: string | undefined;
+  for (const raw of new Set(declared)) {
+    const path = raw.replaceAll('\\', '/');
+    const foreign = /^[A-Za-z]:(?!\/)/.test(path) || (process.platform !== 'win32' && /^(?:[A-Za-z]:|\/\/)/.test(path)) ||
+      (process.platform !== 'win32' && raw.startsWith('\\'));
+    const absolute = foreign ? undefined : resolve(root, path);
+    const rel = absolute === undefined ? undefined : relPosix(root, absolute);
+    let label = raw;
+    let reason: string;
+    if (absolute === undefined || rel === undefined || outsideRoot(rel)) {
+      label = externalLabel(path);
+      reason = 'outside the project';
+    } else {
+      if (isAbsolute(path)) label = rel || '.';
+      try {
+        physicalRoot ??= realpathSync.native(root);
+        const target = realpathSync.native(absolute);
+        const physical = relPosix(physicalRoot, target);
+        if (outsideRoot(physical)) reason = 'outside the project';
+        else {
+          const stat = statSync(target);
+          if (stat.isDirectory()) reason = 'directory';
+          else if (!stat.isFile()) reason = 'unavailable regular file';
+          else if (excluded(rel) || excluded(physical)) reason = 'excluded test/support file';
+          else { found.add(rel); continue; }
+        }
+      } catch { reason = 'unavailable regular file'; }
+    }
+    if (rejected.length < 5) rejected.push(displayDeclaration(label) + ' (' + reason + ')');
+    else omitted++;
   }
-  return [...found].sort();
+  if (omitted) rejected.push(omitted + ' omitted');
+  return { subjects: [...found].sort(), invalidEvidence: rejected.join(', ') };
+}
+
+export function declaredSubjects(root: string, declared: string[]): string[] {
+  return inspectDeclaredSubjects(root, declared).subjects;
 }

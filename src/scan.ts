@@ -7,7 +7,7 @@ import { detectShims } from './detectors/shims.ts';
 import { classifiableFiles, detectWiring, unmappedSubjectFinding } from './detectors/wiring.ts';
 import { detectWorktreeHazards } from './detectors/worktree.ts';
 import { detectPythonRunner, detectRunner, discoverBrowserDrivers, discoverTestInfrastructure, discoverTests, inspectCensus, isPythonSupportFile, isPythonTestPath, pythonFilesConfigured, type Census } from './discover.ts';
-import { declaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile } from './parse.ts';
+import { inspectDeclaredSubjects, openParseSession, parseTags, resolveSubjects, type ParsedFile } from './parse.ts';
 import { candidateDirs } from './riskdraft.ts';
 import type { PythonFacts, PythonOpaque } from './python/facts.ts';
 import { createPythonSubjectResolver, facadeScope, mergeScopes, opaqueScope, PYTHON_NOTES, unparsedNote, type PythonSubjectResolver } from './python/subjects.ts';
@@ -109,6 +109,7 @@ interface LoadedFile {
   lines: string[];
   parsed: ParsedFile;
   subjects: string[];
+  invalidEvidence: string;
   /** The file could not be read as a parsed test, so its parse facts are empty. */
   unparsed: boolean;
 }
@@ -144,8 +145,9 @@ function loadJavaScript(root: string, readInfrastructure = (path: string) => rea
         unparsed = true;
         parsed = { ...emptyParsed(), tags: parseTags(text) };
       }
-      const subjects = [...new Set([...resolveSubjects(root, rel, parsed.imports), ...declaredSubjects(root, parsed.tags.subjects ?? [])])].sort();
-      return { rel, text, lines: text.split(/\r?\n/), parsed, subjects, unparsed };
+      const declared = inspectDeclaredSubjects(root, parsed.tags.subjects ?? []);
+      const subjects = [...new Set([...resolveSubjects(root, rel, parsed.imports), ...declared.subjects])].sort();
+      return { rel, text, lines: text.split(/\r?\n/), parsed, subjects, invalidEvidence: declared.invalidEvidence, unparsed };
     });
     // A successful read supplies literal evidence even when parsing fails. A failed read supplies none.
     const infrastructure = new Map<string, Finding[]>();
@@ -171,6 +173,7 @@ interface LoadedPythonFile {
   /** The facts of a file that parsed cleanly; null when it could not be read or parsed, so it is flagged `unparsed`. */
   facts: PythonFacts | null;
   subjects: string[];
+  invalidEvidence: string;
   /** The package `__init__.py` files among the subjects that the file imports through. */
   facades: string[];
   /** The opaque-registration candidates that count: see `projectOpaque`. */
@@ -235,13 +238,14 @@ function loadPythonTests(root: string, rels: readonly string[], candidates: read
       // Unreadable or unparsable: the file stays listed, flagged unparsed.
     }
     const lane = facts ? pythonLaneOf(facts) : tags.lane;
-    const declared = declaredSubjects(root, tags.subjects ?? []).filter(path => !isPythonTestPath(path) && !isPythonSupportFile(path));
+    const declared = inspectDeclaredSubjects(root, tags.subjects ?? [], path => isPythonTestPath(path) || isPythonSupportFile(path));
     const resolved = facts ? resolveSubjectsOf(rel, facts) : { subjects: [], facades: [] };
     return {
       rel,
       bytes,
       facts,
-      subjects: [...new Set([...resolved.subjects, ...declared])].sort(),
+      subjects: [...new Set([...resolved.subjects, ...declared.subjects])].sort(),
+      invalidEvidence: declared.invalidEvidence,
       facades: resolved.facades,
       opaque: facts ? projectOpaque(facts.opaque, rel, resolveSubjectsOf) : [],
       tags: { ...(lane ? { lane } : {}), ...(tags.risk ? { risk: tags.risk } : {}), ...(tags.subjects ? { subjects: tags.subjects } : {}) },
@@ -390,6 +394,13 @@ function scanWithCensus(root: string, options: ScanOptions, census: Census, cand
       tags: file.tags,
       ...placement(file.rel, file.bytes, file.subjects, file.tags.risk),
       findings: [],
+    });
+  }
+
+  for (const file of [...loaded, ...python]) {
+    if (file.invalidEvidence) records.get(file.rel)!.findings.push({
+      category: 'wiring', rule: 'wiring.invalid-subject', file: file.rel,
+      message: 'Check the path in each rejected @subject declaration.', evidence: file.invalidEvidence,
     });
   }
 
