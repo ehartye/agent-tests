@@ -51,7 +51,7 @@ function setup(framework: Framework, control = 'pass', consumer = false) {
   else writeFileSync(test, readFileSync(join(fixtureRoot, control === 'syntax' ? `syntax.${framework}.case.mjs` : `controls.${framework}.case.mjs`)));
   if (control === 'mixed-collection') writeFileSync(join(directory, 'tests/extra.test.ts'), readFileSync(join(fixtureRoot, 'collection-extra.vitest.case.mjs')));
   const config = join(directory, 'config.mjs');
-  writeFileSync(config, framework === 'vitest' ? "export default {test:{include:['tests/**/*.test.ts'],maxWorkers:1,fileParallelism:false,testTimeout:120,hookTimeout:120,retry:0,watch:false}}\n" : `export default {testDir:'./tests',testMatch:'**/*.spec.ts',workers:1,fullyParallel:false,retries:0,repeatEach:1,timeout:200,globalTimeout:${control === 'global-timeout' ? 800 : 12000},outputDir:'./attachments'}\n`);
+  writeFileSync(config, framework === 'vitest' ? "export default {test:{include:['tests/**/*.test.ts'],maxWorkers:1,fileParallelism:false,testTimeout:120,hookTimeout:120,retry:0,watch:false}}\n" : `export default {testDir:'./tests',testMatch:'**/*.spec.ts',workers:1,fullyParallel:false,retries:0,repeatEach:1,timeout:${['test-timeout', 'hook-timeout'].includes(control) ? 200 : 5000},globalTimeout:${control === 'global-timeout' ? 800 : 12000},outputDir:'./attachments'}\n`);
   const cli = join(fixtureRoot, 'node_modules', framework === 'vitest' ? 'vitest/vitest.mjs' : '@playwright/test/cli.js');
   const argv = framework === 'vitest' ? [cli, 'run', '--root', directory, '--config', config, '--reporter', judge, '--maxWorkers', '1'] : [cli, 'test', '--config', config, '--reporter', judge, '--workers', '1'];
   const identity = { executable: realpathSync.native(process.execPath), node: process.versions.node, argv, cwd: directory, framework: { name: framework, version: framework === 'vitest' ? '5.0.5' : '1.64.1' }, project: '', selection: [relative(directory, test).replaceAll('\\', '/')], configSha256: hash(readFileSync(config)), setupSha256: hash(''), lockfileSha256: hash(readFileSync(join(fixtureRoot, 'package-lock.json'))), toolchainSha256: hash(JSON.stringify({ node: process.versions.node, framework })) };
@@ -96,6 +96,26 @@ const failedSteps = (native: Data) => native.steps.filter((step: Data) => step.e
 const tuple = (error: Data) => Object.fromEntries(['message', 'stack', 'value', 'location', 'cause'].filter(key => Object.hasOwn(error, key)).map(key => [key, error[key]]));
 
 describe('required exact native adapter qualification', () => {
+  it.each([
+    ['ordinary', 5000, 12000], ['fake', 5000, 12000],
+    ['test-timeout', 200, 12000], ['hook-timeout', 200, 12000], ['global-timeout', 5000, 800],
+  ] as const)('loads both Playwright budget configurations for %s', (control, timeout, globalTimeout) => {
+    const fixture = setup('playwright', control);
+    const configs = [join(fixture.directory, 'config.mjs'), join(fixtureRoot, 'playwright.config.mjs')];
+    const probe = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      const budgets = [];
+      for (const url of process.argv.slice(1)) {
+        const { default: config } = await import(url);
+        budgets.push([config.timeout, config.globalTimeout]);
+      }
+      console.log(JSON.stringify(budgets));
+    `, ...configs.map(path => pathToFileURL(path).href)], {
+      encoding: 'utf8', windowsHide: true, timeout: 18000, env: { ...process.env, MUTATION_NATIVE_CONTROL: control },
+    });
+    expect(probe.status, probe.stderr).toBe(0);
+    expect(JSON.parse(probe.stdout)).toEqual([[timeout, globalTimeout], [timeout, globalTimeout]]);
+  });
+
   it('resolves exact standalone dev packages and public consumer entrypoints without aliasing producer Vitest', () => {
     expect(read(requireFixture.resolve('vitest/package.json')).version).toBe('5.0.5');
     expect(read(requireFixture.resolve('@playwright/test/package.json')).version).toBe('1.64.1');
@@ -196,7 +216,19 @@ describe('required exact native adapter qualification', () => {
           else { const steps = failedSteps(native); expect(steps).toHaveLength(1); expect(tuple(test.error)).toEqual(tuple(steps[0].error)); }
         }
         if (framework === 'vitest' && ['beforeEach', 'afterEach', 'mixed-teardown'].includes(control)) expect(native.hooks).toContainEqual(expect.objectContaining({ phase: 'start', name: control === 'beforeEach' ? 'beforeEach' : 'afterEach' }));
-        if (framework === 'playwright' && ['ordinary', 'fake'].includes(control)) expect(failedSteps(native)).toEqual([]);
+        if (framework === 'playwright' && ['ordinary', 'fake'].includes(control)) {
+          const message = control === 'ordinary' ? 'RangeError: ordinary body RangeError' : 'AssertionError: fabricated assertion identity';
+          expect(native.cases).toHaveLength(1);
+          expect(native.cases[0].nativeStatus).toBe('failed');
+          expect(native.cases[0].errors).toEqual([expect.objectContaining({ message })]);
+          expect(failedSteps(native)).toEqual([]);
+        }
+        if (framework === 'playwright' && ['test-timeout', 'hook-timeout'].includes(control)) {
+          expect(native.cases[0].nativeStatus).toBe('timedOut');
+          if (control === 'hook-timeout') expect(failedSteps(native)).toContainEqual(expect.objectContaining({
+            caseId: native.cases[0].id, category: 'hook', error: expect.objectContaining({ message: expect.stringContaining('"beforeEach" hook') }),
+          }));
+        }
         if (framework === 'playwright' && ['fixture-teardown', 'mixed-fixture'].includes(control)) expect(native.steps).toContainEqual(expect.objectContaining({ category: 'fixture' }));
         if (framework === 'playwright' && ['mixed-teardown', 'mixed-fixture'].includes(control)) expect(native.cases[0].errors).toHaveLength(2);
         if (framework === 'playwright' && control === 'mixed-throw') expect(tuple(native.cases[0].error)).not.toEqual(tuple(failedSteps(native)[0].error));
