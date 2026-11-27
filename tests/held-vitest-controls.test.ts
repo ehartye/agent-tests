@@ -4,7 +4,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { exerciseHeld, qualifyHeld } from './helpers/held-vitest.ts';
 
 const roots: string[] = [];
@@ -13,7 +13,13 @@ function destination() {
   roots.push(root);
   return root;
 }
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true }); });
+let retained: { path: string; bytes: Buffer; marker: string } | undefined;
+afterAll(() => {
+  if (retained) {
+    if (!process.env.AGENT_TESTS_NATIVE_EVIDENCE_DIR) expect(existsSync(retained.marker)).toBe(false);
+    expect(readFileSync(retained.path)).toEqual(retained.bytes);
+  }
+  for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true }); });
 
 describe('held Vitest publication controls', () => {
   it('opens a gated callback after sampling the held owner', async () => {
@@ -41,9 +47,27 @@ describe('held Vitest publication controls', () => {
     const bytes = readFileSync(join(root, 'incident.json'));
     expect(bytes.length).toBeLessThanOrEqual(64 * 1024);
     const incident = JSON.parse(bytes.toString());
+    retained = { path: join(root, 'incident.json'), bytes, marker: incident.beforeRelease.marker };
     expect(incident.beforeRelease).toMatchObject({ phase: 'durable-error', released: false, caseError: false });
     expect(incident.final).toMatchObject({ code: 1, released: true });
     expect(incident.beforeRelease.reporter.events.at(-1).event).toBe('append-error');
+  }, 90000);
+
+  it('retains publication after releasing a gated reporter separately from the failed wait', async () => {
+    const root = destination();
+    await expect(qualifyHeld(root, 'late')).rejects.toThrow('controlled closed gate');
+    const incident = JSON.parse(readFileSync(join(root, 'incident.json'), 'utf8'));
+    expect(incident.beforeRelease.reporter.events.at(-1).event).toBe('callback');
+    expect(incident.final.reporter.events.at(-1).event).toBe('published');
+    expect(incident.final).toMatchObject({ code: 1, released: true });
+  }, 90000);
+
+  it('rejects partial progress and retains readable neighbors of a malformed record', async () => {
+    const root = destination();
+    await expect(qualifyHeld(root, 'malformed')).rejects.toThrow('Invalid open-owner progress');
+    const incident = JSON.parse(readFileSync(join(root, 'incident.json'), 'utf8'));
+    expect(incident.beforeRelease.records).toContainEqual(expect.objectContaining({ kind: 'native-error' }));
+    expect(incident.beforeRelease.records).toContainEqual(expect.objectContaining({ file: '99999999.json', status: 'unreadable' }));
   }, 90000);
 
   it('keeps the marker failure when incident publication fails', async () => {
@@ -57,6 +81,10 @@ describe('held Vitest publication controls', () => {
     const root = destination();
     await qualifyHeld(root);
     expect(existsSync(join(root, 'incident.json'))).toBe(false);
+  }, 90000);
+
+  it('preserves a qualification failure with the incident destination disabled', async () => {
+    await expect(qualifyHeld(undefined, 'early-exit')).rejects.toThrow('Observer exited during held-marker');
   }, 90000);
 
   it('identifies an observer exit during the marker wait', async () => {
