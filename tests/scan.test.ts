@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { CliError } from '../src/errors.ts';
 import { defaultRiskMap, serializeRiskMap } from '../src/riskmap.ts';
 import { scan } from '../src/scan.ts';
+import { renderMarkdown } from '../src/report.ts';
 import { EvidenceReport } from '../src/schema.ts';
 import { makeTree } from './helpers/tree.ts';
 
@@ -393,6 +394,16 @@ describe('scan names the tests with no direct assertions', () => {
 });
 
 describe('scan reports skipped cases', () => {
+  it('reports the declared cases in disabled suites and only actionable skip reasons', () => {
+    const source = readFileSync(join(FIXTURES, 'skipped-suites/example.test.js'), 'utf8');
+    const report = scan(makeTree({ 'tests/example.test.js': source }), { commitLimit: 1 });
+    expect(report.files[0]).toMatchObject({
+      tests: 8, skips: { declared: 6, conditional: 1, reasons: ['active reason'] },
+      noAssertionTests: [{ name: 'active empty', line: 11 }],
+    });
+    expect(renderMarkdown(report)).toContain('Skipped cases: 6 declared, 1 conditional');
+  });
+
   const fileOf = (source: string) => scan(makeTree({ 'tests/a.test.ts': source }), { commitLimit: 1 }).files[0]!;
 
   it('counts tests, not calls: declared, conditional declarations and a context skip', () => {
