@@ -54,6 +54,32 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       - run: npm test
+        id: qualification
+        env:
+          AGENT_TESTS_PROFILE_EVIDENCE_DIR: ${{ github.event_name == 'pull_request' && format('{0}/worker-profile-{1}-{2}', runner.temp, github.run_id, github.run_attempt) || '' }}
+      - name: Check for completed profile evidence
+        id: incidents
+        if: failure() && github.event_name == 'pull_request' && steps.qualification.outcome == 'failure'
+        env:
+          COMPLETE: ${{ runner.temp }}/worker-profile-${{ github.run_id }}-${{ github.run_attempt }}/complete
+        run: |
+          for replay in "$COMPLETE"/*/replay.json; do
+            if [[ -f "$replay" ]]; then
+              echo "present=true" >> "$GITHUB_OUTPUT"
+              break
+            fi
+          done
+      - name: Retain rejected native worker profiles
+        if: failure() && steps.incidents.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rejected-worker-profiles-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/worker-profile-${{ github.run_id }}-${{ github.run_attempt }}/complete/*/worker.cpuprofile
+            ${{ runner.temp }}/worker-profile-${{ github.run_id }}-${{ github.run_attempt }}/complete/*/descriptor.json
+            ${{ runner.temp }}/worker-profile-${{ github.run_id }}-${{ github.run_attempt }}/complete/*/replay.json
       - run: npm run typecheck
 
   os-matrix:
